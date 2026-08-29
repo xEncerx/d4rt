@@ -1,3 +1,8 @@
+## 0.3.0
+- **BREAKING**: Require `analyzer ^13.3.0` and migrate interpreter AST handling to the analyzer 13 API.
+- Preserve callable, introspection, and generator semantics across the analyzer migration with focused compatibility tests.
+- Make filesystem security tests portable across Windows and POSIX paths.
+
 ## 0.2.4
 - feat: Enhance enum handling with improved equality checks and add comprehensive switch statement tests
 ## 0.2.3

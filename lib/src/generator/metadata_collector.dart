@@ -713,7 +713,7 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
 
   @override
   void visitClassDeclaration(ClassDeclaration node) {
-    final name = node.name.lexeme;
+    final name = node.namePart.typeName.lexeme;
 
     // Skip private classes unless configured
     if (name.startsWith('_') && !config.includePrivateMembers) {
@@ -740,7 +740,7 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
 
   @override
   void visitEnumDeclaration(EnumDeclaration node) {
-    final name = node.name.lexeme;
+    final name = node.namePart.typeName.lexeme;
 
     if (name.startsWith('_') && !config.includePrivateMembers) {
       return;
@@ -788,7 +788,7 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
     final fields = <FieldMetadata>[];
     final staticFields = <FieldMetadata>[];
 
-    for (final member in node.members) {
+    for (final member in node.body.members) {
       if (member is ConstructorDeclaration) {
         constructors.add(_extractConstructorMetadata(member));
       } else if (member is MethodDeclaration) {
@@ -842,10 +842,10 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
     }
 
     return ClassMetadata(
-      name: node.name.lexeme,
+      name: node.namePart.typeName.lexeme,
       documentation: _extractDocumentation(node.documentationComment),
       isAbstract: node.abstractKeyword != null,
-      typeParameters: _extractTypeParameters(node.typeParameters),
+      typeParameters: _extractTypeParameters(node.namePart.typeParameters),
       superclass: _getTypeName(node.extendsClause?.superclass),
       interfaces: node.implementsClause?.interfaces
               .map((i) => _getTypeName(i))
@@ -877,7 +877,7 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
     final getters = <GetterMetadata>[];
     final setters = <SetterMetadata>[];
 
-    for (final constant in node.constants) {
+    for (final constant in node.body.constants) {
       values.add(EnumValueMetadata(
         name: constant.name.lexeme,
         documentation: _extractDocumentation(constant.documentationComment),
@@ -888,7 +888,7 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
       ));
     }
 
-    for (final member in node.members) {
+    for (final member in node.body.members) {
       if (member is MethodDeclaration) {
         if (member.isGetter) {
           getters.add(_extractGetterMetadata(member));
@@ -901,7 +901,7 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
     }
 
     return EnumMetadata(
-      name: node.name.lexeme,
+      name: node.namePart.typeName.lexeme,
       documentation: _extractDocumentation(node.documentationComment),
       values: values,
       methods: methods,
@@ -1020,66 +1020,24 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
       bool isNamed = false;
       String? defaultValue;
 
-      if (p is SimpleFormalParameter) {
-        name = p.name?.lexeme ?? '';
-        type = _extractType(p.type);
-        isRequired = p.isRequired;
-      } else if (p is DefaultFormalParameter) {
-        final inner = p.parameter;
-        if (inner is SimpleFormalParameter) {
-          name = inner.name?.lexeme ?? '';
-          type = _extractType(inner.type);
-        } else if (inner is FieldFormalParameter) {
-          name = inner.name.lexeme;
-          type = _extractType(inner.type);
-        } else if (inner is SuperFormalParameter) {
-          name = inner.name.lexeme;
-          type = _extractType(inner.type);
-          if (type.name == 'dynamic') {
-            type = _tryInferParameterType(name, type, isSuper: true);
-          }
-        } else if (inner is FunctionTypedFormalParameter) {
-          name = inner.name.lexeme;
-          type = TypeMetadata(name: 'Function');
-        } else {
-          name = '';
-          type = TypeMetadata.dynamic_;
-        }
-        isRequired = p.isRequired;
-        isNamed = p.isNamed;
-        defaultValue = p.defaultValue?.toSource();
-
-        // Infer type if dynamic
-        if (type.name == 'dynamic') {
-          type = _tryInferParameterType(name, type);
-        }
-      } else if (p is FieldFormalParameter) {
-        name = p.name.lexeme;
-        type = _extractType(p.type);
-        isRequired = p.isRequired;
-        isNamed = p.isNamed;
-
-        // Infer type if dynamic
-        if (type.name == 'dynamic') {
-          type = _tryInferParameterType(name, type);
-        }
-      } else if (p is SuperFormalParameter) {
-        name = p.name.lexeme;
-        type = _extractType(p.type);
-        isRequired = p.isRequired;
-        isNamed = p.isNamed;
-
-        // Infer type if dynamic
-        if (type.name == 'dynamic') {
-          type = _tryInferParameterType(name, type, isSuper: true);
-        }
-      } else if (p is FunctionTypedFormalParameter) {
-        name = p.name.lexeme;
+      name = p.name?.lexeme ?? '';
+      if (p is RegularFormalParameter && p.functionTypedSuffix != null) {
         type = TypeMetadata(name: 'Function');
       } else {
-        name = '';
-        type = TypeMetadata.dynamic_;
+        type = _extractType(p.type);
+        if (type.name == 'dynamic') {
+          if (p is SuperFormalParameter) {
+            type = _tryInferParameterType(name, type, isSuper: true);
+          }
+          if (type.name == 'dynamic' &&
+              (p is FieldFormalParameter || !p.isRequiredPositional)) {
+            type = _tryInferParameterType(name, type);
+          }
+        }
       }
+      isRequired = p.isRequired;
+      isNamed = p.isNamed;
+      defaultValue = p.defaultClause?.value.toSource();
 
       return ParameterMetadata(
         name: name,
@@ -1130,7 +1088,7 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
 
     if (!isSuper) {
       // Try to find a field with the same name in the current class
-      for (final member in _currentClass!.members) {
+      for (final member in _currentClass!.body.members) {
         if (member is FieldDeclaration) {
           for (final variable in member.fields.variables) {
             if (variable.name.lexeme == name) {
@@ -1180,8 +1138,8 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
 
       if (a.arguments != null) {
         for (final arg in a.arguments!.arguments) {
-          if (arg is NamedExpression) {
-            namedArgs[arg.name.label.name] = arg.expression.toSource();
+          if (arg is NamedArgument) {
+            namedArgs[arg.name.lexeme] = arg.argumentExpression.toSource();
           } else {
             args.add(arg.toSource());
           }

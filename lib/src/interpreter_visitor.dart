@@ -1435,7 +1435,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     final bridgedInstance = leftOperandValue is BridgedInstance
         ? leftOperandValue
         : leftBridgedInstance.$1;
-    if (bridgedInstance != null && operatorName != '==' && operatorName != '!=') {
+    if (bridgedInstance != null &&
+        operatorName != '==' &&
+        operatorName != '!=') {
       final method =
           bridgedInstance.bridgedClass.findInstanceMethodAdapter(operatorName);
       if (method != null) {
@@ -1445,8 +1447,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           final actualRight = rightOperandValue is BridgedInstance
               ? rightOperandValue.nativeObject
               : rightOperandValue;
-          return method(
-              this, bridgedInstance.nativeObject, [actualRight], {});
+          return method(this, bridgedInstance.nativeObject, [actualRight], {});
         } on ReturnException catch (e) {
           return e.value;
         } catch (e) {
@@ -4584,8 +4585,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         return _executeAwaitForInPattern(
             loopParts.pattern, loopParts.iterable, node.body);
       } else {
-        _executeForInPattern(
-            loopParts.pattern, loopParts.iterable, node.body);
+        _executeForInPattern(loopParts.pattern, loopParts.iterable, node.body);
       }
     } else {
       // Should not happen with valid Dart code
@@ -4967,8 +4967,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
 
       return AsyncSuspensionRequest(
-        _convertStreamAndProcessForInPattern(
-            pattern, streamValue, body),
+        _convertStreamAndProcessForInPattern(pattern, streamValue, body),
         currentAsyncState!,
       );
     }
@@ -5094,7 +5093,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitBreakStatement(BreakStatement node) {
-    final label = node.label?.name;
+    final label = node.label?.name.lexeme;
     Logger.debug(
         "[BreakStatement] BREAKING: About to throw BreakException (label: $label). Current async state: ${currentAsyncState?.hashCode}");
     Logger.debug(
@@ -5104,7 +5103,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitContinueStatement(ContinueStatement node) {
-    final label = node.label?.name;
+    final label = node.label?.name.lexeme;
     Logger.debug(
         "[ContinueStatement] Throwing ContinueException (label: $label)");
     throw ContinueException(label);
@@ -5706,8 +5705,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         final originalEnv = environment;
         bool matched = false;
         try {
-          _matchAndBind(
-              element.caseClause!.guardedPattern.pattern, exprValue, patternEnv);
+          _matchAndBind(element.caseClause!.guardedPattern.pattern, exprValue,
+              patternEnv);
 
           bool guardPassed = true;
           if (element.caseClause!.guardedPattern.whenClause != null) {
@@ -5821,8 +5820,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             environment = loopEnvironment;
             try {
               _matchAndBind(loopParts.pattern, item, loopEnvironment);
-              _processCollectionElement(element.body, collection,
-                  isMap: isMap);
+              _processCollectionElement(element.body, collection, isMap: isMap);
             } finally {
               environment = previousEnvironment;
             }
@@ -7236,7 +7234,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitLabeledStatement(LabeledStatement node) {
-    final labelNames = node.labels.map((l) => l.label.name).toSet();
+    final labelNames = node.labels.map((l) => l.name.lexeme).toSet();
     final oldLabels = _currentStatementLabels;
     _currentStatementLabels = labelNames;
     Logger.debug("[LabeledStatement] Entering with labels: $labelNames");
@@ -7268,7 +7266,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitClassDeclaration(ClassDeclaration node) {
-    final className = node.name.lexeme;
+    final className = node.namePart.typeName.lexeme;
     Logger.debug(
         "[Visitor.visitClassDeclaration] START for '$className' in env: ${environment.hashCode}");
 
@@ -7447,14 +7445,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     // Collect static field declarations for two-pass processing
     final staticFieldDeclarations = <FieldDeclaration>[];
-    for (final member in node.members) {
+    for (final member in node.body.members) {
       if (member is FieldDeclaration && member.isStatic) {
         staticFieldDeclarations.add(member);
       }
     }
 
     // FIRST PASS: Process non-static members and setup
-    for (final member in node.members) {
+    for (final member in node.body.members) {
       if (member is MethodDeclaration) {
         final methodName = member.name.lexeme;
         // Pass the ALREADY RETRIEVED klass object
@@ -7469,7 +7467,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } else {
             klass.staticMethods[methodName] = function;
           }
-        } else if (!member.isAbstract) {
+        } else if (member.isComplete) {
           if (member.isGetter) {
             klass.getters[methodName] = function;
           } else if (member.isSetter) {
@@ -7743,7 +7741,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     try {
       environment = declarationEnv;
-      for (final member in node.members) {
+      for (final member in node.body.members) {
         if (member is MethodDeclaration) {
           final methodName = member.name.lexeme;
           // Methods capture the GLOBAL environment via the mixinClass
@@ -7794,7 +7792,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitEnumDeclaration(EnumDeclaration node) {
-    final enumName = node.name.lexeme;
+    final enumName = node.namePart.typeName.lexeme;
     Logger.debug(
         "[Visitor.visitEnumDeclaration] START (Pass 2) for '$enumName'");
 
@@ -7856,7 +7854,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     try {
       // Members are defined in the enum's declaration scope
       environment = enumObj.declarationEnvironment;
-      for (final member in node.members) {
+      for (final member in node.body.members) {
         if (member is MethodDeclaration) {
           final methodName = member.name.lexeme;
           // Methods capture the enum's declaration environment implicitly
@@ -7874,7 +7872,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             Logger.debug(
                 "[Visitor.visitEnumDeclaration]   Processed static method/getter/setter: $methodName");
           } else {
-            if (member.isAbstract) {
+            if (!member.isComplete) {
               throw RuntimeError(
                   "Enums cannot have abstract members ('$enumName.$methodName').");
             }
@@ -7940,8 +7938,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     // Instantiate Enum Values
     Logger.debug(
         "[Visitor.visitEnumDeclaration]   Instantiating enum values...");
-    for (int i = 0; i < node.constants.length; i++) {
-      final constantDecl = node.constants[i];
+    for (int i = 0; i < node.body.constants.length; i++) {
+      final constantDecl = node.body.constants[i];
       final valueName = constantDecl.name.lexeme;
 
       if (enumObj.values.containsKey(valueName)) {
@@ -9382,10 +9380,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     bool namedArgsEncountered = false;
 
     for (final arg in argumentList.arguments) {
-      if (arg is NamedExpression) {
+      if (arg is NamedArgument) {
         namedArgsEncountered = true;
-        final name = arg.name.label.name;
-        final value = arg.expression.accept<Object?>(this);
+        final name = arg.name.lexeme;
+        final value = arg.argumentExpression.accept<Object?>(this);
 
         // Check for async suspension in named arguments
         if (value is AsyncSuspensionRequest) {
@@ -9439,10 +9437,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     bool namedArgsEncountered = false;
 
     for (final arg in argumentList.arguments) {
-      if (arg is NamedExpression) {
+      if (arg is NamedArgument) {
         namedArgsEncountered = true;
-        final name = arg.name.label.name;
-        final value = arg.expression.accept<Object?>(this);
+        final name = arg.name.lexeme;
+        final value = arg.argumentExpression.accept<Object?>(this);
 
         // Check for async suspension in named arguments
         if (value is AsyncSuspensionRequest) {
@@ -9708,17 +9706,17 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         final member = node.members[i];
         if (member is SwitchCase) {
           for (final label in member.labels) {
-            final labelName = label.label.name;
+            final labelName = label.name.lexeme;
             labelIndexMap[labelName] = i;
           }
         } else if (member is SwitchPatternCase) {
           for (final label in member.labels) {
-            final labelName = label.label.name;
+            final labelName = label.name.lexeme;
             labelIndexMap[labelName] = i;
           }
         } else if (member is SwitchDefault) {
           for (final label in member.labels) {
-            final labelName = label.label.name;
+            final labelName = label.name.lexeme;
             labelIndexMap[labelName] = i;
           }
         }
@@ -10570,8 +10568,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       _matchAndBind(pattern.pattern, value, environment);
     } else if (pattern is NullCheckPattern) {
       if (value == null) {
-        throw PatternMatchException(
-            "Null check pattern failed: value is null");
+        throw PatternMatchException("Null check pattern failed: value is null");
       }
       _matchAndBind(pattern.pattern, value, environment);
     } else if (pattern is NullAssertPattern) {
@@ -10601,9 +10598,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     final named = <String, Object?>{};
 
     for (final field in node.fields) {
-      if (field is NamedExpression) {
-        final name = field.name.label.name;
-        final value = field.expression.accept<Object?>(this);
+      if (field is RecordLiteralNamedField) {
+        final name = field.name.lexeme;
+        final value = field.fieldExpression.accept<Object?>(this);
         if (named.containsKey(name)) {
           throw RuntimeError(
               "Record literal field '$name' specified more than once.");
@@ -10616,7 +10613,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           throw RuntimeError(
               "Positional fields must come before named fields in record literal.");
         }
-        positional.add(field.accept<Object?>(this));
+        positional.add(field.fieldExpression.accept<Object?>(this));
       }
     }
     Logger.debug("[visitRecordLiteral] Created record: ($positional, $named)");
@@ -10809,7 +10806,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     final staticSetters = <String, Callable>{};
     final staticFields = <String, Object?>{};
 
-    for (final member in node.members) {
+    for (final member in node.body.members) {
       if (member is MethodDeclaration) {
         final methodName = member
             .name.lexeme; // Operator names like '+', '[]' are also lexemes
@@ -10905,12 +10902,15 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitExtensionTypeDeclaration(ExtensionTypeDeclaration node) {
-    final extensionTypeName = node.name.lexeme;
+    final extensionTypeName = node.namePart.typeName.lexeme;
     Logger.debug(
         "[visitExtensionTypeDeclaration] START for '$extensionTypeName'");
 
-    // Extract representation field name from AST
-    final reprFieldName = node.representation.fieldName.lexeme;
+    // Extract representation field name from the primary constructor AST.
+    final primaryConstructor = node.namePart as PrimaryConstructorDeclaration;
+    final representationParameter =
+        primaryConstructor.formalParameters.parameters.single;
+    final reprFieldName = representationParameter.name!.lexeme;
     Logger.debug(
         "[visitExtensionTypeDeclaration] Representation field: $reprFieldName");
 
@@ -10918,7 +10918,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     RuntimeType representationType;
     try {
       representationType =
-          _resolveTypeAnnotation(node.representation.fieldType);
+          _resolveTypeAnnotation(representationParameter.type!);
       Logger.debug(
           "[visitExtensionTypeDeclaration] Representation type: ${representationType.name}");
     } catch (e) {
@@ -10945,7 +10945,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       operators: {}, // Will be filled below
     );
 
-    for (final member in node.members) {
+    for (final member in node.body.members) {
       if (member is MethodDeclaration) {
         final methodName = member.name.lexeme;
 

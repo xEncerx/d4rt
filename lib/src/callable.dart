@@ -255,7 +255,7 @@ class InterpretedFunction implements Callable {
           isGetter: declaration.isGetter, // Pass getter flag
           isSetter: declaration.isSetter, // Pass setter flag
           ownerType: owner, // Pass the owner type (class or enum)
-          isAbstract: declaration.isAbstract, // Set the abstract flag
+          isAbstract: !declaration.isComplete, // Set the abstract flag
           isAsync: declaration.body.isAsynchronous, // Pass async flag
           isGenerator: declaration.body.isGenerator, // Pass generator flag
           isAsyncGenerator: declaration.body.isAsynchronous &&
@@ -311,10 +311,7 @@ class InterpretedFunction implements Callable {
     // Original logic for required positional parameters
     final params = _parameters?.parameters;
     if (params == null) return 0;
-    return params
-        .whereType<NormalFormalParameter>()
-        .where((p) => p.isRequiredPositional)
-        .length;
+    return params.where((p) => p.isRequiredPositional).length;
   }
 
   @override
@@ -326,25 +323,17 @@ class InterpretedFunction implements Callable {
 
     final params = _parameters?.parameters ?? const <FormalParameter>[];
     for (final parameter in params) {
-      FormalParameter actualParameter = parameter;
-      if (parameter is DefaultFormalParameter) {
-        actualParameter = parameter.parameter;
-      }
-
       RuntimeType parameterType = const NamedRuntimeType('dynamic');
       String? parameterName;
 
-      if (actualParameter is SimpleFormalParameter) {
-        parameterType =
-            resolveRuntimeTypeAnnotation(actualParameter.type, _closure);
-        parameterName = actualParameter.name?.lexeme;
-      } else if (actualParameter is FieldFormalParameter) {
-        parameterType =
-            resolveRuntimeTypeAnnotation(actualParameter.type, _closure);
-        parameterName = actualParameter.name.lexeme;
-      } else if (actualParameter is FunctionTypedFormalParameter) {
-        parameterType = FunctionRuntimeType.untyped();
-        parameterName = actualParameter.name.lexeme;
+      if (parameter is RegularFormalParameter) {
+        parameterType = parameter.functionTypedSuffix != null
+            ? FunctionRuntimeType.untyped()
+            : resolveRuntimeTypeAnnotation(parameter.type, _closure);
+        parameterName = parameter.name?.lexeme;
+      } else if (parameter is FieldFormalParameter) {
+        parameterType = resolveRuntimeTypeAnnotation(parameter.type, _closure);
+        parameterName = parameter.name.lexeme;
       }
 
       if (parameter.isNamed) {
@@ -389,25 +378,8 @@ class InterpretedFunction implements Callable {
     if (params == null) return [];
     return params
         .where((p) => p.isPositional)
-        .map((p) {
-          if (p is SimpleFormalParameter) {
-            return p.name?.lexeme ?? '';
-          } else if (p is DefaultFormalParameter) {
-            final inner = p.parameter;
-            if (inner is SimpleFormalParameter) {
-              return inner.name?.lexeme ?? '';
-            } else if (inner is FieldFormalParameter) {
-              return inner.name.lexeme;
-            } else if (inner is FunctionTypedFormalParameter) {
-              return inner.name.lexeme;
-            }
-          } else if (p is FieldFormalParameter) {
-            return p.name.lexeme;
-          } else if (p is FunctionTypedFormalParameter) {
-            return p.name.lexeme;
-          }
-          return '';
-        })
+        .where((p) => p is RegularFormalParameter || p is FieldFormalParameter)
+        .map((p) => p.name?.lexeme ?? '')
         .where((n) => n.isNotEmpty)
         .toList();
   }
@@ -418,19 +390,8 @@ class InterpretedFunction implements Callable {
     if (params == null) return [];
     return params
         .where((p) => p.isNamed)
-        .map((p) {
-          if (p is DefaultFormalParameter) {
-            final inner = p.parameter;
-            if (inner is SimpleFormalParameter) {
-              return inner.name?.lexeme ?? '';
-            } else if (inner is FieldFormalParameter) {
-              return inner.name.lexeme;
-            } else if (inner is FunctionTypedFormalParameter) {
-              return inner.name.lexeme;
-            }
-          }
-          return '';
-        })
+        .where((p) => p is RegularFormalParameter || p is FieldFormalParameter)
+        .map((p) => p.name?.lexeme ?? '')
         .where((n) => n.isNotEmpty)
         .toList();
   }
@@ -613,12 +574,8 @@ class InterpretedFunction implements Callable {
         bool isSuperParameter = false; // NEW flag for super parameters
 
         // Determine parameter info
-        FormalParameter actualParam =
-            param; // Handle potential DefaultFormalParameter wrapper
-        if (param is DefaultFormalParameter) {
-          defaultValueExpr = param.defaultValue;
-          actualParam = param.parameter;
-        }
+        final actualParam = param;
+        defaultValueExpr = param.defaultClause?.value;
 
         if (actualParam is SuperFormalParameter) {
           // Handle super parameter (Dart 2.17+): super.name
@@ -631,7 +588,7 @@ class InterpretedFunction implements Callable {
           isRequiredNamed = actualParam.isRequiredNamed;
           Logger.debug(
               "[_prepareEnv] Found super parameter: '$paramName' (required=$isRequired, isNamed=$isNamed)");
-        } else if (actualParam is NormalFormalParameter) {
+        } else {
           paramName = actualParam.name?.lexeme;
           isRequired = actualParam.isRequiredPositional;
           isOptionalPositional = actualParam.isOptionalPositional;
@@ -641,9 +598,6 @@ class InterpretedFunction implements Callable {
           if (actualParam is FieldFormalParameter) {
             isFieldInitializing = true;
           }
-        } else {
-          throw UnimplementedError(
-              "Unsupported parameter kind after unwrapping DefaultFormalParameter: ${actualParam.runtimeType}");
         }
 
         if (paramName == null) throw StateError("Parameter missing name");
@@ -889,9 +843,9 @@ class InterpretedFunction implements Callable {
                       "static Future<${ownerType?.name ?? 'YourClass'}> create() async { /* await initialization */ }");
                 }
 
-                if (arg is NamedExpression) {
+                if (arg is NamedArgument) {
                   targetNamedArgsEncountered = true;
-                  final name = arg.name.label.name;
+                  final name = arg.name.lexeme;
                   // Use already evaluated value
                   if (targetNamedArgs.containsKey(name)) {
                     throw RuntimeError(
@@ -986,32 +940,21 @@ class InterpretedFunction implements Callable {
           if (parentParams != null) {
             // Map super parameter values to parent constructor parameters by position/name
             for (final parentParam in parentParams) {
-              FormalParameter actualParentParam = parentParam;
-              if (parentParam is DefaultFormalParameter) {
-                actualParentParam = parentParam.parameter;
-              }
-
-              String paramName = '';
-              if (actualParentParam is NormalFormalParameter) {
-                paramName = actualParentParam.name?.lexeme ?? '';
-              } else if (actualParentParam is SuperFormalParameter) {
-                paramName = actualParentParam.name.lexeme;
-              }
+              final actualParentParam = parentParam;
+              final paramName = actualParentParam.name?.lexeme ?? '';
 
               if (paramName.isNotEmpty &&
                   superParameterValues.containsKey(paramName)) {
                 final value = superParameterValues[paramName];
 
-                if (actualParentParam is NormalFormalParameter) {
-                  if (actualParentParam.isPositional) {
-                    superPositionalArgs.add(value);
-                    Logger.debug(
-                        "[Implicit super()] Added super parameter '$paramName' = $value as positional arg");
-                  } else if (actualParentParam.isNamed) {
-                    superNamedArgs[paramName] = value;
-                    Logger.debug(
-                        "[Implicit super()] Added super parameter '$paramName' = $value as named arg");
-                  }
+                if (actualParentParam.isPositional) {
+                  superPositionalArgs.add(value);
+                  Logger.debug(
+                      "[Implicit super()] Added super parameter '$paramName' = $value as positional arg");
+                } else if (actualParentParam.isNamed) {
+                  superNamedArgs[paramName] = value;
+                  Logger.debug(
+                      "[Implicit super()] Added super parameter '$paramName' = $value as named arg");
                 }
               }
             }
@@ -3944,10 +3887,10 @@ class InterpretedFunction implements Callable {
             "'await' is not yet supported within $invocationType call arguments.");
       }
 
-      if (arg is NamedExpression) {
+      if (arg is NamedArgument) {
         namedArgsEncountered = true;
-        final name = arg.name.label.name;
-        final value = arg.expression
+        final name = arg.name.lexeme;
+        final value = arg.argumentExpression
             .accept<Object?>(visitor); // Evaluate the expression part
         Logger.debug(
             " [_evalArgs] Evaluated NAMED arg expression '$name' = $value (${value?.runtimeType})");
@@ -4475,21 +4418,13 @@ class InterpretedExtensionMethod implements Callable {
         bool isRequiredNamed = false;
 
         // Determine the parameter info (copied from InterpretedFunction)
-        FormalParameter actualParam = param;
-        if (param is DefaultFormalParameter) {
-          defaultValueExpr = param.defaultValue;
-          actualParam = param.parameter;
-        }
-        if (actualParam is NormalFormalParameter) {
-          paramName = actualParam.name?.lexeme;
-          isRequired = actualParam.isRequiredPositional;
-          isOptionalPositional = actualParam.isOptionalPositional;
-          isNamed = actualParam.isNamed;
-          isRequiredNamed = actualParam.isRequiredNamed;
-        } else {
-          throw UnimplementedError(
-              "Unsupported parameter kind in extension method: ${actualParam.runtimeType}");
-        }
+        final actualParam = param;
+        defaultValueExpr = param.defaultClause?.value;
+        paramName = actualParam.name?.lexeme;
+        isRequired = actualParam.isRequiredPositional;
+        isOptionalPositional = actualParam.isOptionalPositional;
+        isNamed = actualParam.isNamed;
+        isRequiredNamed = actualParam.isRequiredNamed;
         if (paramName == null) {
           throw StateError("Extension parameter missing name");
         }

@@ -84,7 +84,10 @@ void main() {
       final result = execute(source) as List;
       expect(result, isA<List>());
       expect(result.length, equals(1));
-      expect((result[0] as String), endsWith('/test.txt'));
+      expect(
+        result[0] as String,
+        endsWith('${Platform.pathSeparator}test.txt'),
+      );
     });
 
     test('renameSync', () {
@@ -124,7 +127,7 @@ void main() {
       final result = execute(source);
       expect(result, isA<String>());
       expect((result as String).isNotEmpty, isTrue);
-      expect((result).startsWith('/'), isTrue);
+      expect(Directory(result).absolute.path, result);
     });
 
     test('parent', () {

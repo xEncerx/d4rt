@@ -313,7 +313,7 @@ class ModuleLoader {
             declaration.accept(moduleInterpreter);
           } catch (e) {
             Logger.warn(
-                "[ModuleLoader loadModule for $uri] Warning while processing class '${declaration.name}': $e");
+                "[ModuleLoader loadModule for $uri] Warning while processing class '${declaration.namePart.typeName}': $e");
           }
         }
       }

@@ -393,7 +393,7 @@ class IntrospectionBuilder {
           final onType = onTypeNode?.toSource() ?? 'unknown';
           final methodNames = <String>[];
 
-          for (final member in declaration.members) {
+          for (final member in declaration.body.members) {
             if (member is MethodDeclaration) {
               methodNames.add(member.name.lexeme);
             }

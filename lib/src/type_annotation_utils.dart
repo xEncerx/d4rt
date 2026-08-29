@@ -111,42 +111,24 @@ RuntimeType resolveRuntimeTypeAnnotation(
 
 RuntimeType _resolveFormalParameterType(
     FormalParameter parameter, Environment env) {
-  FormalParameter actualParameter = parameter;
-  if (parameter is DefaultFormalParameter) {
-    actualParameter = parameter.parameter;
+  if (parameter is RegularFormalParameter) {
+    if (parameter.functionTypedSuffix != null) {
+      return FunctionRuntimeType.untyped();
+    }
+    return resolveRuntimeTypeAnnotation(parameter.type, env);
   }
 
-  if (actualParameter is SimpleFormalParameter) {
-    return resolveRuntimeTypeAnnotation(actualParameter.type, env);
-  }
-
-  if (actualParameter is FieldFormalParameter) {
-    return resolveRuntimeTypeAnnotation(actualParameter.type, env);
-  }
-
-  if (actualParameter is FunctionTypedFormalParameter) {
-    return FunctionRuntimeType.untyped();
+  if (parameter is FieldFormalParameter) {
+    return resolveRuntimeTypeAnnotation(parameter.type, env);
   }
 
   return const NamedRuntimeType('dynamic');
 }
 
 String? _resolveFormalParameterName(FormalParameter parameter) {
-  FormalParameter actualParameter = parameter;
-  if (parameter is DefaultFormalParameter) {
-    actualParameter = parameter.parameter;
-  }
-
-  if (actualParameter is SimpleFormalParameter) {
-    return actualParameter.name?.lexeme;
-  }
-
-  if (actualParameter is FieldFormalParameter) {
-    return actualParameter.name.lexeme;
-  }
-
-  if (actualParameter is FunctionTypedFormalParameter) {
-    return actualParameter.name.lexeme;
+  if (parameter is RegularFormalParameter ||
+      parameter is FieldFormalParameter) {
+    return parameter.name?.lexeme;
   }
 
   return null;

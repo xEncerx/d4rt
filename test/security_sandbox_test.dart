@@ -747,7 +747,7 @@ void main() {
       ''');
 
         expect(result, isNotEmpty);
-        expect(result, contains('/'));
+        expect(result, contains(io.Platform.pathSeparator));
       });
     });
 

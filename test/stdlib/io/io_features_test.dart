@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:d4rt/d4rt.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 void main() {
@@ -48,14 +50,16 @@ void main() {
       final targetFile = File('${tempDir.path}/target.txt');
       targetFile.writeAsStringSync('Hello Link');
       final linkPath = '${tempDir.path}/test_link.lnk';
+      final linkPathSource = jsonEncode(linkPath);
+      final targetPathSource = jsonEncode(targetFile.path);
 
       final result = d4rt.execute(source: '''
         import 'dart:io';
 
         main() {
-          final link = Link('$linkPath');
+          final link = Link($linkPathSource);
           final existsBefore = link.existsSync();
-          link.createSync('${targetFile.path}');
+          link.createSync($targetPathSource);
           final existsAfter = link.existsSync();
           final target = link.targetSync();
           final isLink = link is Link;
@@ -77,7 +81,7 @@ void main() {
 
       expect(result[0], isFalse);
       expect(result[1], isTrue);
-      expect(result[2], equals(targetFile.path));
+      expect(p.equals(result[2] as String, targetFile.path), isTrue);
       expect(result[3], isTrue);
       expect(result[4], isTrue);
       expect(result[5], isFalse);
