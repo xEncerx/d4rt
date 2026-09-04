@@ -692,9 +692,11 @@ class InterpretedFunction implements Callable {
       // Only run initializers for constructors
       // Determine superclass ONLY if owner is a class
       InterpretedClass? superClass;
+      BridgedClass? bridgedSuperClass;
       if (ownerType is InterpretedClass) {
         final ownerClass = ownerType as InterpretedClass; // Cast to local var
         superClass = ownerClass.superclass;
+        bridgedSuperClass = ownerClass.bridgedSuperclass;
       }
 
       // Get 'this' which could be InterpretedInstance OR InterpretedEnumValue
@@ -783,6 +785,11 @@ class InterpretedFunction implements Callable {
                   // The adapter is responsible for finding/creating the native object.
                   final nativeSuperObject = constructorAdapter(
                       visitor, superPositionalArgs, superNamedArgs);
+
+                  if (nativeSuperObject == null) {
+                    throw RuntimeError(
+                        "Bridged super constructor '$superConstructorName' returned null.");
+                  }
 
                   // We need to associate this new native object with our current instance.
                   if (thisValue is InterpretedInstance) {
@@ -919,58 +926,88 @@ class InterpretedFunction implements Callable {
         }
       }
 
-      // If no explicit super() or this() was called, and there IS a superclass,
-      // implicitly call the superclass's unnamed constructor with arguments.
-      if (!explicitSuperCalled && superClass != null) {
-        final defaultSuperConstructor = superClass.findConstructor('');
-        if (defaultSuperConstructor == null) {
-          throw RuntimeError(
-              "Implicit call to superclass '${superClass.name}' default constructor failed: No default constructor found.");
-        }
-        // Call the default super constructor, bound to the *current* instance
-        // NOTE: Default super constructor call CANNOT suspend
+      if (!explicitSuperCalled) {
+        if (superClass != null) {
+          final defaultSuperConstructor = superClass.findConstructor('');
+          if (defaultSuperConstructor == null) {
+            throw RuntimeError(
+                "Implicit call to superclass '${superClass.name}' default constructor failed: No default constructor found.");
+          }
+          // Call the default super constructor, bound to the *current* instance
+          // NOTE: Default super constructor call CANNOT suspend
 
-        // Convert super parameters to positional/named arguments for the parent constructor
-        final superPositionalArgs = <Object?>[];
-        final superNamedArgs = <String, Object?>{};
+          // Convert super parameters to positional/named arguments for the parent constructor
+          final superPositionalArgs = <Object?>[];
+          final superNamedArgs = <String, Object?>{};
 
-        if (superParameterValues.isNotEmpty) {
-          // Get the parent constructor's parameters to determine parameter ordering
-          final parentParams = defaultSuperConstructor._parameters?.parameters;
-          if (parentParams != null) {
-            // Map super parameter values to parent constructor parameters by position/name
-            for (final parentParam in parentParams) {
-              final actualParentParam = parentParam;
-              final paramName = actualParentParam.name?.lexeme ?? '';
+          if (superParameterValues.isNotEmpty) {
+            // Get the parent constructor's parameters to determine parameter ordering
+            final parentParams =
+                defaultSuperConstructor._parameters?.parameters;
+            if (parentParams != null) {
+              // Map super parameter values to parent constructor parameters by position/name
+              for (final parentParam in parentParams) {
+                final actualParentParam = parentParam;
+                final paramName = actualParentParam.name?.lexeme ?? '';
 
-              if (paramName.isNotEmpty &&
-                  superParameterValues.containsKey(paramName)) {
-                final value = superParameterValues[paramName];
+                if (paramName.isNotEmpty &&
+                    superParameterValues.containsKey(paramName)) {
+                  final value = superParameterValues[paramName];
 
-                if (actualParentParam.isPositional) {
-                  superPositionalArgs.add(value);
-                  Logger.debug(
-                      "[Implicit super()] Added super parameter '$paramName' = $value as positional arg");
-                } else if (actualParentParam.isNamed) {
-                  superNamedArgs[paramName] = value;
-                  Logger.debug(
-                      "[Implicit super()] Added super parameter '$paramName' = $value as named arg");
+                  if (actualParentParam.isPositional) {
+                    superPositionalArgs.add(value);
+                    Logger.debug(
+                        "[Implicit super()] Added super parameter '$paramName' = $value as positional arg");
+                  } else if (actualParentParam.isNamed) {
+                    superNamedArgs[paramName] = value;
+                    Logger.debug(
+                        "[Implicit super()] Added super parameter '$paramName' = $value as named arg");
+                  }
                 }
               }
             }
+
+            Logger.debug(
+                "[Implicit super()] Calling parent constructor with ${superPositionalArgs.length} positional and ${superNamedArgs.length} named super parameters");
           }
 
-          Logger.debug(
-              "[Implicit super()] Calling parent constructor with ${superPositionalArgs.length} positional and ${superNamedArgs.length} named super parameters");
-        }
+          final defaultSuperResult = defaultSuperConstructor
+              .bind(thisValue)
+              .call(visitor, superPositionalArgs, superNamedArgs);
+          if (defaultSuperResult is AsyncSuspensionRequest) {
+            // Should not happen as constructors are not async
+            throw StateError(
+                "Internal error: Implicit super constructor call returned SuspendedState.");
+          }
+        } else if (bridgedSuperClass != null) {
+          final constructorAdapter =
+              bridgedSuperClass.findConstructorAdapter('');
+          if (constructorAdapter == null) {
+            throw RuntimeError(
+                "Bridged superclass '${bridgedSuperClass.name}' does not have an unnamed constructor adapter. Check bridge definition.");
+          }
 
-        final defaultSuperResult = defaultSuperConstructor
-            .bind(thisValue)
-            .call(visitor, superPositionalArgs, superNamedArgs);
-        if (defaultSuperResult is AsyncSuspensionRequest) {
-          // Should not happen as constructors are not async
-          throw StateError(
-              "Internal error: Implicit super constructor call returned SuspendedState.");
+          try {
+            final nativeSuperObject =
+                constructorAdapter(visitor, const [], const {});
+            if (nativeSuperObject == null) {
+              throw RuntimeError("Bridged super constructor '' returned null.");
+            }
+            if (thisValue is! InterpretedInstance) {
+              throw StateError(
+                  "Cannot call super() constructor on non-instance 'this'.");
+            }
+
+            thisValue.bridgedSuperObject = nativeSuperObject;
+            Logger.debug(
+                "[Implicit super()] Stored native object from bridged superclass '${bridgedSuperClass.name}' ($nativeSuperObject)");
+          } on RuntimeError catch (e) {
+            throw RuntimeError(
+                "Error during bridged super constructor '': ${e.message}");
+          } catch (e) {
+            throw RuntimeError(
+                "Native error during bridged super constructor '': $e");
+          }
         }
       }
     }
@@ -1253,24 +1290,6 @@ class InterpretedFunction implements Callable {
                 }
                 syncResult = null;
               } else if (bodyToExecute == null && isDefaultConstructor) {
-                // Default constructor: call super() if there's a superclass
-                if (ownerType is InterpretedClass) {
-                  final klass = ownerType as InterpretedClass;
-                  if (klass.superclass != null) {
-                    final superConstructor =
-                        klass.superclass!.findConstructor('');
-                    if (superConstructor != null) {
-                      final thisInstance = executionEnvironment.get('this');
-                      final superResult = superConstructor
-                          .bind(thisInstance)
-                          .call(visitor, [], {});
-                      if (superResult is AsyncSuspensionRequest) {
-                        throw StateError(
-                            "Super constructor call returned suspension.");
-                      }
-                    }
-                  }
-                }
                 syncResult = null;
               } else {
                 throw StateError(

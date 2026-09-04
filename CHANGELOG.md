@@ -2,6 +2,9 @@
 - **BREAKING**: Require `analyzer ^13.3.0` and migrate interpreter AST handling to the analyzer 13 API.
 - Preserve callable, introspection, and generator semantics across the analyzer migration with focused compatibility tests.
 - Make filesystem security tests portable across Windows and POSIX paths.
+- Invoke unnamed bridged superclass constructors for implicit `super()` calls from interpreted classes.
+- Fail construction deterministically when a bridged superclass constructor is missing, throws, or returns `null`.
+- Prevent synthetic default constructors from initializing superclass state more than once.
 
 ## 0.2.4
 - feat: Enhance enum handling with improved equality checks and add comprehensive switch statement tests
