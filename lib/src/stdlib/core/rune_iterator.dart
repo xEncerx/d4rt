@@ -9,7 +9,8 @@ class RuneIteratorCore {
         constructors: {
           '': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.isEmpty || positionalArgs[0] is! String) {
-              throw RuntimeError("RuneIterator constructor expects a String argument.");
+              throw RuntimeError(
+                  "RuneIterator constructor expects a String argument.");
             }
             return RuneIterator(positionalArgs[0] as String);
           },
@@ -17,7 +18,8 @@ class RuneIteratorCore {
             if (positionalArgs.length < 2 ||
                 positionalArgs[0] is! String ||
                 positionalArgs[1] is! int) {
-              throw RuntimeError("RuneIterator.at constructor expects a String and an int index.");
+              throw RuntimeError(
+                  "RuneIterator.at constructor expects a String and an int index.");
             }
             return RuneIterator.at(
                 positionalArgs[0] as String, positionalArgs[1] as int);

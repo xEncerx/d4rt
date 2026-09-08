@@ -53,7 +53,8 @@ void main() {
       );
     });
 
-    test('AST caching reuses precompiled script when enableAstCache is true', () {
+    test('AST caching reuses precompiled script when enableAstCache is true',
+        () {
       final d4rt = D4rt(enableAstCache: true);
       const source = 'int compute() => 12345;';
 

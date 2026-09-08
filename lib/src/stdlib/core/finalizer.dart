@@ -42,7 +42,8 @@ class FinalizerCore {
               target.detach(detach);
               return null;
             }
-            throw RuntimeError("Finalizer.detach expects an Object detach token.");
+            throw RuntimeError(
+                "Finalizer.detach expects an Object detach token.");
           },
           'toString': (visitor, target, positionalArgs, namedArgs) {
             return (target as Finalizer).toString();
@@ -50,8 +51,7 @@ class FinalizerCore {
         },
         getters: {
           'hashCode': (visitor, target) => (target as Finalizer).hashCode,
-          'runtimeType': (visitor, target) =>
-              (target as Finalizer).runtimeType,
+          'runtimeType': (visitor, target) => (target as Finalizer).runtimeType,
         },
       );
 }

@@ -20,7 +20,14 @@ void main() {
         }
       ''');
 
-      expect(result, equals([4, [1, 2, 3, 4], [1, 2, 3, 4], true]));
+      expect(
+          result,
+          equals([
+            4,
+            [1, 2, 3, 4],
+            [1, 2, 3, 4],
+            true
+          ]));
     });
   });
 }

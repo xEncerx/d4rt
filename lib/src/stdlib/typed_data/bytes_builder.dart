@@ -18,11 +18,13 @@ class BytesBuilderTypedData {
             if (target is BytesBuilder &&
                 positionalArgs.length == 1 &&
                 positionalArgs[0] is List) {
-              final list = (positionalArgs[0] as List).toNativeList().cast<int>();
+              final list =
+                  (positionalArgs[0] as List).toNativeList().cast<int>();
               target.add(list);
               return null;
             }
-            throw RuntimeError("BytesBuilder.add expects a List<int> argument.");
+            throw RuntimeError(
+                "BytesBuilder.add expects a List<int> argument.");
           },
           'addByte': (visitor, target, positionalArgs, namedArgs) {
             if (target is BytesBuilder &&
@@ -61,19 +63,22 @@ class BytesBuilderTypedData {
             if (target is BytesBuilder) {
               return target.length;
             }
-            throw RuntimeError("Target is not a BytesBuilder for getter 'length'.");
+            throw RuntimeError(
+                "Target is not a BytesBuilder for getter 'length'.");
           },
           'isEmpty': (visitor, target) {
             if (target is BytesBuilder) {
               return target.isEmpty;
             }
-            throw RuntimeError("Target is not a BytesBuilder for getter 'isEmpty'.");
+            throw RuntimeError(
+                "Target is not a BytesBuilder for getter 'isEmpty'.");
           },
           'isNotEmpty': (visitor, target) {
             if (target is BytesBuilder) {
               return target.isNotEmpty;
             }
-            throw RuntimeError("Target is not a BytesBuilder for getter 'isNotEmpty'.");
+            throw RuntimeError(
+                "Target is not a BytesBuilder for getter 'isNotEmpty'.");
           },
           'hashCode': (visitor, target) => (target as BytesBuilder).hashCode,
           'runtimeType': (visitor, target) =>

@@ -72,7 +72,9 @@ class IsolateIsolate {
           'spawn': (visitor, positionalArgs, namedArgs) {
             final entryPoint = positionalArgs[0];
             positionalArgs[1]; // message (ignored in this stub implementation)
-            if (entryPoint is! InterpretedFunction && entryPoint is! Callable && entryPoint is! Function) {
+            if (entryPoint is! InterpretedFunction &&
+                entryPoint is! Callable &&
+                entryPoint is! Function) {
               throw RuntimeError(
                   'Isolate.spawn requires a Function for entryPoint.');
             }
@@ -305,7 +307,9 @@ class ReceivePortIsolate {
           // Stream methods
           'map': (visitor, target, positionalArgs, namedArgs) {
             final transform = positionalArgs[0];
-            if (transform is! InterpretedFunction && transform is! Callable && transform is! Function) {
+            if (transform is! InterpretedFunction &&
+                transform is! Callable &&
+                transform is! Function) {
               throw RuntimeError(
                   'Stream.map requires a Function for transform.');
             }
@@ -321,7 +325,9 @@ class ReceivePortIsolate {
           },
           'where': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0];
-            if (test is! InterpretedFunction && test is! Callable && test is! Function) {
+            if (test is! InterpretedFunction &&
+                test is! Callable &&
+                test is! Function) {
               throw RuntimeError('Stream.where requires a Function for test.');
             }
             return (target as Stream).where((event) {

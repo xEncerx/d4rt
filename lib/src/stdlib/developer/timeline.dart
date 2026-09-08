@@ -26,8 +26,7 @@ class TimelineDeveloper {
             return null;
           },
           'timeSync': (visitor, positionalArgs, namedArgs) {
-            if (positionalArgs.length < 2 ||
-                positionalArgs[0] is! String) {
+            if (positionalArgs.length < 2 || positionalArgs[0] is! String) {
               throw RuntimeError(
                   "Timeline.timeSync expects a String name and a function callback.");
             }

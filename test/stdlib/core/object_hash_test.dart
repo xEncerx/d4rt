@@ -32,7 +32,8 @@ void main() {
       expect(result, isTrue);
     });
 
-    test('Object.hashAllUnordered produces equal hash regardless of ordering', () {
+    test('Object.hashAllUnordered produces equal hash regardless of ordering',
+        () {
       final d4rt = D4rt();
       final result = d4rt.execute(source: '''
         main() {

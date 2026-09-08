@@ -27,7 +27,8 @@ class AsyncStdlib {
         'scheduleMicrotask',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.isEmpty || arguments[0] is! InterpretedFunction) {
-            throw RuntimeError('scheduleMicrotask requires a callback function.');
+            throw RuntimeError(
+                'scheduleMicrotask requires a callback function.');
           }
           final callback = arguments[0] as InterpretedFunction;
           scheduleMicrotask(() => callback.call(visitor, []));

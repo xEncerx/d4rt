@@ -17,7 +17,13 @@ void main() {
         }
       ''');
 
-      expect(result, equals(['SGVsbG8=', 'SGVsbG8=', [72, 101, 108, 108, 111]]));
+      expect(
+          result,
+          equals([
+            'SGVsbG8=',
+            'SGVsbG8=',
+            [72, 101, 108, 108, 111]
+          ]));
     });
   });
 }

@@ -12,7 +12,8 @@ class Int64ListTypedData {
             if (positionalArgs.length == 1 && positionalArgs[0] is int) {
               return Int64List(positionalArgs[0] as int);
             }
-            throw RuntimeError("Int64List constructor expects one int argument (length).");
+            throw RuntimeError(
+                "Int64List constructor expects one int argument (length).");
           },
           'fromList': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.length == 1 && positionalArgs[0] is List) {
@@ -23,29 +24,34 @@ class Int64ListTypedData {
               }).toList();
               return Int64List.fromList(intList);
             }
-            throw RuntimeError("Int64List.fromList expects one List<int> argument.");
+            throw RuntimeError(
+                "Int64List.fromList expects one List<int> argument.");
           },
           'view': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.isNotEmpty && positionalArgs[0] is ByteBuffer) {
               final buffer = positionalArgs[0] as ByteBuffer;
-              final offsetInBytes =
-                  positionalArgs.length > 1 ? positionalArgs[1] as int? ?? 0 : 0;
+              final offsetInBytes = positionalArgs.length > 1
+                  ? positionalArgs[1] as int? ?? 0
+                  : 0;
               final length =
                   positionalArgs.length > 2 ? positionalArgs[2] as int? : null;
               return Int64List.view(buffer, offsetInBytes, length);
             }
-            throw RuntimeError("Int64List.view expects ByteBuffer and optional offset/length arguments.");
+            throw RuntimeError(
+                "Int64List.view expects ByteBuffer and optional offset/length arguments.");
           },
           'sublistView': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.isNotEmpty && positionalArgs[0] is TypedData) {
               final data = positionalArgs[0] as TypedData;
-              final start =
-                  positionalArgs.length > 1 ? positionalArgs[1] as int? ?? 0 : 0;
+              final start = positionalArgs.length > 1
+                  ? positionalArgs[1] as int? ?? 0
+                  : 0;
               final end =
                   positionalArgs.length > 2 ? positionalArgs[2] as int? : null;
               return Int64List.sublistView(data, start, end);
             }
-            throw RuntimeError("Int64List.sublistView expects TypedData and optional start/end arguments.");
+            throw RuntimeError(
+                "Int64List.sublistView expects TypedData and optional start/end arguments.");
           },
         },
         methods: {
@@ -65,17 +71,20 @@ class Int64ListTypedData {
               target[positionalArgs[0] as int] = positionalArgs[1] as int;
               return positionalArgs[1];
             }
-            throw RuntimeError("Int64List[index] = value expects int index and int value.");
+            throw RuntimeError(
+                "Int64List[index] = value expects int index and int value.");
           },
           'sublist': (visitor, target, positionalArgs, namedArgs) {
             if (target is Int64List &&
                 positionalArgs.isNotEmpty &&
                 positionalArgs[0] is int) {
               final start = positionalArgs[0] as int;
-              final end = positionalArgs.length > 1 ? positionalArgs[1] as int? : null;
+              final end =
+                  positionalArgs.length > 1 ? positionalArgs[1] as int? : null;
               return target.sublist(start, end);
             }
-            throw RuntimeError("Int64List.sublist expects start index and optional end index.");
+            throw RuntimeError(
+                "Int64List.sublist expects start index and optional end index.");
           },
           'toString': (visitor, target, positionalArgs, namedArgs) {
             return (target as Int64List).toString();
@@ -86,49 +95,57 @@ class Int64ListTypedData {
             if (target is Int64List) {
               return target.length;
             }
-            throw RuntimeError("Target is not an Int64List for getter 'length'.");
+            throw RuntimeError(
+                "Target is not an Int64List for getter 'length'.");
           },
           'buffer': (visitor, target) {
             if (target is Int64List) {
               return target.buffer;
             }
-            throw RuntimeError("Target is not an Int64List for getter 'buffer'.");
+            throw RuntimeError(
+                "Target is not an Int64List for getter 'buffer'.");
           },
           'elementSizeInBytes': (visitor, target) {
             if (target is Int64List) {
               return target.elementSizeInBytes;
             }
-            throw RuntimeError("Target is not an Int64List for getter 'elementSizeInBytes'.");
+            throw RuntimeError(
+                "Target is not an Int64List for getter 'elementSizeInBytes'.");
           },
           'offsetInBytes': (visitor, target) {
             if (target is Int64List) {
               return target.offsetInBytes;
             }
-            throw RuntimeError("Target is not an Int64List for getter 'offsetInBytes'.");
+            throw RuntimeError(
+                "Target is not an Int64List for getter 'offsetInBytes'.");
           },
           'lengthInBytes': (visitor, target) {
             if (target is Int64List) {
               return target.lengthInBytes;
             }
-            throw RuntimeError("Target is not an Int64List for getter 'lengthInBytes'.");
+            throw RuntimeError(
+                "Target is not an Int64List for getter 'lengthInBytes'.");
           },
           'isEmpty': (visitor, target) {
             if (target is Int64List) {
               return target.isEmpty;
             }
-            throw RuntimeError("Target is not an Int64List for getter 'isEmpty'.");
+            throw RuntimeError(
+                "Target is not an Int64List for getter 'isEmpty'.");
           },
           'isNotEmpty': (visitor, target) {
             if (target is Int64List) {
               return target.isNotEmpty;
             }
-            throw RuntimeError("Target is not an Int64List for getter 'isNotEmpty'.");
+            throw RuntimeError(
+                "Target is not an Int64List for getter 'isNotEmpty'.");
           },
           'first': (visitor, target) {
             if (target is Int64List) {
               return target.first;
             }
-            throw RuntimeError("Target is not an Int64List for getter 'first'.");
+            throw RuntimeError(
+                "Target is not an Int64List for getter 'first'.");
           },
           'last': (visitor, target) {
             if (target is Int64List) {
@@ -137,8 +154,7 @@ class Int64ListTypedData {
             throw RuntimeError("Target is not an Int64List for getter 'last'.");
           },
           'hashCode': (visitor, target) => (target as Int64List).hashCode,
-          'runtimeType': (visitor, target) =>
-              (target as Int64List).runtimeType,
+          'runtimeType': (visitor, target) => (target as Int64List).runtimeType,
         },
       );
 }

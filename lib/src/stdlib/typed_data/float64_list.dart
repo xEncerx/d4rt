@@ -11,7 +11,8 @@ class Float64ListTypedData {
             if (positionalArgs.length == 1 && positionalArgs[0] is int) {
               return Float64List(positionalArgs[0] as int);
             }
-            throw RuntimeError("Float64List constructor expects one int argument (length).");
+            throw RuntimeError(
+                "Float64List constructor expects one int argument (length).");
           },
           'fromList': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.length == 1 && positionalArgs[0] is List) {
@@ -22,29 +23,34 @@ class Float64ListTypedData {
               }).toList();
               return Float64List.fromList(doubleList);
             }
-            throw RuntimeError("Float64List.fromList expects one List<num> argument.");
+            throw RuntimeError(
+                "Float64List.fromList expects one List<num> argument.");
           },
           'view': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.isNotEmpty && positionalArgs[0] is ByteBuffer) {
               final buffer = positionalArgs[0] as ByteBuffer;
-              final offsetInBytes =
-                  positionalArgs.length > 1 ? positionalArgs[1] as int? ?? 0 : 0;
+              final offsetInBytes = positionalArgs.length > 1
+                  ? positionalArgs[1] as int? ?? 0
+                  : 0;
               final length =
                   positionalArgs.length > 2 ? positionalArgs[2] as int? : null;
               return Float64List.view(buffer, offsetInBytes, length);
             }
-            throw RuntimeError("Float64List.view expects ByteBuffer and optional offset/length arguments.");
+            throw RuntimeError(
+                "Float64List.view expects ByteBuffer and optional offset/length arguments.");
           },
           'sublistView': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.isNotEmpty && positionalArgs[0] is TypedData) {
               final data = positionalArgs[0] as TypedData;
-              final start =
-                  positionalArgs.length > 1 ? positionalArgs[1] as int? ?? 0 : 0;
+              final start = positionalArgs.length > 1
+                  ? positionalArgs[1] as int? ?? 0
+                  : 0;
               final end =
                   positionalArgs.length > 2 ? positionalArgs[2] as int? : null;
               return Float64List.sublistView(data, start, end);
             }
-            throw RuntimeError("Float64List.sublistView expects TypedData and optional start/end arguments.");
+            throw RuntimeError(
+                "Float64List.sublistView expects TypedData and optional start/end arguments.");
           },
         },
         methods: {
@@ -66,10 +72,12 @@ class Float64ListTypedData {
               target[index] = value;
               return value;
             }
-            throw RuntimeError("Float64List[index] = value expects int index and num value.");
+            throw RuntimeError(
+                "Float64List[index] = value expects int index and num value.");
           },
           'sublist': (visitor, target, positionalArgs, namedArgs) {
-            final start = positionalArgs.isNotEmpty ? positionalArgs[0] as int : 0;
+            final start =
+                positionalArgs.isNotEmpty ? positionalArgs[0] as int : 0;
             final end =
                 positionalArgs.length > 1 ? positionalArgs[1] as int? : null;
             return (target as Float64List).sublist(start, end);
@@ -87,14 +95,17 @@ class Float64ListTypedData {
           'elementSizeInBytes': (visitor, target) =>
               (target as Float64List).elementSizeInBytes,
           'buffer': (visitor, target) => (target as Float64List).buffer,
-          'lengthInBytes': (visitor, target) => (target as Float64List).lengthInBytes,
-          'offsetInBytes': (visitor, target) => (target as Float64List).offsetInBytes,
+          'lengthInBytes': (visitor, target) =>
+              (target as Float64List).lengthInBytes,
+          'offsetInBytes': (visitor, target) =>
+              (target as Float64List).offsetInBytes,
           'isEmpty': (visitor, target) => (target as Float64List).isEmpty,
           'isNotEmpty': (visitor, target) => (target as Float64List).isNotEmpty,
           'first': (visitor, target) => (target as Float64List).first,
           'last': (visitor, target) => (target as Float64List).last,
           'hashCode': (visitor, target) => (target as Float64List).hashCode,
-          'runtimeType': (visitor, target) => (target as Float64List).runtimeType,
+          'runtimeType': (visitor, target) =>
+              (target as Float64List).runtimeType,
         },
       );
 }

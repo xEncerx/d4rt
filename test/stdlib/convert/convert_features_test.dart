@@ -67,7 +67,10 @@ void main() {
       expect(result[0], isTrue);
       expect(result[1], isTrue);
       expect(result[2], equals('custom cause'));
-      expect(result[3], contains('Converting object to an encodable object failed: Instance of \'Object\''));
+      expect(
+          result[3],
+          contains(
+              'Converting object to an encodable object failed: Instance of \'Object\''));
     });
 
     test('Codec, Converter, and Encoding subtyping', () {

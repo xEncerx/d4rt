@@ -76,7 +76,8 @@ class MapViewCollection {
             return (target as MapView).update(
               positionalArgs[0],
               (value) => update.call(visitor, [value]),
-              ifAbsent: ifAbsent != null ? () => ifAbsent.call(visitor, []) : null,
+              ifAbsent:
+                  ifAbsent != null ? () => ifAbsent.call(visitor, []) : null,
             );
           },
           'updateAll': (visitor, target, positionalArgs, namedArgs) {

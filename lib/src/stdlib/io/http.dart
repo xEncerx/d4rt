@@ -1000,7 +1000,8 @@ class HttpStatusIo {
           'gone': (visitor) => HttpStatus.gone,
           'lengthRequired': (visitor) => HttpStatus.lengthRequired,
           'preconditionFailed': (visitor) => HttpStatus.preconditionFailed,
-          'requestEntityTooLarge': (visitor) => HttpStatus.requestEntityTooLarge,
+          'requestEntityTooLarge': (visitor) =>
+              HttpStatus.requestEntityTooLarge,
           'requestUriTooLong': (visitor) => HttpStatus.requestUriTooLong,
           'unsupportedMediaType': (visitor) => HttpStatus.unsupportedMediaType,
           'requestedRangeNotSatisfiable': (visitor) =>

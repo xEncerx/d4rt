@@ -34,8 +34,7 @@ class HasNextIteratorCollection {
             }
             throw RuntimeError('Target is not a HasNextIterator for hasNext.');
           },
-          'hashCode': (visitor, target) =>
-              (target as HasNextIterator).hashCode,
+          'hashCode': (visitor, target) => (target as HasNextIterator).hashCode,
           'runtimeType': (visitor, target) =>
               (target as HasNextIterator).runtimeType,
         },

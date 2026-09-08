@@ -11,7 +11,8 @@ class Int8ListTypedData {
             if (positionalArgs.length == 1 && positionalArgs[0] is int) {
               return Int8List(positionalArgs[0] as int);
             }
-            throw RuntimeError("Int8List constructor expects one int argument (length).");
+            throw RuntimeError(
+                "Int8List constructor expects one int argument (length).");
           },
           'fromList': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.length == 1 && positionalArgs[0] is List) {
@@ -22,29 +23,34 @@ class Int8ListTypedData {
               }).toList();
               return Int8List.fromList(intList);
             }
-            throw RuntimeError("Int8List.fromList expects one List<int> argument.");
+            throw RuntimeError(
+                "Int8List.fromList expects one List<int> argument.");
           },
           'view': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.isNotEmpty && positionalArgs[0] is ByteBuffer) {
               final buffer = positionalArgs[0] as ByteBuffer;
-              final offsetInBytes =
-                  positionalArgs.length > 1 ? positionalArgs[1] as int? ?? 0 : 0;
+              final offsetInBytes = positionalArgs.length > 1
+                  ? positionalArgs[1] as int? ?? 0
+                  : 0;
               final length =
                   positionalArgs.length > 2 ? positionalArgs[2] as int? : null;
               return Int8List.view(buffer, offsetInBytes, length);
             }
-            throw RuntimeError("Int8List.view expects ByteBuffer and optional offset/length arguments.");
+            throw RuntimeError(
+                "Int8List.view expects ByteBuffer and optional offset/length arguments.");
           },
           'sublistView': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.isNotEmpty && positionalArgs[0] is TypedData) {
               final data = positionalArgs[0] as TypedData;
-              final start =
-                  positionalArgs.length > 1 ? positionalArgs[1] as int? ?? 0 : 0;
+              final start = positionalArgs.length > 1
+                  ? positionalArgs[1] as int? ?? 0
+                  : 0;
               final end =
                   positionalArgs.length > 2 ? positionalArgs[2] as int? : null;
               return Int8List.sublistView(data, start, end);
             }
-            throw RuntimeError("Int8List.sublistView expects TypedData and optional start/end arguments.");
+            throw RuntimeError(
+                "Int8List.sublistView expects TypedData and optional start/end arguments.");
           },
         },
         methods: {
@@ -66,10 +72,12 @@ class Int8ListTypedData {
               target[index] = value;
               return value;
             }
-            throw RuntimeError("Int8List[index] = value expects int index and int value.");
+            throw RuntimeError(
+                "Int8List[index] = value expects int index and int value.");
           },
           'sublist': (visitor, target, positionalArgs, namedArgs) {
-            final start = positionalArgs.isNotEmpty ? positionalArgs[0] as int : 0;
+            final start =
+                positionalArgs.isNotEmpty ? positionalArgs[0] as int : 0;
             final end =
                 positionalArgs.length > 1 ? positionalArgs[1] as int? : null;
             return (target as Int8List).sublist(start, end);
@@ -87,8 +95,10 @@ class Int8ListTypedData {
           'elementSizeInBytes': (visitor, target) =>
               (target as Int8List).elementSizeInBytes,
           'buffer': (visitor, target) => (target as Int8List).buffer,
-          'lengthInBytes': (visitor, target) => (target as Int8List).lengthInBytes,
-          'offsetInBytes': (visitor, target) => (target as Int8List).offsetInBytes,
+          'lengthInBytes': (visitor, target) =>
+              (target as Int8List).lengthInBytes,
+          'offsetInBytes': (visitor, target) =>
+              (target as Int8List).offsetInBytes,
           'isEmpty': (visitor, target) => (target as Int8List).isEmpty,
           'isNotEmpty': (visitor, target) => (target as Int8List).isNotEmpty,
           'first': (visitor, target) => (target as Int8List).first,

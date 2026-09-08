@@ -9,7 +9,8 @@ void main() {
       d4rt = D4rt();
     });
 
-    test('Relational patterns and Logical-AND patterns in switch expressions', () {
+    test('Relational patterns and Logical-AND patterns in switch expressions',
+        () {
       final result = d4rt.execute(source: '''
         String classify(int score) => switch (score) {
           >= 90 => 'A',
@@ -64,12 +65,14 @@ void main() {
         }
       ''') as List;
 
-      expect(result, equals([
-        'very large verified',
-        'very large unverified',
-        'non-positive',
-        'normal',
-      ]));
+      expect(
+          result,
+          equals([
+            'very large verified',
+            'very large unverified',
+            'non-positive',
+            'normal',
+          ]));
     });
 
     test('NullCheck, NullAssert, Parenthesized and Cast patterns', () {
@@ -91,12 +94,14 @@ void main() {
         }
       ''') as List;
 
-      expect(result, equals([
-        'positive-int:42',
-        'non-null-int:-5',
-        'string:hello',
-        'other',
-      ]));
+      expect(
+          result,
+          equals([
+            'positive-int:42',
+            'non-null-int:-5',
+            'string:hello',
+            'other',
+          ]));
     });
 
     test('For-in loop with pattern destructuring', () {
@@ -118,7 +123,9 @@ void main() {
       expect(result, equals([9, 12]));
     });
 
-    test('Collection for-in with pattern destructuring and if-case in collections', () {
+    test(
+        'Collection for-in with pattern destructuring and if-case in collections',
+        () {
       final result = d4rt.execute(source: '''
         main() {
           final pairs = [('a', 1), ('b', 2), ('c', 3)];

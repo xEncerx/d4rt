@@ -30,7 +30,8 @@ class DeveloperStdlib {
         'log',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.isEmpty || arguments[0] is! String) {
-            throw RuntimeError("log requires at least one String message argument.");
+            throw RuntimeError(
+                "log requires at least one String message argument.");
           }
           final message = arguments[0] as String;
           final time = namedArguments['time'] as DateTime?;
@@ -89,8 +90,7 @@ class DeveloperStdlib {
     environment.define(
         'registerExtension',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
-          if (arguments.length < 2 ||
-              arguments[0] is! String) {
+          if (arguments.length < 2 || arguments[0] is! String) {
             throw RuntimeError(
                 "registerExtension requires a String method and a function handler.");
           }
@@ -109,7 +109,8 @@ class DeveloperStdlib {
             if (resolvedResult is ServiceExtensionResponse) {
               return resolvedResult;
             }
-            throw RuntimeError("Service extension handler must return a ServiceExtensionResponse.");
+            throw RuntimeError(
+                "Service extension handler must return a ServiceExtensionResponse.");
           });
           return null;
         }, arity: 2, name: 'registerExtension'));

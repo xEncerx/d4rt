@@ -14,7 +14,8 @@ class SplayTreeSetCollection {
               if (positionalArgs[0] is InterpretedFunction) {
                 compareFn = positionalArgs[0] as InterpretedFunction;
               } else {
-                throw RuntimeError("The 'compare' argument must be a function.");
+                throw RuntimeError(
+                    "The 'compare' argument must be a function.");
               }
             }
 
@@ -36,7 +37,8 @@ class SplayTreeSetCollection {
             }
             int Function(dynamic, dynamic)? actualCompare;
             if (compareFn != null) {
-              actualCompare = (k1, k2) => compareFn!.call(visitor, [k1, k2]) as int;
+              actualCompare =
+                  (k1, k2) => compareFn!.call(visitor, [k1, k2]) as int;
             }
             return SplayTreeSet<dynamic>.from(elements, actualCompare);
           },
@@ -48,7 +50,8 @@ class SplayTreeSetCollection {
             }
             int Function(dynamic, dynamic)? actualCompare;
             if (compareFn != null) {
-              actualCompare = (k1, k2) => compareFn!.call(visitor, [k1, k2]) as int;
+              actualCompare =
+                  (k1, k2) => compareFn!.call(visitor, [k1, k2]) as int;
             }
             return SplayTreeSet<dynamic>.of(elements, actualCompare);
           },
@@ -83,13 +86,16 @@ class SplayTreeSetCollection {
             return (target as SplayTreeSet).lookup(positionalArgs[0]);
           },
           'union': (visitor, target, positionalArgs, namedArgs) {
-            return (target as SplayTreeSet).union((positionalArgs[0] as Set).cast());
+            return (target as SplayTreeSet)
+                .union((positionalArgs[0] as Set).cast());
           },
           'intersection': (visitor, target, positionalArgs, namedArgs) {
-            return (target as SplayTreeSet).intersection(positionalArgs[0] as Set);
+            return (target as SplayTreeSet)
+                .intersection(positionalArgs[0] as Set);
           },
           'difference': (visitor, target, positionalArgs, namedArgs) {
-            return (target as SplayTreeSet).difference(positionalArgs[0] as Set);
+            return (target as SplayTreeSet)
+                .difference(positionalArgs[0] as Set);
           },
           'toList': (visitor, target, positionalArgs, namedArgs) {
             final growable = namedArgs['growable'] as bool? ?? true;
@@ -105,12 +111,14 @@ class SplayTreeSetCollection {
         getters: {
           'length': (visitor, target) => (target as SplayTreeSet).length,
           'isEmpty': (visitor, target) => (target as SplayTreeSet).isEmpty,
-          'isNotEmpty': (visitor, target) => (target as SplayTreeSet).isNotEmpty,
+          'isNotEmpty': (visitor, target) =>
+              (target as SplayTreeSet).isNotEmpty,
           'first': (visitor, target) => (target as SplayTreeSet).first,
           'last': (visitor, target) => (target as SplayTreeSet).last,
           'iterator': (visitor, target) => (target as SplayTreeSet).iterator,
           'hashCode': (visitor, target) => (target as SplayTreeSet).hashCode,
-          'runtimeType': (visitor, target) => (target as SplayTreeSet).runtimeType,
+          'runtimeType': (visitor, target) =>
+              (target as SplayTreeSet).runtimeType,
         },
       );
 }

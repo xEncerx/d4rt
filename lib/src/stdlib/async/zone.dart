@@ -46,9 +46,11 @@ class ZoneAsync {
             final arg1 = positionalArgs[1];
             final arg2 = positionalArgs[2];
             if (fn is InterpretedFunction) {
-              return zone.runBinary((a, b) => fn.call(visitor, [a, b]), arg1, arg2);
+              return zone.runBinary(
+                  (a, b) => fn.call(visitor, [a, b]), arg1, arg2);
             } else if (fn is Function) {
-              return zone.runBinary((a, b) => (fn as dynamic)(a, b), arg1, arg2);
+              return zone.runBinary(
+                  (a, b) => (fn as dynamic)(a, b), arg1, arg2);
             }
             throw RuntimeError('Zone.runBinary expects a callback function');
           },
@@ -72,9 +74,10 @@ class ZoneAsync {
           'handleUncaughtError': (visitor, target, positionalArgs, namedArgs) {
             final zone = target as Zone;
             final error = positionalArgs[0] as Object;
-            final stackTrace = positionalArgs.length > 1 && positionalArgs[1] is StackTrace
-                ? positionalArgs[1] as StackTrace
-                : StackTrace.current;
+            final stackTrace =
+                positionalArgs.length > 1 && positionalArgs[1] is StackTrace
+                    ? positionalArgs[1] as StackTrace
+                    : StackTrace.current;
             zone.handleUncaughtError(error, stackTrace);
             return null;
           },
@@ -86,7 +89,8 @@ class ZoneAsync {
             }
             return zone.registerCallback(fn as dynamic);
           },
-          'registerUnaryCallback': (visitor, target, positionalArgs, namedArgs) {
+          'registerUnaryCallback':
+              (visitor, target, positionalArgs, namedArgs) {
             final zone = target as Zone;
             final fn = positionalArgs[0];
             if (fn is InterpretedFunction) {
@@ -94,11 +98,13 @@ class ZoneAsync {
             }
             return zone.registerUnaryCallback(fn as dynamic);
           },
-          'registerBinaryCallback': (visitor, target, positionalArgs, namedArgs) {
+          'registerBinaryCallback':
+              (visitor, target, positionalArgs, namedArgs) {
             final zone = target as Zone;
             final fn = positionalArgs[0];
             if (fn is InterpretedFunction) {
-              return zone.registerBinaryCallback((a, b) => fn.call(visitor, [a, b]));
+              return zone
+                  .registerBinaryCallback((a, b) => fn.call(visitor, [a, b]));
             }
             return zone.registerBinaryCallback(fn as dynamic);
           },

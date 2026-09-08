@@ -29,7 +29,8 @@ class ObjectCore {
             return target.toString();
           },
           'noSuchMethod': (visitor, target, positionalArgs, namedArgs) {
-            return (target as dynamic).noSuchMethod(positionalArgs[0] as Invocation);
+            return (target as dynamic)
+                .noSuchMethod(positionalArgs[0] as Invocation);
           },
         },
         getters: {

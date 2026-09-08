@@ -14,7 +14,8 @@ class ServiceDeveloper {
           },
           'getIsolateId': (visitor, positionalArgs, namedArgs) {
             if (positionalArgs.isEmpty || positionalArgs[0] is! Isolate) {
-              throw RuntimeError("Service.getIsolateId expects an Isolate argument.");
+              throw RuntimeError(
+                  "Service.getIsolateId expects an Isolate argument.");
             }
             return Service.getIsolateId(positionalArgs[0] as Isolate);
           },
@@ -37,8 +38,10 @@ class ServiceExtensionResponseDeveloper {
         staticGetters: {
           'invalidParams': (visitor) => ServiceExtensionResponse.invalidParams,
           'kInvalidParams': (visitor) => ServiceExtensionResponse.invalidParams,
-          'extensionError': (visitor) => ServiceExtensionResponse.extensionError,
-          'kExtensionError': (visitor) => ServiceExtensionResponse.extensionError,
+          'extensionError': (visitor) =>
+              ServiceExtensionResponse.extensionError,
+          'kExtensionError': (visitor) =>
+              ServiceExtensionResponse.extensionError,
           'extensionErrorMin': (visitor) =>
               ServiceExtensionResponse.extensionErrorMin,
           'kExtensionErrorMin': (visitor) =>

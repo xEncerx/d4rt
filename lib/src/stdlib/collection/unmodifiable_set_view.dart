@@ -33,7 +33,8 @@ class UnmodifiableSetViewCollection {
         },
         getters: {
           'length': (visitor, target) => (target as UnmodifiableSetView).length,
-          'isEmpty': (visitor, target) => (target as UnmodifiableSetView).isEmpty,
+          'isEmpty': (visitor, target) =>
+              (target as UnmodifiableSetView).isEmpty,
           'isNotEmpty': (visitor, target) =>
               (target as UnmodifiableSetView).isNotEmpty,
           'first': (visitor, target) => (target as UnmodifiableSetView).first,

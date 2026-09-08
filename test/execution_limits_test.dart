@@ -3,7 +3,8 @@ import 'package:test/test.dart';
 
 void main() {
   group('Execution Limits & Sandbox Timeout Tests', () {
-    test('maxSteps terminates infinite while loop with ExecutionLimitException', () {
+    test('maxSteps terminates infinite while loop with ExecutionLimitException',
+        () {
       final d4rt = D4rt();
       const source = '''
         void main() {
@@ -19,7 +20,8 @@ void main() {
       );
     });
 
-    test('maxSteps terminates infinite for loop with ExecutionLimitException', () {
+    test('maxSteps terminates infinite for loop with ExecutionLimitException',
+        () {
       final d4rt = D4rt();
       const source = '''
         void main() {
@@ -47,7 +49,8 @@ void main() {
       ''';
 
       expect(
-        () => d4rt.execute(source: source, timeout: const Duration(milliseconds: 100)),
+        () => d4rt.execute(
+            source: source, timeout: const Duration(milliseconds: 100)),
         throwsA(isA<ExecutionTimeoutException>()),
       );
     });

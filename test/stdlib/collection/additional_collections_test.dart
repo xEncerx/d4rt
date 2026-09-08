@@ -62,7 +62,13 @@ void main() {
         }
       ''');
 
-      expect(result, equals([true, 3, [10, 20, 30]]));
+      expect(
+          result,
+          equals([
+            true,
+            3,
+            [10, 20, 30]
+          ]));
     });
   });
 }

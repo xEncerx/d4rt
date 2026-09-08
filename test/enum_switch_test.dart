@@ -57,14 +57,16 @@ void main() {
         }
       ''') as List;
 
-      expect(result, equals([
-        'Pending',
-        'Active',
-        'Completed',
-        'PendingExpr',
-        'ActiveExpr',
-        'CompletedExpr',
-      ]));
+      expect(
+          result,
+          equals([
+            'Pending',
+            'Active',
+            'Completed',
+            'PendingExpr',
+            'ActiveExpr',
+            'CompletedExpr',
+          ]));
     });
 
     test('Bridged enum in switch statement and expression', () {
@@ -104,14 +106,16 @@ void main() {
         ''',
       ) as List;
 
-      expect(result, equals([
-        'First',
-        'Second',
-        'Third',
-        'FirstExpr',
-        'SecondExpr',
-        'ThirdExpr',
-      ]));
+      expect(
+          result,
+          equals([
+            'First',
+            'Second',
+            'Third',
+            'FirstExpr',
+            'SecondExpr',
+            'ThirdExpr',
+          ]));
     });
   });
 }

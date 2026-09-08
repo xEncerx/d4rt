@@ -20,7 +20,9 @@ void main() {
       expect(result[1], isTrue);
     });
 
-    test('jsonEncode automatically serializes InterpretedInstance with toJson() method', () {
+    test(
+        'jsonEncode automatically serializes InterpretedInstance with toJson() method',
+        () {
       final d4rt = D4rt();
       final result = d4rt.execute(source: '''
         import 'dart:convert';

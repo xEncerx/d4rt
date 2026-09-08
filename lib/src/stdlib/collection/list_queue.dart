@@ -45,8 +45,7 @@ class ListQueueCollection {
             if (elements is Iterable) {
               return ListQueue<dynamic>.of(elements);
             }
-            throw RuntimeError(
-                "Argument to ListQueue.of must be an Iterable.");
+            throw RuntimeError("Argument to ListQueue.of must be an Iterable.");
           },
         },
         methods: {

@@ -40,10 +40,12 @@ void main() {
         }
       ''');
 
-      expect(result, equals([
-        'https://example.com/api/v1/users?page=1&limit=10',
-        'https://example.com/api/v2/items?filter=active',
-      ]));
+      expect(
+          result,
+          equals([
+            'https://example.com/api/v1/users?page=1&limit=10',
+            'https://example.com/api/v2/items?filter=active',
+          ]));
     });
   });
 }
