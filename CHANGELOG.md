@@ -5,6 +5,7 @@
 - Invoke unnamed bridged superclass constructors for implicit `super()` calls from interpreted classes.
 - Fail construction deterministically when a bridged superclass constructor is missing, throws, or returns `null`.
 - Prevent synthetic default constructors from initializing superclass state more than once.
+- Load interpreted libraries once with private namespaces, resolving imports and generic bounds before declaration population.
 
 ## 0.2.4
 - feat: Enhance enum handling with improved equality checks and add comprehensive switch statement tests

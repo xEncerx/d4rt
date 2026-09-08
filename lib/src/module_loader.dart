@@ -20,8 +20,28 @@ class LoadedModule {
   final Environment environment; // The environment of this module
   final Environment
       exportedEnvironment; // The environment of the exported symbols
+  final InterpreterVisitor interpreter;
 
-  LoadedModule(this.uri, this.ast, this.environment, this.exportedEnvironment);
+  LoadedModule(this.uri, this.ast, this.environment, this.exportedEnvironment,
+      this.interpreter);
+}
+
+class _ModuleEnvironment extends Environment {
+  _ModuleEnvironment({super.enclosing});
+
+  InterpretedExtension? _lastDeclaredUnnamedExtension;
+
+  @override
+  void addUnnamedExtension(InterpretedExtension extension) {
+    super.addUnnamedExtension(extension);
+    _lastDeclaredUnnamedExtension = extension;
+  }
+
+  InterpretedExtension? _takeLastDeclaredUnnamedExtension() {
+    final extension = _lastDeclaredUnnamedExtension;
+    _lastDeclaredUnnamedExtension = null;
+    return extension;
+  }
 }
 
 class ModuleLoader {
@@ -35,13 +55,29 @@ class ModuleLoader {
   final List<Map<String, BridgedEnumDefinition>> bridgedEnumDefinitions;
   final List<Map<String, BridgedClass>> bridgedClases;
   final D4rt? d4rt; // Reference to D4rt instance for permission checking
+  final Duration? _rootTimeout;
+  final int? _rootMaxSteps;
+  final DateTime? _rootStartTime;
+  final void Function(String)? _rootOnPrint;
 
   ModuleLoader(this.globalEnvironment, this.sources,
       this.bridgedEnumDefinitions, this.bridgedClases,
-      {this.d4rt, this.basePath, this.allowFileSystemImports = false}) {
+      {this.d4rt,
+      this.basePath,
+      this.allowFileSystemImports = false,
+      Duration? rootTimeout,
+      int? rootMaxSteps,
+      DateTime? rootStartTime,
+      void Function(String)? rootOnPrint})
+      : _rootTimeout = rootTimeout,
+        _rootMaxSteps = rootMaxSteps,
+        _rootStartTime = rootStartTime,
+        _rootOnPrint = rootOnPrint {
     Logger.debug(
         "[ModuleLoader] Initialized with ${sources.length} preloaded sources.");
   }
+
+  bool _isPublicName(String name) => !name.startsWith('_');
 
   /// Checks if the given URI requires special permissions and verifies they are granted.
   void _checkModulePermissions(Uri uri) {
@@ -258,85 +294,190 @@ class ModuleLoader {
       String sourceCode = _fetchModuleSource(uri);
       CompilationUnit ast = _parseSource(uri, sourceCode);
 
-      Environment moduleEnvironment = Environment(enclosing: globalEnvironment);
+      final moduleEnvironment =
+          _ModuleEnvironment(enclosing: globalEnvironment);
 
-      DeclarationVisitor declarationVisitor =
+      final DeclarationVisitor declarationVisitor =
           DeclarationVisitor(moduleEnvironment);
-      // Only declarations are visited to populate the local environment
+      // Declare local names before imports while deferring function metadata
+      // until imported types are available.
       for (var declaration in ast.declarations) {
-        declaration.accept(declarationVisitor);
+        if (declaration is FunctionDeclaration) {
+          final functionName = declaration.name.lexeme;
+          if (!moduleEnvironment.isDefinedLocally(functionName)) {
+            moduleEnvironment.define(functionName, null);
+          }
+        } else {
+          declaration.accept(declarationVisitor);
+        }
+        if (declaration is ExtensionDeclaration) {
+          final extensionName = declaration.name?.lexeme;
+          if (extensionName != null &&
+              !moduleEnvironment.isDefinedLocally(extensionName)) {
+            moduleEnvironment.define(extensionName, null);
+          }
+        } else if (declaration is ExtensionTypeDeclaration) {
+          final extensionTypeName = declaration.namePart.typeName.lexeme;
+          if (!moduleEnvironment.isDefinedLocally(extensionTypeName)) {
+            moduleEnvironment.define(extensionTypeName, null);
+          }
+        }
       }
 
-      // Interpretation of top-level initializers
-      // Create an InterpreterVisitor for this specific module.
-      // It will use moduleEnvironment to resolve types and execute initializers.
-      // The moduleLoader is passed for potentially resolved imports by initializers (less common).
-      InterpreterVisitor moduleInterpreter = InterpreterVisitor(
-          globalEnvironment:
-              moduleEnvironment, // Important: use the module's local environment as base
-          moduleLoader: this, // Pass the current loader
-          initiallibrary: uri // The URI of the module being interpreted
-          );
+      // Capture the local namespace before imports are applied so ordinary
+      // imports do not become transitive exports. The bindings are shallow:
+      // populated declarations retain the same runtime object identity.
+      final privateNames = moduleEnvironment.values.keys
+          .where((name) => !_isPublicName(name))
+          .toSet();
+      final Environment exportedEnvironment =
+          moduleEnvironment.shallowCopyFiltered(hideNames: privateNames);
 
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Executing InterpreterVisitor pass for initializers...");
-      for (final declaration in ast.declarations) {
-        // We only care about the evaluation of TopLevelVariableDeclaration for their initializers.
-        // Functions, classes, and mixins are already "declared" by DeclarationVisitor.
-        // We skip class/mixin/function declarations here to avoid complex dependency resolution issues.
-        // They will be properly populated when processed in the main execution context.
-        if (declaration is TopLevelVariableDeclaration) {
-          declaration.accept(moduleInterpreter);
+          "[ModuleLoader loadModule for $uri] Processing import directives...");
+      for (final directive in ast.directives) {
+        if (directive is! ImportDirective) {
+          continue;
+        }
+
+        final importedUriString = directive.uri.stringValue;
+        if (importedUriString == null) {
+          Logger.warn(
+              "[ModuleLoader loadModule for $uri] Import directive with null URI string in ${uri.toString()}");
+          continue;
+        }
+        try {
+          final resolvedImportUri =
+              resolveModuleUri(importedUriString, from: uri);
+          Logger.debug(
+              "[ModuleLoader loadModule for $uri]   Importing from ${uri.toString()}: URI '$importedUriString', resolved to '${resolvedImportUri.toString()}'");
+          final importedModule = loadModule(resolvedImportUri);
+          final prefix = directive.prefix?.name;
+
+          final combinators = _extractCombinators(
+            directive,
+            directiveType: 'Import',
+            ownerUri: uri,
+          );
+
+          _applyImportedEnvironment(
+            moduleEnvironment,
+            importedModule,
+            ownerUri: uri,
+            resolvedImportUri: resolvedImportUri,
+            showNames: combinators.showNames,
+            hideNames: combinators.hideNames,
+            prefix: prefix,
+          );
+        } catch (e, s) {
+          Logger.error(
+              "[ModuleLoader loadModule for $uri] Error processing import directive for '$importedUriString' from ${uri.toString()}: $e\nStackTrace: $s");
+          if (e is SourceCodeException) {
+            throw wrapDirectiveSourceError('import', uri, importedUriString, e);
+          }
+          rethrow;
         }
       }
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Finished InterpreterVisitor pass for initializers.");
+          "[ModuleLoader loadModule for $uri] Finished processing import directives.");
+
+      // Populate local declarations only after imported types and values are
+      // visible in the module environment.
+      final isRootModule = _moduleLoadStack.length == 1;
+      final InterpreterVisitor moduleInterpreter = InterpreterVisitor(
+        globalEnvironment:
+            moduleEnvironment, // Important: use the module's local environment as base
+        moduleLoader: this, // Pass the current loader
+        initiallibrary: uri, // The URI of the module being interpreted
+        timeout: isRootModule ? _rootTimeout : null,
+        maxSteps: isRootModule ? _rootMaxSteps : null,
+        startTime: isRootModule ? _rootStartTime : null,
+        onPrint: isRootModule ? _rootOnPrint : null,
+      );
+
+      // Functions resolve against the post-import namespace and must be
+      // callable before class-like declarations evaluate static initializers.
+      for (final declaration in ast.declarations) {
+        if (declaration is FunctionDeclaration) {
+          declaration.accept(moduleInterpreter);
+          final functionName = declaration.name.lexeme;
+          if (_isPublicName(functionName)) {
+            exportedEnvironment.assign(
+                functionName, moduleEnvironment.values[functionName]);
+          }
+        }
+      }
 
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Post-processing: Processing class/mixin declarations to populate constructors...");
+          "[ModuleLoader loadModule for $uri] Processing class/mixin declarations to populate constructors...");
       // First process all mixin declarations to ensure they're fully initialized
       // before classes try to use them
       for (final declaration in ast.declarations) {
         if (declaration is MixinDeclaration) {
-          try {
-            declaration.accept(moduleInterpreter);
-          } catch (e) {
-            Logger.warn(
-                "[ModuleLoader loadModule for $uri] Warning while processing mixin '${declaration.name}': $e");
-          }
+          declaration.accept(moduleInterpreter);
         }
       }
       // Then process all class declarations now that mixins are ready
       for (final declaration in ast.declarations) {
         if (declaration is ClassDeclaration) {
-          try {
-            declaration.accept(moduleInterpreter);
-          } catch (e) {
-            Logger.warn(
-                "[ModuleLoader loadModule for $uri] Warning while processing class '${declaration.namePart.typeName}': $e");
-          }
+          declaration.accept(moduleInterpreter);
         }
       }
-      // Finally process all extension declarations
+      // Then populate enums, whose class-like members can depend on local
+      // classes and mixins.
+      for (final declaration in ast.declarations) {
+        if (declaration is EnumDeclaration) {
+          declaration.accept(moduleInterpreter);
+        }
+      }
+      // Finally process all extension declarations and extension types.
       for (final declaration in ast.declarations) {
         if (declaration is ExtensionDeclaration) {
-          try {
-            declaration.accept(moduleInterpreter);
-          } catch (e) {
-            Logger.warn(
-                "[ModuleLoader loadModule for $uri] Warning while processing extension '${declaration.name}': $e");
+          declaration.accept<Object?>(moduleInterpreter);
+          final extensionName = declaration.name?.lexeme;
+          final extension = extensionName == null
+              ? moduleEnvironment._takeLastDeclaredUnnamedExtension()
+              : moduleEnvironment.values[extensionName];
+          if (extension is! InterpretedExtension) {
+            throw RuntimeError(
+                "Extension '${declaration.name?.lexeme ?? '<unnamed>'}' was not populated.");
+          }
+          if (extensionName == null) {
+            exportedEnvironment.addUnnamedExtension(extension);
+          } else if (_isPublicName(extensionName)) {
+            exportedEnvironment.assign(extensionName, extension);
+          }
+        }
+      }
+      for (final declaration in ast.declarations) {
+        if (declaration is ExtensionTypeDeclaration) {
+          declaration.accept(moduleInterpreter);
+          final extensionTypeName = declaration.namePart.typeName.lexeme;
+          if (_isPublicName(extensionTypeName)) {
+            exportedEnvironment.assign(
+                extensionTypeName, moduleEnvironment.values[extensionTypeName]);
           }
         }
       }
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Finished post-processing declarations.");
-      // PREPARATION OF THE EXPORTED ENVIRONMENT
-      Environment exportedEnvironment = Environment(
-          enclosing: globalEnvironment); // Must also enclose globalEnvironment
-      // Now, moduleEnvironment should contain the variables with their initialized values.
-      exportedEnvironment.importEnvironment(moduleEnvironment);
+          "[ModuleLoader loadModule for $uri] Finished processing class/mixin/extension declarations.");
+
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Initialized exportedEnvironment with local declarations (post-initialization).");
+          "[ModuleLoader loadModule for $uri] Executing InterpreterVisitor pass for initializers...");
+      for (final declaration in ast.declarations) {
+        if (declaration is TopLevelVariableDeclaration) {
+          declaration.accept(moduleInterpreter);
+          for (final variable in declaration.variables.variables) {
+            final variableName = variable.name.lexeme;
+            if (variableName != '_' && _isPublicName(variableName)) {
+              exportedEnvironment.assign(
+                  variableName, moduleEnvironment.values[variableName]);
+            }
+          }
+        }
+      }
+      Logger.debug(
+          "[ModuleLoader loadModule for $uri] Finished InterpreterVisitor pass for initializers.");
 
       // Process the export directives of this module to populate its exportedEnvironment
       Logger.debug(
@@ -379,61 +520,13 @@ class ModuleLoader {
             }
             rethrow;
           }
-        } else if (directive is ImportDirective) {
-          final importedUriString = directive.uri.stringValue;
-          if (importedUriString == null) {
-            Logger.warn(
-                "[ModuleLoader loadModule for $uri] Import directive with null URI string in ${uri.toString()}");
-            continue;
-          }
-          try {
-            final resolvedImportUri =
-                resolveModuleUri(importedUriString, from: uri);
-            Logger.debug(
-                "[ModuleLoader loadModule for $uri]   Importing from ${uri.toString()}: URI '$importedUriString', resolved to '${resolvedImportUri.toString()}'");
-            LoadedModule importedModule = loadModule(
-                resolvedImportUri); // Recursive call - this will check permissions
-            String? prefix = directive.prefix?.name;
-
-            final combinators = _extractCombinators(
-              directive,
-              directiveType: 'Import',
-              ownerUri: uri,
-            );
-
-            _applyImportedEnvironment(
-              moduleEnvironment,
-              importedModule,
-              ownerUri: uri,
-              resolvedImportUri: resolvedImportUri,
-              showNames: combinators.showNames,
-              hideNames: combinators.hideNames,
-              prefix: prefix,
-            );
-          } catch (e, s) {
-            Logger.error(
-                "[ModuleLoader loadModule for $uri] Error processing import directive for '$importedUriString' from ${uri.toString()}: $e\nStackTrace: $s");
-            if (e is SourceCodeException) {
-              throw wrapDirectiveSourceError(
-                  'import', uri, importedUriString, e);
-            }
-            rethrow;
-          }
         }
       }
       Logger.debug(
           "[ModuleLoader loadModule for $uri] Finished processing export directives for ${uri.toString()}.");
 
-      try {
-        final testGetSymbol = moduleEnvironment.get('getMessage');
-        Logger.debug(
-            "[ModuleLoader loadModule for $uri] Test get 'getMessage' from module env for $uri: SUCCESS, value: ${testGetSymbol?.runtimeType}");
-      } catch (e) {
-        // Silently ignore if not found
-      }
-
-      final loadedModule =
-          LoadedModule(uri, ast, moduleEnvironment, exportedEnvironment);
+      final loadedModule = LoadedModule(
+          uri, ast, moduleEnvironment, exportedEnvironment, moduleInterpreter);
       _moduleCache[uri] = loadedModule;
       Logger.debug(
           "[ModuleLoader loadModule for $uri] Module '${uri.toString()}' chargé et mis en cache.");

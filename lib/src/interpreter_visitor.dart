@@ -7281,6 +7281,22 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     Logger.debug(
         "[Visitor.visitClassDeclaration] Retrieved placeholder for '$className' (hash: ${klass.hashCode})");
 
+    final typeParameters = node.namePart.typeParameters;
+    if (typeParameters != null) {
+      final typeEnvironment = Environment(enclosing: environment);
+      for (final typeParameter in typeParameters.typeParameters) {
+        final parameterName = typeParameter.name.lexeme;
+        typeEnvironment.define(parameterName, TypeParameter(parameterName));
+      }
+      final resolvedBounds = InterpretedClass.extractTypeParameterBounds(
+        typeParameters,
+        typeEnvironment,
+      );
+      klass.typeParameterBounds
+        ..clear()
+        ..addAll(resolvedBounds);
+    }
+
     // Resolve and populate relationships ON THE EXISTING klass object
     // Superclass lookup
     // InterpretedClass? superclass; // Keep this commented or remove

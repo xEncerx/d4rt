@@ -1,7 +1,7 @@
 import 'dart:io' as io;
 
-import 'package:test/test.dart';
 import 'package:d4rt/d4rt.dart';
+import 'package:test/test.dart';
 
 void main() {
   tearDown(() {
@@ -212,6 +212,577 @@ void main() {
       expect(
         result,
         equals("PkgMsg: Hello from my_test_pkg/utils! | PkgNum: 123"),
+      );
+    });
+
+    test(
+        'Library execution reuses one fully populated module graph across inheritance and initialization',
+        () {
+      final inheritanceSources = <String, String>{
+        'package:sdk/model.dart': '''
+class InputModel {
+  final String value;
+
+  InputModel(this.value);
+}
+
+class OutputModel {
+  final String value;
+
+  OutputModel(this.value);
+}
+''',
+        'package:sdk/base.dart': '''
+import 'package:sdk/model.dart';
+
+int rootInitializationCount = 0;
+
+void recordRootInitialization() {
+  rootInitializationCount++;
+}
+
+int readRootInitializationCount() => rootInitializationCount;
+
+class Base {
+  String constructorState = 'field-initializer-only';
+
+  Base() {
+    constructorState = 'constructor-body-ran';
+  }
+
+  String inheritedMethod() => 'base:' + constructorState;
+
+  OutputModel inheritedTransform(InputModel input) {
+    return OutputModel('base:' + input.value + ':' + constructorState);
+  }
+}
+''',
+        'package:author/author.dart': '''
+import 'package:sdk/base.dart';
+import 'package:sdk/model.dart';
+
+final class Author extends Base {
+  String ownMethod() => 'author';
+
+  OutputModel transform(InputModel input) {
+    return OutputModel('author:' + input.value);
+  }
+}
+''',
+        'd4rt-mem:/inheritance_main.dart': '''
+import 'package:author/author.dart';
+import 'package:sdk/base.dart';
+import 'package:sdk/model.dart';
+
+final String initializedReport = initializeRoot();
+
+final class Entry extends Author {
+  String entryMethod() => 'entry';
+}
+
+String initializeRoot() {
+  recordRootInitialization();
+  print('root initialized');
+  final entry = Entry();
+  final input = InputModel('payload');
+  final ownModel = entry.transform(input);
+  final inheritedModel = entry.inheritedTransform(input);
+  return entry.entryMethod() +
+      '|' +
+      entry.ownMethod() +
+      '|' +
+      entry.inheritedMethod() +
+      '|' +
+      ownModel.value +
+      '|' +
+      inheritedModel.value;
+}
+
+String main() => initializedReport +
+    '|count:' +
+    readRootInitializationCount().toString();
+''',
+      };
+
+      final d4rt = D4rt();
+      final printedMessages = <String>[];
+      final result = d4rt.execute(
+        library: 'd4rt-mem:/inheritance_main.dart',
+        sources: inheritanceSources,
+        onPrint: printedMessages.add,
+      );
+
+      expect(
+        result,
+        equals(
+          'entry|author|base:constructor-body-ran|author:payload|base:payload:constructor-body-ran|count:1',
+        ),
+      );
+      expect(printedMessages, equals(['root initialized']));
+      expect(
+        d4rt.eval('initializedReport'),
+        equals(
+          'entry|author|base:constructor-body-ran|author:payload|base:payload:constructor-body-ran',
+        ),
+      );
+    });
+
+    test('Imported symbols are available to module top-level initializers', () {
+      final initializerSources = <String, String>{
+        'package:initializer/provider.dart': '''
+String buildMessage(String value) => 'initialized:' + value;
+''',
+        'package:initializer/consumer.dart': '''
+import 'package:initializer/provider.dart';
+
+final String loadedMessage = buildMessage('ready');
+
+String readLoadedMessage() => loadedMessage;
+''',
+        'd4rt-mem:/initializer_main.dart': '''
+import 'package:initializer/consumer.dart';
+
+String main() => readLoadedMessage();
+''',
+      };
+
+      final result = D4rt().execute(
+        library: 'd4rt-mem:/initializer_main.dart',
+        sources: initializerSources,
+      );
+
+      expect(result, equals('initialized:ready'));
+    });
+
+    test(
+        'Local functions are callable by eager static initializers after imports',
+        () {
+      final staticInitializerSources = <String, String>{
+        'package:static_initializers/model.dart': '''
+class StaticValue {
+  final String label;
+
+  StaticValue(this.label);
+}
+''',
+        'package:static_initializers/class_holder.dart': '''
+import 'package:static_initializers/model.dart';
+
+class ClassHolder {
+  static final StaticValue value = buildClassValue();
+}
+
+StaticValue buildClassValue() => StaticValue('class');
+''',
+        'package:static_initializers/mixin_holder.dart': '''
+import 'package:static_initializers/model.dart';
+
+mixin MixinHolder {
+  static final StaticValue value = buildMixinValue();
+}
+
+StaticValue buildMixinValue() => StaticValue('mixin');
+''',
+        'package:static_initializers/enum_holder.dart': '''
+import 'package:static_initializers/model.dart';
+
+enum EnumHolder {
+  only;
+
+  static final StaticValue value = buildEnumValue();
+}
+
+StaticValue buildEnumValue() => StaticValue('enum');
+''',
+        'package:static_initializers/extension_holder.dart': '''
+import 'package:static_initializers/model.dart';
+
+extension ExtensionHolder on String {
+  static final StaticValue value = buildExtensionValue();
+}
+
+StaticValue buildExtensionValue() => StaticValue('extension');
+''',
+        'd4rt-mem:/static_initializers_main.dart': '''
+import 'package:static_initializers/class_holder.dart';
+import 'package:static_initializers/enum_holder.dart';
+import 'package:static_initializers/extension_holder.dart';
+import 'package:static_initializers/mixin_holder.dart';
+
+String main() => ClassHolder.value.label +
+    '|' +
+    MixinHolder.value.label +
+    '|' +
+    EnumHolder.value.label +
+    '|' +
+    ExtensionHolder.value.label;
+''',
+      };
+
+      final result = D4rt().execute(
+        library: 'd4rt-mem:/static_initializers_main.dart',
+        sources: staticInitializerSources,
+      );
+
+      expect(result, equals('class|mixin|enum|extension'));
+    });
+
+    test('Imported class bounds are resolved after imports and enforced', () {
+      final boundSources = <String, String>{
+        'package:bounds/model.dart': '''
+class ImportedModel {
+  final String value;
+
+  ImportedModel(this.value);
+}
+''',
+        'package:bounds/container.dart': '''
+import 'package:bounds/model.dart';
+
+class Child<T extends ImportedModel> {
+  final T value;
+
+  Child(this.value);
+
+  String describe() => 'child:' + value.value;
+}
+''',
+        'package:bounds/valid_main.dart': '''
+import 'package:bounds/container.dart';
+import 'package:bounds/model.dart';
+
+String main() => Child<ImportedModel>(ImportedModel('ready')).describe();
+''',
+        'package:bounds/invalid_main.dart': '''
+import 'package:bounds/container.dart';
+
+String main() => Child<String>('invalid').describe();
+''',
+      };
+
+      expect(
+        D4rt().execute(
+          library: 'package:bounds/valid_main.dart',
+          sources: boundSources,
+        ),
+        equals('child:ready'),
+      );
+      expect(
+        () => D4rt().execute(
+          library: 'package:bounds/invalid_main.dart',
+          sources: boundSources,
+        ),
+        throwsA(
+          isA<RuntimeError>().having(
+            (error) => error.message,
+            'message',
+            contains('does not satisfy bound'),
+          ),
+        ),
+      );
+    });
+
+    test('Library-private declarations stay inside their defining library', () {
+      const ownerUri = 'package:privacy/owner.dart';
+      const exporterUri = 'package:privacy/exporter.dart';
+      const transitiveExporterUri = 'package:privacy/transitive_exporter.dart';
+      final privacySources = <String, String>{
+        ownerUri: '''
+String _privateValue = 'value';
+
+String _privateFunction() => 'function';
+
+class _PrivateClass {
+  String reveal() => 'class';
+}
+
+String publicFunction() =>
+    _privateFunction() + ':' + _privateValue + ':' + _PrivateClass().reveal();
+
+class PublicClass {
+  String reveal() => publicFunction();
+}
+''',
+        exporterUri: '''
+export 'package:privacy/owner.dart'
+    show _privateValue, _privateFunction, _PrivateClass, publicFunction, PublicClass;
+''',
+        transitiveExporterUri: '''
+export 'package:privacy/exporter.dart';
+''',
+        'package:privacy/public_import_main.dart': '''
+import 'package:privacy/owner.dart';
+
+String main() => publicFunction() + '|' + PublicClass().reveal();
+''',
+        'package:privacy/public_export_main.dart': '''
+import 'package:privacy/exporter.dart';
+
+String main() => publicFunction() + '|' + PublicClass().reveal();
+''',
+      };
+
+      expect(
+        D4rt().execute(
+          library: 'package:privacy/public_import_main.dart',
+          sources: privacySources,
+        ),
+        equals('function:value:class|function:value:class'),
+      );
+      expect(
+        D4rt().execute(
+          library: 'package:privacy/public_export_main.dart',
+          sources: privacySources,
+        ),
+        equals('function:value:class|function:value:class'),
+      );
+
+      final privateExpressions = <String, String>{
+        '_privateValue': '_privateValue',
+        '_privateFunction': '_privateFunction()',
+        '_PrivateClass': '_PrivateClass().reveal()',
+      };
+      for (final entry in privateExpressions.entries) {
+        final directMainUri = 'package:privacy/direct_${entry.key}.dart';
+        final exportMainUri = 'package:privacy/export_${entry.key}.dart';
+        final transitiveMainUri =
+            'package:privacy/transitive_${entry.key}.dart';
+        privacySources[directMainUri] = '''
+import '$ownerUri';
+
+dynamic main() => ${entry.value};
+''';
+        privacySources[exportMainUri] = '''
+import '$exporterUri';
+
+dynamic main() => ${entry.value};
+''';
+        privacySources[transitiveMainUri] = '''
+import '$transitiveExporterUri';
+
+dynamic main() => ${entry.value};
+''';
+
+        expect(
+          () => D4rt().execute(
+            library: directMainUri,
+            sources: privacySources,
+          ),
+          throwsA(isA<RuntimeError>()),
+          reason: '${entry.key} must not be available through an import',
+        );
+        expect(
+          () => D4rt().execute(
+            library: exportMainUri,
+            sources: privacySources,
+          ),
+          throwsA(isA<RuntimeError>()),
+          reason: '${entry.key} must not be available through an export',
+        );
+        expect(
+          () => D4rt().execute(
+            library: transitiveMainUri,
+            sources: privacySources,
+          ),
+          throwsA(isA<RuntimeError>()),
+          reason:
+              '${entry.key} must not be available through transitive exports',
+        );
+      }
+
+      final prefixedExpressions = <String, String>{
+        '_privateValue': 'owner._privateValue',
+        '_privateFunction': 'owner._privateFunction()',
+      };
+      for (final entry in prefixedExpressions.entries) {
+        final mainUri = 'package:privacy/prefixed_${entry.key}.dart';
+        privacySources[mainUri] = '''
+import '$ownerUri' as owner;
+
+dynamic main() => ${entry.value};
+''';
+
+        expect(
+          () => D4rt().execute(library: mainUri, sources: privacySources),
+          throwsA(isA<RuntimeError>()),
+          reason: '${entry.key} must not be available through a prefix',
+        );
+      }
+    });
+
+    test('Invalid imported type declarations fail module loading', () {
+      final invalidDeclarationSources = <String, String>{
+        'package:invalid/child.dart': '''
+class BrokenChild extends MissingBase {
+  String method() => 'must-not-run';
+}
+''',
+        'package:invalid/mixin.dart': '''
+mixin BrokenMixin on MissingBase {
+  String method() => 'must-not-run';
+}
+''',
+        'package:invalid/extension.dart': '''
+extension BrokenExtension on MissingType {
+  String method() => 'must-not-run';
+}
+''',
+        'd4rt-mem:/invalid_superclass_main.dart': '''
+import 'package:invalid/child.dart';
+
+String main() => 'must-not-complete';
+''',
+        'd4rt-mem:/invalid_mixin_main.dart': '''
+import 'package:invalid/mixin.dart';
+
+String main() => 'must-not-complete';
+''',
+        'd4rt-mem:/invalid_extension_main.dart': '''
+import 'package:invalid/extension.dart';
+
+String main() => 'must-not-complete';
+''',
+      };
+
+      expect(
+        () => D4rt().execute(
+          library: 'd4rt-mem:/invalid_superclass_main.dart',
+          sources: invalidDeclarationSources,
+        ),
+        throwsA(
+          isA<RuntimeError>().having(
+            (error) => error.message,
+            'message',
+            contains(
+              "Superclass 'MissingBase' not found for class 'BrokenChild'",
+            ),
+          ),
+        ),
+      );
+      expect(
+        () => D4rt().execute(
+          library: 'd4rt-mem:/invalid_mixin_main.dart',
+          sources: invalidDeclarationSources,
+        ),
+        throwsA(
+          isA<RuntimeError>().having(
+            (error) => error.message,
+            'message',
+            contains("Type 'MissingBase' in 'on' clause of mixin"),
+          ),
+        ),
+      );
+      expect(
+        () => D4rt().execute(
+          library: 'd4rt-mem:/invalid_extension_main.dart',
+          sources: invalidDeclarationSources,
+        ),
+        throwsA(
+          isA<RuntimeError>().having(
+            (error) => error.message,
+            'message',
+            contains("Could not resolve 'on' type 'MissingType'"),
+          ),
+        ),
+      );
+    });
+
+    test('Ordinary imports do not become transitive exports', () {
+      final nonTransitiveSources = <String, String>{
+        'package:non_transitive/origin.dart': '''
+String originValue() => 'origin';
+''',
+        'package:non_transitive/middle.dart': '''
+import 'package:non_transitive/origin.dart';
+
+String middleValue() => 'middle:' + originValue();
+''',
+        'd4rt-mem:/middle_access_main.dart': '''
+import 'package:non_transitive/middle.dart';
+
+String main() => middleValue();
+''',
+        'd4rt-mem:/origin_leak_main.dart': '''
+import 'package:non_transitive/middle.dart';
+
+String main() => originValue();
+''',
+      };
+
+      expect(
+        D4rt().execute(
+          library: 'd4rt-mem:/middle_access_main.dart',
+          sources: nonTransitiveSources,
+        ),
+        equals('middle:origin'),
+      );
+      expect(
+        () => D4rt().execute(
+          library: 'd4rt-mem:/origin_leak_main.dart',
+          sources: nonTransitiveSources,
+        ),
+        throwsA(
+          isA<RuntimeError>().having(
+            (error) => error.message,
+            'message',
+            contains('Undefined variable: originValue'),
+          ),
+        ),
+      );
+    });
+
+    test('Imported unnamed extensions do not become transitive exports', () {
+      final extensionSources = <String, String>{
+        'package:extension/origin.dart': '''
+extension on String {
+  String decorated() => this + ':decorated';
+}
+''',
+        'package:extension/middle.dart': '''
+import 'package:extension/origin.dart';
+
+String useImportedExtension() => 'middle'.decorated();
+''',
+        'package:extension/exporter.dart': '''
+export 'package:extension/origin.dart';
+''',
+        'd4rt-mem:/extension_access_main.dart': '''
+import 'package:extension/middle.dart';
+
+String main() => useImportedExtension();
+''',
+        'd4rt-mem:/extension_leak_main.dart': '''
+import 'package:extension/middle.dart';
+
+String main() => 'root'.decorated();
+''',
+        'd4rt-mem:/extension_export_main.dart': '''
+import 'package:extension/exporter.dart';
+
+String main() => 'exported'.decorated();
+''',
+      };
+
+      expect(
+        D4rt().execute(
+          library: 'd4rt-mem:/extension_access_main.dart',
+          sources: extensionSources,
+        ),
+        equals('middle:decorated'),
+      );
+      expect(
+        () => D4rt().execute(
+          library: 'd4rt-mem:/extension_leak_main.dart',
+          sources: extensionSources,
+        ),
+        throwsA(isA<RuntimeError>()),
+      );
+      expect(
+        D4rt().execute(
+          library: 'd4rt-mem:/extension_export_main.dart',
+          sources: extensionSources,
+        ),
+        equals('exported:decorated'),
       );
     });
 

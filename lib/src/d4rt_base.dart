@@ -193,7 +193,8 @@ class D4rt {
       Duration? timeout,
       int? maxSteps,
       DateTime? startTime,
-      void Function(String)? onPrint}) {
+      void Function(String)? onPrint,
+      bool configureLoadedRoot = false}) {
     final moduleLoader = ModuleLoader(
       Environment(),
       sources ?? {},
@@ -202,16 +203,25 @@ class D4rt {
       d4rt: this,
       basePath: basePath,
       allowFileSystemImports: allowFileSystemImports,
+      rootTimeout: configureLoadedRoot ? timeout : null,
+      rootMaxSteps: configureLoadedRoot ? maxSteps : null,
+      rootStartTime: configureLoadedRoot ? startTime : null,
+      rootOnPrint: configureLoadedRoot ? onPrint ?? this.onPrint : null,
     );
-    _visitor = InterpreterVisitor(
-      globalEnvironment: moduleLoader.globalEnvironment,
-      moduleLoader: moduleLoader,
-      timeout: timeout,
-      maxSteps: maxSteps,
-      startTime: startTime,
-      onPrint: onPrint ?? this.onPrint,
-    );
+    _visitor = configureLoadedRoot
+        ? null
+        : InterpreterVisitor(
+            globalEnvironment: moduleLoader.globalEnvironment,
+            moduleLoader: moduleLoader,
+            timeout: timeout,
+            maxSteps: maxSteps,
+            startTime: startTime,
+            onPrint: onPrint ?? this.onPrint,
+          );
     Stdlib(moduleLoader.globalEnvironment).register();
+    for (final function in _nativeFunctions) {
+      moduleLoader.globalEnvironment.define(function.name, function);
+    }
     return moduleLoader;
   }
 
@@ -495,9 +505,9 @@ class D4rt {
       maxSteps: maxSteps,
       startTime: startTime,
       onPrint: onPrint ?? this.onPrint,
+      configureLoadedRoot: library != null,
     );
     Logger.debug("[D4rt.execute] Starting execution. library: $library");
-    CompilationUnit compilationUnit;
 
     if (library != null) {
       Logger.debug(
@@ -516,9 +526,9 @@ class D4rt {
             "[D4rt.execute] The 'source' parameter is not empty but 'library' ($library) is used to load from sources. The 'source' string will be ignored.");
       }
 
+      late final LoadedModule loadedRootModule;
       try {
-        final loadedRootModule = _moduleLoader.loadModule(Uri.parse(library));
-        compilationUnit = loadedRootModule.ast;
+        loadedRootModule = _moduleLoader.loadModule(Uri.parse(library));
         Logger.debug(
             "[D4rt.execute] $name source loaded and parsed successfully via ModuleLoader for $library.");
       } catch (e) {
@@ -531,45 +541,53 @@ class D4rt {
               "Unexpected failure to load initial module $library: $e");
         }
       }
+
+      return _executeLoadedModule(
+        loadedModule: loadedRootModule,
+        name: name,
+        positionalArgs: positionalArgs,
+        namedArgs: namedArgs,
+      );
+    }
+
+    if (source == null) {
+      throw RuntimeError('No source provided for execution.');
+    }
+    Logger.debug(
+        "[D4rt.execute] Parsing direct source string (AST cache: $enableAstCache)...");
+
+    late final CompilationUnit compilationUnit;
+    if (enableAstCache && _astCache.containsKey(source)) {
+      Logger.debug("[D4rt.execute] Reusing cached AST for source.");
+      compilationUnit = _astCache[source]!.compilationUnit;
     } else {
-      if (source == null) {
-        throw RuntimeError('No source provided for execution.');
-      }
-      Logger.debug(
-          "[D4rt.execute] Parsing direct source string (AST cache: $enableAstCache)...");
+      final parseResult = parseString(
+        content: source,
+        throwIfDiagnostics: false,
+        featureSet: FeatureSet.latestLanguageVersion(),
+      );
 
-      if (enableAstCache && _astCache.containsKey(source)) {
-        Logger.debug("[D4rt.execute] Reusing cached AST for source.");
-        compilationUnit = _astCache[source]!.compilationUnit;
-      } else {
-        final parseResult = parseString(
-          content: source,
-          throwIfDiagnostics: false,
-          featureSet: FeatureSet.latestLanguageVersion(),
+      final errors = parseResult.errors
+          .where((e) => e.diagnosticCode.severity == DiagnosticSeverity.ERROR)
+          .toList();
+
+      if (errors.isNotEmpty) {
+        final errorMessages = errors.map((e) {
+          final location = parseResult.lineInfo.getLocation(e.offset);
+          return 'Line ${location.lineNumber}, Column ${location.columnNumber}: ${e.message}';
+        }).join("\n");
+        throw SourceCodeException('Parsing errors:\n$errorMessages');
+      }
+
+      compilationUnit = parseResult.unit;
+      if (enableAstCache) {
+        _astCache[source] = PrecompiledScript(
+          compilationUnit: compilationUnit,
+          source: source,
+          basePath: basePath,
         );
-
-        final errors = parseResult.errors
-            .where((e) => e.diagnosticCode.severity == DiagnosticSeverity.ERROR)
-            .toList();
-
-        if (errors.isNotEmpty) {
-          final errorMessages = errors.map((e) {
-            final location = parseResult.lineInfo.getLocation(e.offset);
-            return 'Line ${location.lineNumber}, Column ${location.columnNumber}: ${e.message}';
-          }).join("\n");
-          throw SourceCodeException('Parsing errors:\n$errorMessages');
-        }
-
-        compilationUnit = parseResult.unit;
-        if (enableAstCache) {
-          _astCache[source] = PrecompiledScript(
-            compilationUnit: compilationUnit,
-            source: source,
-            basePath: basePath,
-          );
-        }
-        Logger.debug("[D4rt.execute] Direct source string parsed successfully.");
       }
+      Logger.debug("[D4rt.execute] Direct source string parsed successfully.");
     }
 
     return _executeCompilationUnit(
@@ -577,13 +595,28 @@ class D4rt {
       name: name,
       positionalArgs: positionalArgs,
       namedArgs: namedArgs,
-      libraryUri: library != null ? Uri.parse(library) : null,
+      libraryUri: null,
       basePath: basePath,
       allowFileSystemImports: allowFileSystemImports,
       timeout: timeout,
       maxSteps: maxSteps,
       startTime: startTime,
       onPrint: onPrint ?? this.onPrint,
+    );
+  }
+
+  dynamic _executeLoadedModule({
+    required LoadedModule loadedModule,
+    required String name,
+    List<Object?>? positionalArgs,
+    Map<String, Object?>? namedArgs,
+  }) {
+    _visitor = loadedModule.interpreter;
+    return _invokeFunction(
+      executionEnvironment: loadedModule.environment,
+      name: name,
+      positionalArgs: positionalArgs,
+      namedArgs: namedArgs,
     );
   }
 
@@ -601,9 +634,6 @@ class D4rt {
     void Function(String)? onPrint,
   }) {
     final Environment executionEnvironment = _moduleLoader.globalEnvironment;
-    for (var function in _nativeFunctions) {
-      executionEnvironment.define(function.name, function);
-    }
     Logger.debug("[execute] Starting Pass 1: Declaration");
     final declarationVisitor = DeclarationVisitor(executionEnvironment);
     for (final declaration in compilationUnit.declarations) {
@@ -622,7 +652,6 @@ class D4rt {
         maxSteps: maxSteps,
         startTime: startTime,
         onPrint: onPrint ?? this.onPrint);
-    Object? functionResult;
     try {
       Logger.debug(" [execute] Starting Pass 2: Interpretation");
       Logger.debug(
@@ -638,11 +667,6 @@ class D4rt {
         }
       }
       Logger.debug(" [execute] Finished processing directives.");
-
-      Logger.debug(
-          " [execute] Ensuring imported classes have constructors populated...");
-      _ensureImportedClassesHaveConstructors(executionEnvironment, _visitor!);
-      Logger.debug(" [execute] Finished ensuring imported classes are ready.");
 
       Logger.debug(" [execute] Processing ALL declarations sequentially");
 
@@ -672,40 +696,64 @@ class D4rt {
         }
       }
       Logger.debug(" [execute] Finished processing declarations");
+    } on InternalInterpreterException catch (e) {
+      if (e.originalThrownValue is RuntimeError) {
+        throw e.originalThrownValue as RuntimeError;
+      } else {
+        throw e.originalThrownValue!;
+      }
+    } catch (e) {
+      if (e is RuntimeError || e is SourceCodeException) {
+        rethrow;
+      } else {
+        throw RuntimeError('Unexpected error: $e');
+      }
+    }
+
+    return _invokeFunction(
+      executionEnvironment: executionEnvironment,
+      name: name,
+      positionalArgs: positionalArgs,
+      namedArgs: namedArgs,
+    );
+  }
+
+  dynamic _invokeFunction({
+    required Environment executionEnvironment,
+    required String name,
+    List<Object?>? positionalArgs,
+    Map<String, Object?>? namedArgs,
+  }) {
+    Object? functionResult;
+    try {
       Logger.debug("[execute] Looking for $name function");
       final functionCallable = executionEnvironment.get(name);
-      if (functionCallable is Callable) {
-        List<Object?> interpreterArgs = positionalArgs ?? [];
-        final Map<String, Object?> interpreterNamedArgs = namedArgs ?? {};
-
-        // Special handling for 'main' function: if it expects args but none provided,
-        // pass an empty list automatically (standard Dart behavior)
-        final expectedArity = functionCallable.arity;
-        if (name == 'main' &&
-            expectedArity > 0 &&
-            interpreterArgs.isEmpty &&
-            namedArgs?.isEmpty != false) {
-          // main expects args but none were provided - pass empty list
-          interpreterArgs = [<String>[]];
-          Logger.debug(
-              "[execute] 'main' expects arguments but none provided. Passing empty list.");
-        }
-
-        // Validate arity (only for positional args, named args are validated by the function itself)
-        if (interpreterArgs.length > expectedArity) {
-          throw RuntimeError(
-              "'$name' function accepts at most $expectedArity positional argument(s), but ${interpreterArgs.length} were provided.");
-        }
-
-        Logger.debug(
-            "[execute] Calling '$name' with positionalArgs: $interpreterArgs, namedArgs: $interpreterNamedArgs");
-
-        functionResult = functionCallable.call(
-            _visitor!, interpreterArgs, interpreterNamedArgs);
-      } else {
+      if (functionCallable is! Callable) {
         throw Exception(
             "No callable '$name' function found in the test source code.");
       }
+
+      List<Object?> interpreterArgs = positionalArgs ?? [];
+      final Map<String, Object?> interpreterNamedArgs = namedArgs ?? {};
+      final expectedArity = functionCallable.arity;
+      if (name == 'main' &&
+          expectedArity > 0 &&
+          interpreterArgs.isEmpty &&
+          namedArgs?.isEmpty != false) {
+        interpreterArgs = [<String>[]];
+        Logger.debug(
+            "[execute] 'main' expects arguments but none provided. Passing empty list.");
+      }
+
+      if (interpreterArgs.length > expectedArity) {
+        throw RuntimeError(
+            "'$name' function accepts at most $expectedArity positional argument(s), but ${interpreterArgs.length} were provided.");
+      }
+
+      Logger.debug(
+          "[execute] Calling '$name' with positionalArgs: $interpreterArgs, namedArgs: $interpreterNamedArgs");
+      functionResult = functionCallable.call(
+          _visitor!, interpreterArgs, interpreterNamedArgs);
       Logger.debug(" [execute] Finished Pass 2: Interpretation");
     } on InternalInterpreterException catch (e) {
       if (e.originalThrownValue is RuntimeError) {
@@ -720,6 +768,7 @@ class D4rt {
         throw RuntimeError('Unexpected error: $e');
       }
     }
+
     if (functionResult is InterpretedInstance) {
       _interpretedInstance = functionResult;
     }
@@ -745,21 +794,6 @@ class D4rt {
     }
     _hasExecutedOnce = true;
     return resultValue;
-  }
-
-  /// Ensures that InterpretedClass objects from imported modules have their constructors
-  /// populated. This is necessary for cross-file class instantiation to work correctly.
-  void _ensureImportedClassesHaveConstructors(
-      Environment env, InterpreterVisitor visitor) {
-    env.values.forEach((key, value) {
-      if (value is InterpretedClass && value.constructors.isEmpty) {
-        // This class has no constructors populated yet.
-        // We can't easily populate them here without the original AST node,
-        // so we rely on lazy initialization in InterpreterClass call()
-        Logger.debug(
-            "[D4rt._ensureImportedClassesHaveConstructors] Class '${value.name}' has no constructors yet");
-      }
-    });
   }
 
   /// Analyzes the given source code and returns introspection information
@@ -822,11 +856,6 @@ class D4rt {
 
     final compilationUnit = parseResult.unit;
     final Environment executionEnvironment = _moduleLoader.globalEnvironment;
-
-    // Register native functions
-    for (var function in _nativeFunctions) {
-      executionEnvironment.define(function.name, function);
-    }
 
     // Pass 1: Declaration
     final declarationVisitor = DeclarationVisitor(executionEnvironment);
@@ -898,8 +927,9 @@ class D4rt {
     }
 
     if (timeout != null || maxSteps != null || onPrint != null) {
+      final executionEnvironment = _visitor!.globalEnvironment;
       _visitor = InterpreterVisitor(
-        globalEnvironment: _moduleLoader.globalEnvironment,
+        globalEnvironment: executionEnvironment,
         moduleLoader: _moduleLoader,
         timeout: timeout,
         maxSteps: maxSteps,
@@ -908,7 +938,7 @@ class D4rt {
     }
 
     Logger.debug("[D4rt.eval] Evaluating: $expression");
-    final executionEnvironment = _moduleLoader.globalEnvironment;
+    final executionEnvironment = _visitor!.globalEnvironment;
 
     // First, try to parse as a top-level declaration (function, class, variable)
     final declarationParseResult = parseString(
@@ -1210,7 +1240,6 @@ class D4rt {
     return nativeValue;
   }
 
-
   dynamic invokeInterpretedFunction(
     InterpretedFunction f,
     List<Object?> positionalArguments, [
@@ -1231,7 +1260,8 @@ class D4rt {
       (k, v) => MapEntry(k, _bridgeNativeValueToInterpreter(v, globalEnv)),
     );
     return _tryFunction(
-      () => f.call(_visitor!, interpreterArgs,interpreterNamedArgs,typeArguments),
+      () => f.call(
+          _visitor!, interpreterArgs, interpreterNamedArgs, typeArguments),
       "Error invoking interpreted function '$f'",
     );
   }
