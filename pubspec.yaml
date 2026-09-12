@@ -14,6 +14,9 @@ platforms:
 environment:
   sdk: ^3.5.0
 
+executables:
+  d4rt: interpreter
+
 dependencies:
   analyzer: ^13.3.0
   build: ">=3.0.0 <5.0.0"
