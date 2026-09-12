@@ -27,6 +27,13 @@ class HashSetCollection {
             }
             throw RuntimeError("Argument to HashSet.from must be an Iterable.");
           },
+          'identity': (visitor, positionalArgs, namedArgs) {
+            if (positionalArgs.isNotEmpty || namedArgs.isNotEmpty) {
+              throw RuntimeError(
+                  "Constructor HashSet.identity() does not take positional or named arguments.");
+            }
+            return HashSet<dynamic>.identity();
+          },
         },
         methods: {
           'add': (visitor, target, positionalArgs, namedArgs) {

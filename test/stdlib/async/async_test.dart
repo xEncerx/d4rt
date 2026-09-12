@@ -453,8 +453,8 @@ void main() {
           return total;
         }
 
-        Future<void> main() async {
-          await testAsyncForInWithAwaitInBody();
+        Future<int> main() async {
+          return await testAsyncForInWithAwaitInBody();
         }
       ''');
 
@@ -488,8 +488,8 @@ void main() {
           return "\$status:\$finallyStatus";
         }
 
-        Future<void> main() async {
-          await testTryCatch();
+        Future<String> main() async {
+          return await testTryCatch();
         }
       ''');
 

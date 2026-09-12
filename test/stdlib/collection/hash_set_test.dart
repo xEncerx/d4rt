@@ -1,5 +1,20 @@
-import 'package:test/test.dart';
+import 'dart:collection';
+
 import 'package:d4rt/d4rt.dart';
+import 'package:test/test.dart';
+
+final class _EqualHostObject {
+  const _EqualHostObject(this.value);
+
+  final int value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _EqualHostObject && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+}
 
 void main() {
   final d4rt = D4rt();
@@ -58,6 +73,49 @@ void main() {
       expect(result[2], false, reason: "Does not contain 5");
       expect(result[3], unorderedEquals([1, 2, 3, 4]),
           reason: "toList from list with duplicates");
+    });
+
+    test('HashSet.identity() returns a native identity set', () {
+      final nativeSet = d4rt.execute(
+        source: '''
+          import 'dart:collection';
+          main() => HashSet.identity();
+        ''',
+      ) as HashSet<dynamic>;
+      final first = _EqualHostObject(1);
+      final second = _EqualHostObject(1);
+
+      expect(first, equals(second));
+      expect(identical(first, second), isFalse);
+
+      nativeSet
+        ..add(first)
+        ..add(second);
+
+      expect(nativeSet, hasLength(2));
+    });
+
+    test('HashSet.identity() rejects positional and named arguments', () {
+      for (final invocation in [
+        'HashSet.identity(1)',
+        'HashSet.identity(unexpected: true)',
+      ]) {
+        expect(
+          () => d4rt.execute(
+            source: '''
+              import 'dart:collection';
+              main() => $invocation;
+            ''',
+          ),
+          throwsA(
+            isA<RuntimeError>().having(
+              (error) => error.message,
+              'message',
+              contains('does not take positional or named arguments'),
+            ),
+          ),
+        );
+      }
     });
 
     test('clear() and isEmpty', () {

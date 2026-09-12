@@ -2,7 +2,8 @@ import 'dart:async';
 import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:d4rt/d4rt.dart';
-import 'type_annotation_utils.dart';
+import 'package:d4rt/src/catch_clause_matcher.dart';
+import 'package:d4rt/src/type_annotation_utils.dart';
 
 /// Represents an invocation for noSuchMethod support in interpreted code
 class InterpretedInvocation {
@@ -1358,16 +1359,19 @@ class InterpretedFunction implements Callable {
       // Save current visitor environment (in case of error)
       final originalVisitorEnv = visitor.environment;
       final previousAsyncState = visitor.currentAsyncState;
+      final previousFunction = visitor.currentFunction;
 
       // Configure the visitor for the current state
       // Use the top of the loop environment stack if it exists, otherwise the state environment
-      if (currentState.loopEnvironmentStack.isNotEmpty) {
+      if (currentState.activeCatchEnvironment != null) {
+        visitor.environment = currentState.activeCatchEnvironment!;
+      } else if (currentState.loopEnvironmentStack.isNotEmpty) {
         visitor.environment = currentState.loopEnvironmentStack.last;
       } else {
         visitor.environment = currentState.environment;
       }
       visitor.currentAsyncState = currentState;
-      // currentFunction is already defined by the call method
+      visitor.currentFunction = currentState.function;
 
       Logger.debug(
           " [StateMachine] Executing state: ${currentNode.runtimeType} in state env ${currentState.environment.hashCode}, loop stack depth: ${currentState.loopEnvironmentStack.length}. Visitor env set to: ${visitor.environment.hashCode}");
@@ -1867,17 +1871,21 @@ class InterpretedFunction implements Callable {
 
           if (!currentLoopInitialized) {
             Logger.debug(" [StateMachine] Handling For: Initializing.");
-            // Create the loop environment once using the currently active environment as parent
-            final newLoopEnvironment =
-                Environment(enclosing: visitor.environment);
-            currentState.forLoopEnvironment = newLoopEnvironment;
-            // Push the new environment, initialization state, and ForStatement node onto the stacks
-            currentState.loopEnvironmentStack.add(newLoopEnvironment);
-            currentState.loopInitializedStack
-                .add(false); // Start as uninitialized
-            currentState.loopNodeStack
-                .add(forNode); // Track which ForStatement this corresponds to
-            visitor.environment = newLoopEnvironment;
+            if (!isExistingLoop) {
+              // Create the loop environment once using the currently active environment as parent
+              final newLoopEnvironment =
+                  Environment(enclosing: visitor.environment);
+              currentState.forLoopEnvironment = newLoopEnvironment;
+              // Push the new environment, initialization state, and ForStatement node onto the stacks
+              currentState.loopEnvironmentStack.add(newLoopEnvironment);
+              currentState.loopInitializedStack
+                  .add(false); // Start as uninitialized
+              currentState.loopNodeStack
+                  .add(forNode); // Track which ForStatement this corresponds to
+              visitor.environment = newLoopEnvironment;
+            } else {
+              visitor.environment = currentState.loopEnvironmentStack.last;
+            }
 
             AstNode? initNode;
             if (parts is ForPartsWithDeclarations) {
@@ -1894,12 +1902,16 @@ class InterpretedFunction implements Callable {
                 // Suspended during initialization
                 Logger.debug(
                     "[StateMachine] For loop initialization suspended. Will resume.");
-                // Mark as initialized so the suspension logic will resume
-                if (currentState.loopInitializedStack.isNotEmpty) {
-                  currentState.loopInitializedStack[
-                      currentState.loopInitializedStack.length - 1] = true;
-                } else {
-                  currentState.forLoopInitialized = true;
+                // Legacy suspension continuations assign the initializer result
+                // directly. Exact await continuations re-enter the initializer
+                // and substitute the resolved expression instead.
+                if (lastResult.awaitExpression == null) {
+                  if (currentState.loopInitializedStack.isNotEmpty) {
+                    currentState.loopInitializedStack[
+                        currentState.loopInitializedStack.length - 1] = true;
+                  } else {
+                    currentState.forLoopInitialized = true;
+                  }
                 }
                 // Leave lastResult as is, the general suspension logic will handle it
                 // Do NOT continue to the condition or updaters now.
@@ -2232,20 +2244,62 @@ class InterpretedFunction implements Callable {
         if (lastResult is AsyncSuspensionRequest) {
           // Check if accept() returned a suspension
           final AsyncSuspensionRequest suspension = lastResult;
+          final suspensionNode = currentNode;
+
+          if (!identical(suspension.asyncState, currentState)) {
+            currentState.currentError = StateError(
+              'An async suspension request crossed its owning function frame.',
+            );
+            currentState.currentStackTrace = StackTrace.current;
+            _handleAsyncError(
+              visitor,
+              currentState,
+              suspensionNode,
+            );
+            return;
+          }
 
           Logger.debug(
               "[StateMachine] Suspension requested (from ${currentNode.runtimeType}). Waiting for Future...");
 
+          currentState.generatorSuspendedNode =
+              suspension.awaitExpression ?? suspensionNode;
+          final suspensionTry = _findEnclosingTryStatement(suspensionNode);
+          final resumesGeneratorCancellation =
+              currentState.generatorCancellationCleanup ||
+                  _isInsideFinallyBlockOf(suspensionNode, suspensionTry);
+
           // Attach the callbacks to the Future
           suspension.future.then((futureResult) {
+            if (currentState.generatorCancelled &&
+                !resumesGeneratorCancellation) {
+              return;
+            }
+            currentState.generatorSuspendedNode = null;
             Logger.debug(
                 " [StateMachine] Future completed successfully with: $futureResult");
-            // Update the state with the result
-            currentState.lastAwaitResult = futureResult;
             currentState.lastAwaitError = null;
             currentState.lastAwaitStackTrace = null;
-            currentState.currentError = null; // Clear any previous error state
-            currentState.currentStackTrace = null;
+
+            final awaitExpression = suspension.awaitExpression;
+            if (awaitExpression != null) {
+              if (currentState.hasCompletedAwaitValue) {
+                currentState.currentError = StateError(
+                  'An async frame received more than one completed await value.',
+                );
+                currentState.currentStackTrace = StackTrace.current;
+                _handleAsyncError(visitor, currentState, suspensionNode);
+                return;
+              }
+              currentState.completedAwaitExpression = awaitExpression;
+              currentState.completedAwaitValue = futureResult;
+              currentState.hasCompletedAwaitValue = true;
+              currentState.nextStateIdentifier = suspensionNode;
+              _scheduleStateMachineRun(visitor, currentState);
+              return;
+            }
+
+            currentState.lastAwaitResult = futureResult;
 
             if (currentState.pendingFinallyBlock != null) {
               Logger.debug(
@@ -2279,7 +2333,7 @@ class InterpretedFunction implements Callable {
             if (suspension.isYieldSuspension) {
               // For yield suspensions, simply continue with the next sequential node
               nextNodeAfterAwait = _findNextSequentialNode(visitor,
-                  currentNode!); // The YieldStatement that caused the suspension
+                  suspensionNode); // The YieldStatement that caused the suspension
               Logger.debug(
                   "[StateMachine] Yield suspension completed. Next node: ${nextNodeAfterAwait?.runtimeType}");
             } else {
@@ -2287,7 +2341,7 @@ class InterpretedFunction implements Callable {
               nextNodeAfterAwait = _determineNextNodeAfterAwait(
                   visitor,
                   currentState,
-                  currentNode!); // The node that caused the suspension
+                  suspensionNode); // The node that caused the suspension
             }
 
             currentState.nextStateIdentifier = nextNodeAfterAwait;
@@ -2295,6 +2349,11 @@ class InterpretedFunction implements Callable {
             // Reschedule the state machine execution
             _scheduleStateMachineRun(visitor, currentState);
           }).catchError((Object error, StackTrace stackTrace) {
+            if (currentState.generatorCancelled &&
+                !resumesGeneratorCancellation) {
+              return;
+            }
+            currentState.generatorSuspendedNode = null;
             Logger.debug(
                 " [StateMachine] Future completed with ERROR: $error"); // Do not display stackTrace here, too long
             // Store the error and stack trace in the state
@@ -2305,7 +2364,11 @@ class InterpretedFunction implements Callable {
             currentState.lastAwaitResult = null; // No valid result
 
             // Try to handle the error (find catch/finally)
-            _handleAsyncError(visitor, currentState, currentNode!);
+            _handleAsyncError(
+              visitor,
+              currentState,
+              suspension.awaitExpression ?? suspensionNode,
+            );
             // _handleAsyncError will either find a catch/finally and reschedule,
             // or complete the completer with the error.
           });
@@ -2314,10 +2377,6 @@ class InterpretedFunction implements Callable {
           // Execution will resume in the .then() or _handleAsyncError
           return;
         } else {
-          // Clear error state if we executed successfully
-          currentState.currentError = null;
-          currentState.currentStackTrace = null;
-
           // Determine the next sequential normal state
           // Use _findNextSequentialNode which now handles try/catch/finally
           final nextNode = _findNextSequentialNode(visitor, currentNode);
@@ -2330,21 +2389,38 @@ class InterpretedFunction implements Callable {
         // The function returned a value
         Logger.debug(
             " [StateMachine] Caught ReturnException. Completing with: ${e.value}");
-        TryStatement? currentTry =
-            currentState.activeTryStatement; // Use currentState
+        _clearExpressionContinuations(currentState);
+        currentState.currentError = null;
+        currentState.currentStackTrace = null;
+        var currentTry = _findEnclosingTryStatement(currentNode);
+        if (_isInsideFinallyBlockOf(currentNode, currentTry)) {
+          currentTry = _findEnclosingTryStatement(currentTry?.parent);
+        }
+        while (currentTry != null && currentTry.finallyBlock == null) {
+          currentTry = _findEnclosingTryStatement(currentTry.parent);
+        }
         if (currentTry != null && currentTry.finallyBlock != null) {
           // Check currentTry != null
           Logger.debug(
               "[StateMachine] Return caught inside try with finally. Executing finally first.");
           currentState.returnAfterFinally = e.value; // Use currentState
+          currentState.hasReturnAfterFinally = true;
+          currentState.resumeReturnAfterFinallyFrom = currentTry.parent;
           // Reset rethrow state if jumping to finally
           currentState.isHandlingErrorForRethrow = false;
           currentState.originalErrorForRethrow = null;
+          currentState.activeCatchEnvironment = null;
           currentNode =
               currentTry.finallyBlock!.statements.firstOrNull; // Now sure
           currentState.nextStateIdentifier = currentNode; // Use currentState
           continue; // Execute the finally
         }
+        currentState.activeCatchEnvironment = null;
+        currentState.isHandlingErrorForRethrow = false;
+        currentState.originalErrorForRethrow = null;
+        currentState.returnAfterFinally = null;
+        currentState.hasReturnAfterFinally = false;
+        currentState.resumeReturnAfterFinallyFrom = null;
         if (!currentState.completer.isCompleted) {
           currentState.completer.complete(e.value);
         }
@@ -2395,25 +2471,17 @@ class InterpretedFunction implements Callable {
       } catch (error, stackTrace) {
         // Other error during state execution (SYNC)
 
-        // Check if the error comes from rethrow
         if (error is InternalInterpreterException) {
-          // This is an exception rethrown by rethrow. Do not handle it here.
-          // Propagate it by completing the Future with the original error.
           Logger.debug(
-              " [StateMachine] Caught InternalInterpreterException from rethrow. Propagating.");
-          // Reset rethrow state before completing with error
-          currentState.isHandlingErrorForRethrow = false;
-          currentState.originalErrorForRethrow = null;
-          if (!currentState.completer.isCompleted) {
-            // Propagate the original error and its associated stack trace (if available in the internal exception)
-            // or the current stack trace if the internal one does not have one.
-            // Note: InternalInterpreterException does not store the stack trace for now.
-            // Using the captured stackTrace here is the best choice.
-            final errorToComplete =
-                _unwrapExceptionForPropagation(error.originalThrownValue);
-            currentState.completer.completeError(errorToComplete, stackTrace);
-          }
-          return; // Stop the state machine execution
+              " [StateMachine] Routing interpreted throw through lexical async error handling.");
+          currentState.currentError = error;
+          currentState.currentStackTrace = stackTrace;
+          _handleAsyncError(
+            visitor,
+            currentState,
+            currentNode ?? currentState.function._body!,
+          );
+          return;
         } else {
           // Standard synchronous error: Try to handle via internal try/catch/finally
           Logger.debug(
@@ -2428,20 +2496,42 @@ class InterpretedFunction implements Callable {
         // Restore the visitor environment if it was changed
         visitor.environment = originalVisitorEnv;
         visitor.currentAsyncState = previousAsyncState;
+        visitor.currentFunction = previousFunction;
         Logger.debug(
             " [StateMachine] Restored visitor env (${originalVisitorEnv.hashCode}) and async state in finally block.");
       }
     }
 
-    // Handle a return that was suspended by a finally
-    if (currentState.returnAfterFinally != null &&
+    if (currentState.hasReturnAfterFinally &&
         !currentState.completer.isCompleted) {
+      var enclosingTry =
+          _findEnclosingTryStatement(currentState.resumeReturnAfterFinallyFrom);
+      while (enclosingTry != null) {
+        if (enclosingTry.finallyBlock != null) {
+          currentState.resumeReturnAfterFinallyFrom = enclosingTry.parent;
+          currentState.nextStateIdentifier =
+              enclosingTry.finallyBlock!.statements.firstOrNull;
+          if (currentState.nextStateIdentifier != null) {
+            _scheduleStateMachineRun(visitor, currentState);
+            return;
+          }
+        }
+        enclosingTry = _findEnclosingTryStatement(enclosingTry.parent);
+      }
+
       Logger.debug(
           " [StateMachine] Completing with stored return value after finally: ${currentState.returnAfterFinally}");
-      // Reset rethrow state before completing
       currentState.isHandlingErrorForRethrow = false;
       currentState.originalErrorForRethrow = null;
+      _clearExpressionContinuations(currentState);
       currentState.completer.complete(currentState.returnAfterFinally);
+      return;
+    }
+
+    final resumeErrorFrom = currentState.resumeErrorAfterFinallyFrom;
+    if (currentState.currentError != null && resumeErrorFrom != null) {
+      currentState.resumeErrorAfterFinallyFrom = null;
+      _handleAsyncError(visitor, currentState, resumeErrorFrom);
       return;
     }
 
@@ -2453,6 +2543,7 @@ class InterpretedFunction implements Callable {
       // Reset rethrow state before completing with error
       currentState.isHandlingErrorForRethrow = false;
       currentState.originalErrorForRethrow = null;
+      _clearExpressionContinuations(currentState);
       currentState.completer.completeError(
           currentState.currentError ?? Exception("Unknown error after finally"),
           currentState.currentStackTrace);
@@ -2465,12 +2556,11 @@ class InterpretedFunction implements Callable {
       currentState.isHandlingErrorForRethrow = false;
       currentState.originalErrorForRethrow = null;
 
-      Object? finalCompletionValue = lastResult;
-      if (lastResult == null && currentState.lastAwaitResult != null) {
-        finalCompletionValue = currentState.lastAwaitResult;
-        Logger.debug(
-            " [StateMachine] Loop finished after await. Using await result for completion: $finalCompletionValue");
-      }
+      final finalCompletionValue =
+          currentState.function._body is ExpressionFunctionBody
+              ? lastResult
+              : null;
+      _clearExpressionContinuations(currentState);
       currentState.completer.complete(finalCompletionValue);
     }
   }
@@ -2488,6 +2578,7 @@ class InterpretedFunction implements Callable {
         .catchError((error, stackTrace) {
       // Catch errors not caught by the internal logic of _runStateMachine
       if (!state.completer.isCompleted) {
+        _clearExpressionContinuations(state);
         Logger.error(
             "[StateMachine] Uncaught async error in microtask: $error\n$stackTrace");
         state.completer.completeError(error, stackTrace);
@@ -2495,33 +2586,126 @@ class InterpretedFunction implements Callable {
     });
   }
 
+  static void _clearExpressionContinuations(AsyncExecutionState state) {
+    state.expressionContinuations.clear();
+    state.completedTryStatements.clear();
+    state.completedAwaitExpression = null;
+    state.completedAwaitValue = null;
+    state.hasCompletedAwaitValue = false;
+    state.awaitingEnvironment = null;
+  }
+
+  static Future<void> _cancelAsyncGenerator(
+    InterpreterVisitor visitor,
+    AsyncExecutionState state,
+  ) async {
+    if (state.generatorCancelled) {
+      await state.completer.future;
+      return;
+    }
+
+    state.generatorCancelled = true;
+    final delegatedSubscription = state.generatorYieldStarSubscription;
+    state.generatorYieldStarSubscription = null;
+    final delegatedCompletion = state.generatorYieldStarCompletion;
+    state.generatorYieldStarCompletion = null;
+    if (delegatedSubscription != null) {
+      await delegatedSubscription.cancel();
+    }
+    if (delegatedCompletion != null && !delegatedCompletion.isCompleted) {
+      delegatedCompletion.complete();
+    }
+
+    final suspensionNode = state.generatorSuspendedNode;
+    state.generatorSuspendedNode = null;
+    _clearExpressionContinuations(state);
+    state.currentError = null;
+    state.currentStackTrace = null;
+    state.resumeErrorAfterFinallyFrom = null;
+    state.activeCatchEnvironment = null;
+
+    var enclosingTry = _findEnclosingTryStatement(suspensionNode);
+    if (_isInsideFinallyBlockOf(suspensionNode, enclosingTry)) {
+      state.generatorCancellationCleanup = true;
+      state.returnAfterFinally = null;
+      state.hasReturnAfterFinally = true;
+      state.resumeReturnAfterFinallyFrom = enclosingTry?.parent;
+    } else {
+      while (enclosingTry != null && enclosingTry.finallyBlock == null) {
+        enclosingTry = _findEnclosingTryStatement(enclosingTry.parent);
+      }
+      if (enclosingTry != null) {
+        state.generatorCancellationCleanup = true;
+        state.returnAfterFinally = null;
+        state.hasReturnAfterFinally = true;
+        state.resumeReturnAfterFinallyFrom = enclosingTry.parent;
+        state.nextStateIdentifier =
+            enclosingTry.finallyBlock!.statements.firstOrNull;
+        _scheduleStateMachineRun(visitor, state);
+      } else if (!state.completer.isCompleted) {
+        state.completer.complete(null);
+      }
+    }
+
+    await state.completer.future;
+  }
+
+  static void _releaseAsyncGeneratorState(AsyncExecutionState state) {
+    _clearExpressionContinuations(state);
+    state.generatorYieldStarSubscription = null;
+    state.generatorYieldStarCompletion = null;
+    state.generatorSuspendedNode = null;
+    state.generatorStreamController = null;
+    state.currentForInIterator = null;
+    state.forLoopEnvironment = null;
+    state.forInIteratorMap.clear();
+    state.activeCatchEnvironment = null;
+    state.activeTryStatement = null;
+    state.pendingFinallyBlock = null;
+    state.currentError = null;
+    state.currentStackTrace = null;
+    state.originalErrorForRethrow = null;
+    state.returnAfterFinally = null;
+    state.resumeReturnAfterFinallyFrom = null;
+    state.currentAwaitForList = null;
+    state.currentAwaitForIndex = null;
+    state.loopEnvironmentStack.clear();
+    state.loopInitializedStack.clear();
+    state.loopNodeStack.clear();
+    state.awaitForListStack.clear();
+    state.awaitForIndexStack.clear();
+    state.awaitForNodeStack.clear();
+  }
+
   static void _handleAsyncError(InterpreterVisitor visitor,
       AsyncExecutionState state, AstNode nodeWhereErrorOccurred) {
+    state.returnAfterFinally = null;
+    state.hasReturnAfterFinally = false;
+    state.resumeReturnAfterFinallyFrom = null;
     Object? error = state.currentError;
+    final errorEnvironment = state.awaitingEnvironment;
+    state.awaitingEnvironment = null;
     if (error is InternalInterpreterException) {
       error = error.originalThrownValue;
+      state.currentError = error;
     }
     final stackTrace = state.currentStackTrace;
 
     Logger.debug(
         "[_handleAsyncError] Handling error: $error from node: ${nodeWhereErrorOccurred.toSource()}");
 
-    // Check if this is a rethrow - if so, skip the current try/catch
-    bool isRethrow = state.isCurrentlyRethrowing;
-    TryStatement? currentTry = state.activeTryStatement;
-
     // 1. Find an enclosing TryStatement
     TryStatement? enclosingTry =
         _findEnclosingTryStatement(nodeWhereErrorOccurred);
-
-    // If this is a rethrow and we found the same try statement, look for an outer one
-    if (isRethrow && enclosingTry != null && enclosingTry == currentTry) {
-      Logger.debug(
-          " [_handleAsyncError] Rethrow detected - skipping current try/catch and looking for outer one");
-      // Find the next enclosing try outside of the current one
-      enclosingTry = _findEnclosingTryStatement(enclosingTry.parent);
-      // Reset the flag after handling
-      state.isCurrentlyRethrowing = false;
+    var skipCatchClauses = state.isCurrentlyRethrowing ||
+        _isInsideCatchClauseOf(nodeWhereErrorOccurred, enclosingTry);
+    if (_isInsideFinallyBlockOf(nodeWhereErrorOccurred, enclosingTry)) {
+      enclosingTry = _findEnclosingTryStatement(enclosingTry?.parent);
+      skipCatchClauses = false;
+    }
+    state.isCurrentlyRethrowing = false;
+    if (enclosingTry != null) {
+      _clearContinuationsWithin(state, enclosingTry);
     }
 
     CatchClause? matchingCatchClause;
@@ -2530,11 +2714,15 @@ class InterpretedFunction implements Callable {
           " [_handleAsyncError] Found enclosing TryStatement: ${enclosingTry.offset}");
       state.activeTryStatement = enclosingTry; // Marquer comme actif
 
-      // 2. Find a matching CatchClause (simplified: take the first one)
-      if (enclosingTry.catchClauses.isNotEmpty) {
-        matchingCatchClause = enclosingTry.catchClauses.first;
+      // 2. Find the first catch clause whose type accepts the original value.
+      if (!skipCatchClauses && enclosingTry.catchClauses.isNotEmpty) {
+        matchingCatchClause = findMatchingCatchClause(
+          enclosingTry.catchClauses,
+          error,
+          state.environment,
+        );
         Logger.debug(
-            " [_handleAsyncError] Found matching CatchClause (simplified: first one).");
+            " [_handleAsyncError] Catch clause match: ${matchingCatchClause?.offset}.");
       } else {
         Logger.debug(
             " [_handleAsyncError] No CatchClauses found in the TryStatement.");
@@ -2554,13 +2742,18 @@ class InterpretedFunction implements Callable {
       // and ready to handle potential rethrow statements
       state.isHandlingErrorForRethrow = true;
 
-      // Define the exception variable in the catch environment
-      // For now, define in the current environment (can cause collisions)
+      final catchParentEnvironment = errorEnvironment ??
+          (state.loopEnvironmentStack.isNotEmpty
+              ? state.loopEnvironmentStack.last
+              : state.environment);
+      final catchEnvironment = Environment(enclosing: catchParentEnvironment);
+      state.activeCatchEnvironment = catchEnvironment;
+
+      // Define the exception variable in its lexical catch environment.
       final exceptionParameter = matchingCatchClause.exceptionParameter;
       if (exceptionParameter != null) {
         final varName = exceptionParameter.name.lexeme;
-        // Use the state environment to define the catch variables
-        state.environment.define(varName, error);
+        catchEnvironment.define(varName, error);
         Logger.debug(
             " [_handleAsyncError] Defined exception variable '$varName' in environment.");
 
@@ -2568,7 +2761,7 @@ class InterpretedFunction implements Callable {
         final stackTraceParameter = matchingCatchClause.stackTraceParameter;
         if (stackTraceParameter != null) {
           final stackVarName = stackTraceParameter.name.lexeme;
-          state.environment.define(stackVarName, stackTrace);
+          catchEnvironment.define(stackVarName, stackTrace);
           Logger.debug(
               "[_handleAsyncError] Defined stack trace variable '$stackVarName' in environment.");
         }
@@ -2577,6 +2770,16 @@ class InterpretedFunction implements Callable {
       // Clear the error state because it is handled
       state.currentError = null;
       state.currentStackTrace = null;
+      state.resumeErrorAfterFinallyFrom = null;
+
+      if (state.nextStateIdentifier == null) {
+        state.activeCatchEnvironment = null;
+        state.isHandlingErrorForRethrow = false;
+        state.originalErrorForRethrow = null;
+        state.nextStateIdentifier =
+            enclosingTry.finallyBlock?.statements.firstOrNull ??
+                _findNextSequentialNode(visitor, enclosingTry);
+      }
 
       // Reschedule the execution to start the catch block
       Logger.debug(
@@ -2595,12 +2798,20 @@ class InterpretedFunction implements Callable {
         // The next state is the start of the finally block
         state.nextStateIdentifier =
             enclosingTry.finallyBlock!.statements.firstOrNull;
+        state.resumeErrorAfterFinallyFrom = enclosingTry.parent;
+        state.activeCatchEnvironment = null;
 
         // IMPORTANT: The error remains in state.currentError to be rethrown AFTER the finally.
         // _findNextSequentialNode will handle the transition *after* the finally.
         // The main loop of the state machine will check state.currentError at the end.
         _scheduleStateMachineRun(visitor, state);
       } else {
+        final outerTry = _findEnclosingTryStatement(enclosingTry?.parent);
+        if (enclosingTry != null && outerTry != null) {
+          _handleAsyncError(visitor, state, enclosingTry.parent!);
+          return;
+        }
+
         //    b) Propagate the error by completing the main Future
         // Reset rethrow state before propagating
         state.isHandlingErrorForRethrow = false;
@@ -2612,6 +2823,7 @@ class InterpretedFunction implements Callable {
           // Unwrap BridgedInstance exceptions to get native objects
           final errorToComplete = _unwrapExceptionForPropagation(
               error ?? Exception("Unknown error"));
+          _clearExpressionContinuations(state);
           state.completer.completeError(errorToComplete, stackTrace);
         }
       }
@@ -2631,6 +2843,55 @@ class InterpretedFunction implements Callable {
       current = current.parent;
     }
     return null;
+  }
+
+  static void _clearContinuationsWithin(
+    AsyncExecutionState state,
+    AstNode boundary,
+  ) {
+    state.expressionContinuations.removeWhere((owner, _) {
+      AstNode? current = owner;
+      while (current != null) {
+        if (identical(current, boundary)) {
+          return true;
+        }
+        current = current.parent;
+      }
+      return false;
+    });
+    state.completedAwaitExpression = null;
+    state.completedAwaitValue = null;
+    state.hasCompletedAwaitValue = false;
+  }
+
+  static bool _isInsideCatchClauseOf(
+      AstNode? node, TryStatement? tryStatement) {
+    if (node == null || tryStatement == null) {
+      return false;
+    }
+    AstNode? current = node;
+    while (current != null && current != tryStatement) {
+      if (current is CatchClause && current.parent == tryStatement) {
+        return true;
+      }
+      current = current.parent;
+    }
+    return false;
+  }
+
+  static bool _isInsideFinallyBlockOf(
+      AstNode? node, TryStatement? tryStatement) {
+    if (node == null || tryStatement?.finallyBlock == null) {
+      return false;
+    }
+    AstNode? current = node;
+    while (current != null && current != tryStatement) {
+      if (current == tryStatement!.finallyBlock) {
+        return true;
+      }
+      current = current.parent;
+    }
+    return false;
   }
 
   // Determine the next AST node to execute after the resolution of an awaited Future.
@@ -2674,136 +2935,15 @@ class InterpretedFunction implements Callable {
       awaitContextNode =
           nodeThatCausedSuspension; // The DoStatement is the context
       awaitExpression = nodeThatCausedSuspension.condition as AwaitExpression;
-    } else if (nodeThatCausedSuspension is MethodInvocation) {
-      // Special case: the await was in the arguments of a method invocation
-      awaitContextNode = nodeThatCausedSuspension;
-      awaitExpression = null; // The await is nested in arguments
-      Logger.debug(
-          "[_determineNextNodeAfterAwait] Await context is MethodInvocation with arguments containing await.");
-    } else if (nodeThatCausedSuspension is FunctionExpressionInvocation) {
-      // Special case: the await was in the arguments of a function expression invocation
-      awaitContextNode = nodeThatCausedSuspension;
-      awaitExpression = null; // The await is nested in arguments
-      Logger.debug(
-          "[_determineNextNodeAfterAwait] Await context is FunctionExpressionInvocation with arguments containing await.");
-    } else if (nodeThatCausedSuspension is InstanceCreationExpression) {
-      // Special case: the await was in the arguments of a constructor call
-      awaitContextNode = nodeThatCausedSuspension;
-      awaitExpression = null; // The await is nested in arguments
-      Logger.debug(
-          "[_determineNextNodeAfterAwait] Await context is InstanceCreationExpression with arguments containing await.");
     } else {
-      // Try to find await context by analyzing the node structure
-      AstNode? foundInvocation =
-          _findInvocationWithAwaitInArguments(nodeThatCausedSuspension);
-      if (foundInvocation != null) {
-        Logger.debug(
-            "[_determineNextNodeAfterAwait] Found invocation with await in arguments: ${foundInvocation.runtimeType}");
-        awaitContextNode = foundInvocation;
-        awaitExpression = null; // The await is nested in arguments
-      } else {
-        // We don't know how to extract the await, use the node directly
-        // (may lead to errors if the logic below does not handle this node)
-        awaitContextNode = nodeThatCausedSuspension;
-        awaitExpression = null; // We don't know where the await was exactly
-        Logger.warn(
-            "[_determineNextNodeAfterAwait] Could not determine exact await context for node type ${nodeThatCausedSuspension.runtimeType}. Using node as context.");
-      }
+      awaitContextNode = nodeThatCausedSuspension;
+      awaitExpression = null;
     }
 
     Logger.debug(
         "[_determineNextNodeAfterAwait] Determined await context: ${awaitContextNode.runtimeType}");
 
     // Logic based on the type of node that contained the await (awaitContextNode)
-
-    // Case: Method/Function/Constructor invocation with await in arguments
-    if (awaitContextNode is MethodInvocation ||
-        awaitContextNode is FunctionExpressionInvocation ||
-        awaitContextNode is InstanceCreationExpression) {
-      Logger.debug(
-          "[_determineNextNodeAfterAwait] Handling ${awaitContextNode.runtimeType} with await in arguments. Re-executing the invocation...");
-
-      // Re-execute the invocation with the resolved await value
-      try {
-        // Temporarily restore the async state to enable await processing
-        final previousAsyncState = visitor.currentAsyncState;
-        visitor.currentAsyncState = state;
-
-        // Enable invocation resumption mode so await expressions return the resolved value
-        final previousResumptionMode = state.isInvocationResumptionMode;
-        state.isInvocationResumptionMode = true;
-
-        final result = awaitContextNode.accept<Object?>(visitor);
-
-        // Restore the previous modes
-        state.isInvocationResumptionMode = previousResumptionMode;
-        visitor.currentAsyncState = previousAsyncState;
-
-        if (result is AsyncSuspensionRequest) {
-          Logger.debug(
-              "[_determineNextNodeAfterAwait] Another await encountered during invocation continuation.");
-          return awaitContextNode; // Stay on the same node to handle the next await
-        }
-
-        // The call completed successfully
-        Logger.debug(
-            "[_determineNextNodeAfterAwait] Invocation completed successfully with result: $result");
-
-        // CRITICAL FIX: Store the invocation result so it can be used as the final completion value
-        // This ensures that when the state machine finishes, it uses the correct result
-        // instead of falling back to lastAwaitResult
-        state.lastAwaitResult = result;
-
-        // Now we need to handle the result based on the parent context
-        AstNode? parentStatement = awaitContextNode;
-        while (parentStatement != null && parentStatement is! Statement) {
-          parentStatement = parentStatement.parent;
-        }
-
-        if (parentStatement is VariableDeclarationStatement) {
-          // This is a variable declaration with the invocation as initializer
-          Logger.debug(
-              "[_determineNextNodeAfterAwait] Completing variable declaration with invocation result: $result");
-
-          // Find the variable declaration and assign the result
-          final varList = parentStatement.variables;
-          if (varList.variables.isNotEmpty) {
-            final varDecl = varList.variables.first;
-            final varName = varDecl.name.lexeme;
-
-            // Set the variable in the current environment
-            final currentEnv = state.loopEnvironmentStack.isNotEmpty
-                ? state.loopEnvironmentStack.last
-                : currentExecutionEnvironment;
-            currentEnv.define(varName, result);
-            Logger.debug(
-                "[_determineNextNodeAfterAwait] Assigned invocation result to variable '$varName' = $result");
-          }
-
-          // Find the next statement after the variable declaration
-          return _findNextSequentialNode(visitor, parentStatement);
-        } else if (parentStatement is ExpressionStatement) {
-          // This is a standalone expression statement
-          Logger.debug(
-              "[_determineNextNodeAfterAwait] Completed expression statement with invocation result: $result");
-
-          // Find the next statement after the expression statement
-          return _findNextSequentialNode(visitor, parentStatement);
-        } else {
-          // For other cases, continue with finding the next node
-          Logger.debug(
-              "[_determineNextNodeAfterAwait] Invocation in other context. Finding next node.");
-          return _findNextSequentialNode(visitor, awaitContextNode);
-        }
-      } catch (e, s) {
-        Logger.error(
-            "[_determineNextNodeAfterAwait] Error during invocation continuation: $e\n$s");
-        if (!state.completer.isCompleted) {
-          state.completer.completeError(e, s);
-        }
-        return null; // Stop execution
-      }
-    }
 
     // Case 1: Variable declaration (var x = await f();)
     if (awaitContextNode is VariableDeclarationStatement) {
@@ -3636,6 +3776,11 @@ class InterpretedFunction implements Callable {
         else if (blockParent is CatchClause) {
           Logger.debug("[_findNextSequentialNode] End of Catch block.");
           TryStatement? tryStatement = _findEnclosingTryStatement(blockParent);
+          if (state != null) {
+            state.activeCatchEnvironment = null;
+            state.isHandlingErrorForRethrow = false;
+            state.originalErrorForRethrow = null;
+          }
           // After a catch, we must ALWAYS execute the finally if it exists
           if (tryStatement != null && tryStatement.finallyBlock != null) {
             Logger.debug(
@@ -3673,6 +3818,10 @@ class InterpretedFunction implements Callable {
           // If an error was in progress, it will be rethrown by the main loop.
           if (state != null) {
             state.activeTryStatement = null; // End of try handling
+            state.activeCatchEnvironment = null;
+            if (state.currentError != null || state.hasReturnAfterFinally) {
+              return null;
+            }
           }
           return _findNextSequentialNode(visitor, blockParent);
         }
@@ -3790,6 +3939,9 @@ class InterpretedFunction implements Callable {
         Logger.debug(
             " [_findNextSequentialNode] Ascending from Statement (${currentSearchNode.runtimeType}) to parent (${parent.runtimeType}).");
         currentSearchNode = parent;
+      } else if (parent is SwitchMember && currentSearchNode is TryStatement) {
+        state?.completedTryStatements.add(currentSearchNode);
+        return parent.parent;
       } else if (parent is FunctionBody || parent is CompilationUnit) {
         // Reached the limit of the function or file
         Logger.debug(
@@ -3823,70 +3975,6 @@ class InterpretedFunction implements Callable {
 
   @override
   String toString() => '<fn ${_name ?? '<anonymous>'}>';
-
-  // Helper to recursively search for invocations with await in arguments
-  static AstNode? _findInvocationWithAwaitInArguments(AstNode node) {
-    // Check if this node is an invocation with await in arguments
-    if (node is MethodInvocation ||
-        node is FunctionExpressionInvocation ||
-        node is InstanceCreationExpression) {
-      if (_hasAwaitInArguments(node)) {
-        return node;
-      }
-    }
-
-    // Recursively search in child nodes
-    for (final child in node.childEntities) {
-      if (child is AstNode) {
-        final found = _findInvocationWithAwaitInArguments(child);
-        if (found != null) {
-          return found;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  // Helper to check if an invocation has await in its arguments
-  static bool _hasAwaitInArguments(AstNode invocation) {
-    ArgumentList? argumentList;
-
-    if (invocation is MethodInvocation) {
-      argumentList = invocation.argumentList;
-    } else if (invocation is FunctionExpressionInvocation) {
-      argumentList = invocation.argumentList;
-    } else if (invocation is InstanceCreationExpression) {
-      argumentList = invocation.argumentList;
-    }
-
-    if (argumentList == null) return false;
-
-    // Check each argument for await expressions
-    for (final arg in argumentList.arguments) {
-      if (_containsAwait(arg)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  // Helper to recursively check if a node contains await
-  static bool _containsAwait(AstNode node) {
-    if (node is AwaitExpression) {
-      return true;
-    }
-
-    // Recursively check child nodes
-    for (final child in node.childEntities) {
-      if (child is AstNode && _containsAwait(child)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
 
   // Helper to evaluate arguments for constructor/super/this invocations
   (List<Object?>, Map<String, Object?>) _evaluateArgumentsForInvocation(
@@ -3939,51 +4027,70 @@ class InterpretedFunction implements Callable {
   Stream<Object?> _createAsyncGeneratorStream(InterpreterVisitor visitor,
       Environment executionEnvironment, bool redirected) {
     late StreamController<Object?> controller;
+    AsyncExecutionState? generatorState;
 
-    controller = StreamController<Object?>(onListen: () async {
-      try {
-        final previousVisitorEnv = visitor.environment;
-        final previousCurrentFunction = visitor.currentFunction;
-        final previousAsyncState = visitor.currentAsyncState;
-
+    controller = StreamController<Object?>(
+      onListen: () async {
         try {
-          visitor.environment = executionEnvironment;
-          visitor.currentFunction = this;
+          final previousVisitorEnv = visitor.environment;
+          final previousCurrentFunction = visitor.currentFunction;
+          final previousAsyncState = visitor.currentAsyncState;
 
-          if (isAbstract) {
-            controller.addError(RuntimeError(
-                "Cannot call abstract method '${_name ?? '<abstract>'}'."));
-            return;
-          }
+          try {
+            visitor.environment = executionEnvironment;
+            visitor.currentFunction = this;
 
-          final bodyToExecute = _body;
-          if (!redirected && bodyToExecute is BlockFunctionBody) {
-            // Use the real async state machine for generators
-            await _runAsyncGenerator(
-                visitor, bodyToExecute, controller, executionEnvironment);
-          } else if (bodyToExecute is ExpressionFunctionBody) {
-            final result = bodyToExecute.expression.accept<Object?>(visitor);
-            if (result is YieldValue) {
-              if (result.isYieldStar) {
-                await _handleYieldStar(result.value, controller);
-              } else {
-                controller.add(result.value);
+            if (isAbstract) {
+              controller.addError(RuntimeError(
+                  "Cannot call abstract method '${_name ?? '<abstract>'}'."));
+              return;
+            }
+
+            final bodyToExecute = _body;
+            if (!redirected && bodyToExecute is BlockFunctionBody) {
+              // Use the real async state machine for generators
+              await _runAsyncGenerator(
+                visitor,
+                bodyToExecute,
+                controller,
+                executionEnvironment,
+                (state) => generatorState = state,
+              );
+            } else if (bodyToExecute is ExpressionFunctionBody) {
+              final result = bodyToExecute.expression.accept<Object?>(visitor);
+              if (result is YieldValue) {
+                if (result.isYieldStar) {
+                  await _handleYieldStar(result.value, controller);
+                } else {
+                  controller.add(result.value);
+                }
               }
             }
+          } on ReturnException catch (_) {
+            // Generator completed with return
+          } finally {
+            visitor.environment = previousVisitorEnv;
+            visitor.currentFunction = previousCurrentFunction;
+            visitor.currentAsyncState = previousAsyncState;
           }
-        } on ReturnException catch (_) {
-          // Generator completed with return
+        } catch (error, stackTrace) {
+          if (generatorState?.generatorCancelled != true &&
+              !controller.isClosed) {
+            controller.addError(error, stackTrace);
+          }
         } finally {
-          visitor.environment = previousVisitorEnv;
-          visitor.currentFunction = previousCurrentFunction;
-          visitor.currentAsyncState = previousAsyncState;
+          if (!controller.isClosed) {
+            controller.close();
+          }
         }
-      } catch (e, stackTrace) {
-        controller.addError(e, stackTrace);
-      } finally {
-        if (!controller.isClosed) controller.close();
-      }
-    });
+      },
+      onCancel: () async {
+        final state = generatorState;
+        if (state != null && !state.completer.isCompleted) {
+          await _cancelAsyncGenerator(visitor, state);
+        }
+      },
+    );
 
     return controller.stream;
   }
@@ -3993,7 +4100,8 @@ class InterpretedFunction implements Callable {
       InterpreterVisitor visitor,
       BlockFunctionBody body,
       StreamController<Object?> controller,
-      Environment executionEnvironment) async {
+      Environment executionEnvironment,
+      void Function(AsyncExecutionState state) onStateCreated) async {
     final completer = Completer<Object?>();
 
     // Determine the first state (AST node)
@@ -4007,6 +4115,7 @@ class InterpretedFunction implements Callable {
       function: this,
       generatorStreamController: controller, // Enable generator mode
     );
+    onStateCreated(asyncState);
 
     // Set the async state in visitor
     final previousAsyncState = visitor.currentAsyncState;
@@ -4020,6 +4129,7 @@ class InterpretedFunction implements Callable {
       await completer.future;
     } finally {
       visitor.currentAsyncState = previousAsyncState;
+      _releaseAsyncGeneratorState(asyncState);
     }
   }
 

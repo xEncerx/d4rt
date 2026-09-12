@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:d4rt/src/environment.dart';
 import 'package:d4rt/src/callable.dart';
+import 'package:d4rt/src/environment.dart';
 import 'package:d4rt/src/exceptions.dart';
 
 /// Represents the state of an ongoing asynchronous function execution.
@@ -21,6 +21,34 @@ class AsyncExecutionState {
 
   /// The result value from the most recently completed Future (from await).
   Object? lastAwaitResult;
+
+  /// Frame-owned continuation data for expressions interrupted by suspension.
+  ///
+  /// Values are private interpreter continuation objects keyed by their owning
+  /// AST node. They exist only until that expression completes or the frame
+  /// terminates.
+  final Map<AstNode, Object> expressionContinuations = {};
+
+  /// The exact await expression whose completed value is ready to substitute.
+  AwaitExpression? completedAwaitExpression;
+
+  /// The completed value for [completedAwaitExpression].
+  Object? completedAwaitValue;
+
+  /// Distinguishes a completed `null` value from no completed await.
+  bool hasCompletedAwaitValue = false;
+
+  /// Lexical environment captured by the currently suspended await.
+  ///
+  /// This preserves block-local bindings when an asynchronous error transfers
+  /// control directly into a lexical catch clause.
+  Environment? awaitingEnvironment;
+
+  /// Try statements completed while error handling ran outside their caller.
+  ///
+  /// The marker lasts only until the owning control continuation re-enters the
+  /// statement and advances past it.
+  final Set<TryStatement> completedTryStatements = {};
 
   /// The error from the most recently completed Future (if it failed).
   Object? lastAwaitError;
@@ -70,11 +98,23 @@ class AsyncExecutionState {
   /// Track the stack trace currently being handled (either from await or sync throw)
   StackTrace? currentStackTrace;
 
+  /// Lexical node where error lookup resumes after an inner finally completes.
+  AstNode? resumeErrorAfterFinallyFrom;
+
   /// Track the TryStatement we are currently inside or handling
   TryStatement? activeTryStatement;
 
+  /// Lexical environment owned by the catch block currently being executed.
+  Environment? activeCatchEnvironment;
+
   /// Store return value if a return happens inside a try with a finally.
   Object? returnAfterFinally;
+
+  /// Distinguishes a pending `return null` from no pending return.
+  bool hasReturnAfterFinally = false;
+
+  /// Lexical node where an outer finally lookup resumes after a return.
+  AstNode? resumeReturnAfterFinallyFrom;
 
   /// Flag to indicate if we are currently executing a catch block body.
   bool isHandlingErrorForRethrow = false;
@@ -85,10 +125,6 @@ class AsyncExecutionState {
   /// Flag to indicate we are currently executing a rethrow statement
   /// (as opposed to just being in a catch block)
   bool isCurrentlyRethrowing = false;
-
-  /// Flag to indicate if we are resuming an invocation with await in arguments
-  /// When true, await expressions should return the last resolved value instead of suspending
-  bool isInvocationResumptionMode = false;
 
   /// Fields for await for loop processing
   List<Object?>? currentAwaitForList;
@@ -118,6 +154,21 @@ class AsyncExecutionState {
 
   /// For async* generators: flag indicating this is a generator execution
   bool get isGenerator => generatorStreamController != null;
+
+  /// Whether the generator subscription has requested cancellation.
+  bool generatorCancelled = false;
+
+  /// Whether the state machine is running finalizers after cancellation.
+  bool generatorCancellationCleanup = false;
+
+  /// The lexical suspension point used to locate cancellation finalizers.
+  AstNode? generatorSuspendedNode;
+
+  /// The active delegated stream subscription owned by `yield*`.
+  StreamSubscription<dynamic>? generatorYieldStarSubscription;
+
+  /// Completes the suspended `yield*` operation when cancellation detaches it.
+  Completer<void>? generatorYieldStarCompletion;
 
   /// Creates a new async execution state.
   ///
@@ -161,11 +212,19 @@ class AsyncSuspensionRequest {
   /// Flag indicating if this suspension is from a yield statement
   final bool isYieldSuspension;
 
+  /// The exact await expression whose value must be substituted on resumption.
+  final AwaitExpression? awaitExpression;
+
   /// Creates a new async suspension request.
   ///
   /// [future] The Future that the interpreter should wait for.
   /// [asyncState] The current execution state that will be resumed after the Future completes.
   /// [isYieldSuspension] Whether this suspension is from a yield statement.
-  AsyncSuspensionRequest(this.future, this.asyncState,
-      {this.isYieldSuspension = false});
+  /// [awaitExpression] The exact expression that receives the completed value.
+  AsyncSuspensionRequest(
+    this.future,
+    this.asyncState, {
+    this.isYieldSuspension = false,
+    this.awaitExpression,
+  });
 }

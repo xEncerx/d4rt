@@ -6,6 +6,10 @@
 - Fail construction deterministically when a bridged superclass constructor is missing, throws, or returns `null`.
 - Prevent synthetic default constructors from initializing superclass state more than once.
 - Load interpreted libraries once with private namespaces, resolving imports and generic bounds before declaration population.
+- Preserve async continuations across imported interpreted calls so awaited values resume in the owning function without exposing internal suspension state or repeating completed side effects.
+- Propagate interpreted async errors through source-ordered typed catches and lexical `finally` blocks while preserving the original exception identity.
+- Preserve async-generator state for `yield await`, delegated streams, and subscription cancellation.
+- Add `HashSet.identity()` support with native identity semantics to the `dart:collection` bridge.
 
 ## 0.2.4
 - feat: Enhance enum handling with improved equality checks and add comprehensive switch statement tests

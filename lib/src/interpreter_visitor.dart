@@ -3,9 +3,89 @@ import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:d4rt/d4rt.dart';
-import 'package:d4rt/src/type_annotation_utils.dart';
+import 'package:d4rt/src/catch_clause_matcher.dart';
 import 'package:d4rt/src/module_loader.dart';
 import 'package:d4rt/src/stdlib/core/list.dart';
+import 'package:d4rt/src/type_annotation_utils.dart';
+
+final class _ExpressionContinuation {
+  final List<Object?> completedValues = [];
+  int replayCursor = 0;
+}
+
+final class _ArgumentContinuation {
+  final List<Object?> positionalArguments = [];
+  final Map<String, Object?> namedArguments = {};
+  var namedArgumentsEncountered = false;
+  var nextArgument = 0;
+}
+
+final class _CollectionContinuation {
+  _CollectionContinuation(this.collection);
+
+  final Object collection;
+  var nextElement = 0;
+}
+
+final class _CollectionIfContinuation {
+  _CollectionIfContinuation(this.environment);
+
+  final Environment environment;
+  Environment? patternEnvironment;
+  CollectionElement? selectedElement;
+  Environment? selectedEnvironment;
+  var selectionComplete = false;
+}
+
+enum _CollectionForPhase { initialization, condition, body, updaters }
+
+final class _CollectionForContinuation {
+  _CollectionForContinuation(this.environment)
+      : loopEnvironment = Environment(enclosing: environment);
+
+  final Environment environment;
+  final Environment loopEnvironment;
+  _CollectionForPhase phase = _CollectionForPhase.initialization;
+  Iterator<Object?>? iterator;
+  Environment? itemEnvironment;
+  String? variableName;
+  var itemActive = false;
+  var updaterIndex = 0;
+}
+
+final class _RecordContinuation {
+  final List<Object?> positionalFields = [];
+  final Map<String, Object?> namedFields = {};
+  var nextField = 0;
+}
+
+final class _SwitchContinuation {
+  _SwitchContinuation({
+    required this.environment,
+    required this.labelIndexMap,
+    required this.switchValue,
+  });
+
+  final Environment environment;
+  final Map<String, int> labelIndexMap;
+  final Object? switchValue;
+  var execute = false;
+  var matched = false;
+  var memberIndex = 0;
+  var memberPrepared = false;
+  var statementIndex = 0;
+}
+
+final class _SwitchExpressionContinuation {
+  _SwitchExpressionContinuation(this.environment);
+
+  final Environment environment;
+  Object? switchValue;
+  var selectorComplete = false;
+  var caseIndex = 0;
+  Environment? caseEnvironment;
+  var guardComplete = false;
+}
 
 /// Main visitor that walks the AST and interprets the code.
 /// Uses a two-pass approach (DeclarationVisitor first).
@@ -56,6 +136,75 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       Logger.debug(
           "[InterpreterVisitor] Initial source URI set to: $initiallibrary");
     }
+  }
+
+  Object? _runWithExpressionContinuation(
+    AstNode owner,
+    Object? Function() evaluate,
+  ) {
+    final asyncState = currentAsyncState;
+    if (asyncState == null) {
+      return evaluate();
+    }
+
+    final existing = asyncState.expressionContinuations[owner];
+    final continuation = switch (existing) {
+      null => _ExpressionContinuation(),
+      _ExpressionContinuation value => value,
+      _ => throw StateError(
+          'Mismatched async expression continuation for ${owner.runtimeType}.',
+        ),
+    };
+    continuation.replayCursor = 0;
+    asyncState.expressionContinuations[owner] = continuation;
+
+    try {
+      final result = evaluate();
+      if (result is! AsyncSuspensionRequest) {
+        asyncState.expressionContinuations.remove(owner);
+      }
+      return result;
+    } catch (_) {
+      asyncState.expressionContinuations.remove(owner);
+      rethrow;
+    }
+  }
+
+  Object? _evaluateContinuedExpression(AstNode owner, Expression expression) {
+    return _evaluateContinuedValue(
+      owner,
+      () => expression.accept<Object?>(this),
+    );
+  }
+
+  Object? _evaluateContinuedValue(
+    AstNode owner,
+    Object? Function() evaluate,
+  ) {
+    final asyncState = currentAsyncState;
+    if (asyncState == null) {
+      return evaluate();
+    }
+
+    final continuation = asyncState.expressionContinuations[owner];
+    if (continuation is! _ExpressionContinuation) {
+      throw StateError(
+        'Missing async expression continuation for ${owner.runtimeType}.',
+      );
+    }
+
+    final cursor = continuation.replayCursor;
+    if (cursor < continuation.completedValues.length) {
+      continuation.replayCursor++;
+      return continuation.completedValues[cursor];
+    }
+
+    final result = evaluate();
+    if (result is! AsyncSuspensionRequest) {
+      continuation.completedValues.add(result);
+      continuation.replayCursor++;
+    }
+    return result;
   }
 
   /// Checks if the execution has exceeded configured timeout or step limits.
@@ -360,7 +509,17 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitAsExpression(AsExpression node) {
-    final value = node.expression.accept<Object?>(this);
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitAsExpression(node),
+    );
+  }
+
+  Object? _visitAsExpression(AsExpression node) {
+    final value = _evaluateContinuedExpression(node, node.expression);
+    if (value is AsyncSuspensionRequest) {
+      return value;
+    }
     final typeNode = node.type;
     if (typeNode is NamedType) {
       final typeName = typeNode.name.lexeme;
@@ -821,7 +980,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitPrefixedIdentifier(PrefixedIdentifier node) {
-    final prefixValue = node.prefix.accept<Object?>(this);
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitPrefixedIdentifier(node),
+    );
+  }
+
+  Object? _visitPrefixedIdentifier(PrefixedIdentifier node) {
+    final prefixValue = _evaluateContinuedExpression(node, node.prefix);
     if (prefixValue is AsyncSuspensionRequest) {
       // Propagate the suspension so that the state machine resumes this node after resolution
       return prefixValue;
@@ -1262,11 +1428,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitBinaryExpression(BinaryExpression node) {
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitBinaryExpression(node),
+    );
+  }
+
+  Object? _visitBinaryExpression(BinaryExpression node) {
     final operator = node.operator.type;
 
     // Handle logical OR (||) with short-circuiting - evaluate left first
     if (operator == TokenType.BAR_BAR) {
-      final leftValue = node.leftOperand.accept<Object?>(this);
+      final leftValue = _evaluateContinuedExpression(node, node.leftOperand);
       if (leftValue is AsyncSuspensionRequest) {
         return leftValue;
       }
@@ -1277,7 +1450,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       // If left is true, return true without evaluating right (short-circuit)
       if (leftValue) return true;
       // Left is false, evaluate right operand only now
-      final rightValue = node.rightOperand.accept<Object?>(this);
+      final rightValue = _evaluateContinuedExpression(node, node.rightOperand);
       if (rightValue is AsyncSuspensionRequest) {
         return rightValue;
       }
@@ -1290,7 +1463,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     // Handle logical AND (&&) with short-circuiting - evaluate left first
     if (operator == TokenType.AMPERSAND_AMPERSAND) {
-      final leftValue = node.leftOperand.accept<Object?>(this);
+      final leftValue = _evaluateContinuedExpression(node, node.leftOperand);
       if (leftValue is AsyncSuspensionRequest) {
         return leftValue;
       }
@@ -1301,7 +1474,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       // If left is false, return false without evaluating right (short-circuit)
       if (!leftValue) return false;
       // Left is true, evaluate right operand only now
-      final rightValue = node.rightOperand.accept<Object?>(this);
+      final rightValue = _evaluateContinuedExpression(node, node.rightOperand);
       if (rightValue is AsyncSuspensionRequest) {
         return rightValue;
       }
@@ -1314,14 +1487,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     // Handle null coalescing (??) with short-circuiting - evaluate left first
     if (operator == TokenType.QUESTION_QUESTION) {
-      final leftValue = node.leftOperand.accept<Object?>(this);
+      final leftValue = _evaluateContinuedExpression(node, node.leftOperand);
       if (leftValue is AsyncSuspensionRequest) {
         return leftValue;
       }
       // If left is not null, return it without evaluating right (short-circuit)
       if (leftValue != null) return leftValue;
       // Left is null, evaluate right operand only now
-      final rightValue = node.rightOperand.accept<Object?>(this);
+      final rightValue = _evaluateContinuedExpression(node, node.rightOperand);
       if (rightValue is AsyncSuspensionRequest) {
         return rightValue;
       }
@@ -1329,8 +1502,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     }
 
     // For all other operators, evaluate both operands
-    final leftOperandValue = node.leftOperand.accept<Object?>(this);
-    final rightOperandValue = node.rightOperand.accept<Object?>(this);
+    final leftOperandValue =
+        _evaluateContinuedExpression(node, node.leftOperand);
+    if (leftOperandValue is AsyncSuspensionRequest) {
+      return leftOperandValue;
+    }
+    final rightOperandValue =
+        _evaluateContinuedExpression(node, node.rightOperand);
 
     Logger.debug("[BinaryExpression DEBUG] Operator: ${operator.lexeme}");
     Logger.debug("  Left operand type: ${leftOperandValue?.runtimeType}");
@@ -1338,9 +1516,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     Logger.debug("  Right operand type: ${rightOperandValue?.runtimeType}");
     Logger.debug("  Right operand value: $rightOperandValue");
 
-    if (leftOperandValue is AsyncSuspensionRequest) {
-      return leftOperandValue;
-    }
     if (rightOperandValue is AsyncSuspensionRequest) {
       return rightOperandValue;
     }
@@ -1625,12 +1800,20 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitIndexExpression(IndexExpression node) {
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitIndexExpression(node),
+    );
+  }
+
+  Object? _visitIndexExpression(IndexExpression node) {
     final target = node.target;
     final index = node.index;
-    final targetValue = target?.accept<Object?>(this);
-    final indexValue = index.accept<Object?>(this);
+    final targetValue =
+        target == null ? null : _evaluateContinuedExpression(node, target);
 
     if (targetValue is AsyncSuspensionRequest) return targetValue;
+    final indexValue = _evaluateContinuedExpression(node, index);
     if (indexValue is AsyncSuspensionRequest) return indexValue;
 
     // Handle null-coalescing indexing operator: ?[
@@ -1740,9 +1923,86 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitAssignmentExpression(AssignmentExpression node) {
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitAssignmentExpression(node),
+    );
+  }
+
+  Object? _visitAssignmentExpression(AssignmentExpression node) {
     final lhs = node.leftHandSide;
-    // Evaluate RHS once, used by multiple branches below
-    Object? rhsValue = node.rightHandSide.accept<Object?>(this);
+    final operatorType = node.operator.type;
+    Object? preparedTargetValue;
+    Object? preparedIndexValue;
+    Object? preparedCurrentValue;
+
+    if (lhs is SimpleIdentifier && operatorType != TokenType.EQ) {
+      preparedCurrentValue = _evaluateContinuedValue(
+        node,
+        () => _readSimpleIdentifierForCompoundAssignment(lhs.name),
+      );
+    } else if (lhs is PropertyAccess) {
+      final targetExpression = lhs.target;
+      preparedTargetValue = targetExpression == null
+          ? null
+          : _evaluateContinuedExpression(node, targetExpression);
+      if (preparedTargetValue is AsyncSuspensionRequest) {
+        return preparedTargetValue;
+      }
+      if (operatorType != TokenType.EQ) {
+        preparedCurrentValue = _evaluateContinuedValue(
+          node,
+          () => _readPropertyForCompoundAssignment(
+            preparedTargetValue,
+            lhs.propertyName.name,
+          ),
+        );
+      }
+    } else if (lhs is PrefixedIdentifier) {
+      preparedTargetValue = _evaluateContinuedExpression(node, lhs.prefix);
+      if (preparedTargetValue is AsyncSuspensionRequest) {
+        return preparedTargetValue;
+      }
+      if (operatorType != TokenType.EQ) {
+        preparedCurrentValue = _evaluateContinuedValue(
+          node,
+          () => _readPropertyForCompoundAssignment(
+            preparedTargetValue,
+            lhs.identifier.name,
+          ),
+        );
+      }
+    } else if (lhs is IndexExpression) {
+      final targetExpression = lhs.target;
+      preparedTargetValue = targetExpression == null
+          ? null
+          : _evaluateContinuedExpression(node, targetExpression);
+      if (preparedTargetValue is AsyncSuspensionRequest) {
+        return preparedTargetValue;
+      }
+      preparedIndexValue = _evaluateContinuedExpression(node, lhs.index);
+      if (preparedIndexValue is AsyncSuspensionRequest) {
+        return preparedIndexValue;
+      }
+      if (operatorType != TokenType.EQ) {
+        preparedCurrentValue = _evaluateContinuedValue(
+          node,
+          () => _readIndexForCompoundAssignment(
+            preparedTargetValue,
+            preparedIndexValue,
+          ),
+        );
+      }
+    }
+
+    if (operatorType == TokenType.QUESTION_QUESTION_EQ &&
+        preparedCurrentValue != null) {
+      return preparedCurrentValue;
+    }
+
+    // Dart evaluates an assignment target, including a compound read, before
+    // evaluating the value that will be assigned.
+    Object? rhsValue = _evaluateContinuedExpression(node, node.rightHandSide);
 
     // Handle suspension on the right-hand side
     if (rhsValue is AsyncSuspensionRequest) {
@@ -1753,8 +2013,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       return rhsValue;
     }
     // END NEW
-
-    final operatorType = node.operator.type;
 
     // Case 1: Simple variable assignment (lexical or implicit this)
     if (lhs is SimpleIdentifier) {
@@ -1773,10 +2031,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             return rhsValue;
           } else {
             // Compound assignment to late variable
-            final currentValue =
-                variableValue.value; // May throw if not initialized
-            Object? newValue =
-                computeCompoundValue(currentValue, rhsValue, operatorType);
+            Object? newValue = computeCompoundValue(
+              preparedCurrentValue,
+              rhsValue,
+              operatorType,
+            );
             variableValue.assign(newValue);
             return newValue;
           }
@@ -1801,9 +2060,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               // Compound assignment: get value via getter, compute new, set via setter
               if (variableValue.getter != null) {
                 try {
-                  final currentValue = variableValue.getter!.call(this, [], {});
                   final newValue = computeCompoundValue(
-                      currentValue, rhsValue, operatorType);
+                    preparedCurrentValue,
+                    rhsValue,
+                    operatorType,
+                  );
                   variableValue.setter!.call(this, [newValue], {});
                   return newValue;
                 } on ReturnException catch (e) {
@@ -1848,10 +2109,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 variableName, rhsValue); // Use original assign for lexical
           } else {
             // Handle compound assignments on lexical variables
-            final currentValue =
-                environment.get(variableName); // Get from lexical scope
-            Object? newValue =
-                computeCompoundValue(currentValue, rhsValue, operatorType);
+            Object? newValue = computeCompoundValue(
+              preparedCurrentValue,
+              rhsValue,
+              operatorType,
+            );
             return environment.assign(
                 variableName, newValue); // Assign back to lexical scope
           }
@@ -1916,13 +2178,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 }
               }
             } else {
-              // 1. Get current value from 'this' (field or getter)
-              final currentValue = thisInstance
-                  .get(variableName); // May throw if undefined on instance
-
-              // 2. Calculate new value
-              Object? newValue =
-                  computeCompoundValue(currentValue, rhsValue, operatorType);
+              Object? newValue = computeCompoundValue(
+                preparedCurrentValue,
+                rhsValue,
+                operatorType,
+              );
 
               // 3. Set new value on 'this' (field or setter)
               final setter =
@@ -1953,18 +2213,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 return rhsValue; // Simple assignment returns RHS value
               } else {
                 // Compound assignment: this.bridgedProp op= value
-                // 1. Get current value (requires a getter adapter)
-                final getterAdapter =
-                    bridgedClass.findInstanceGetterAdapter(variableName);
-                if (getterAdapter == null) {
-                  throw RuntimeError(
-                      "Cannot perform compound assignment on '${bridgedClass.name}.$variableName' via implicit 'this': No getter found.");
-                }
-                final currentValue =
-                    getterAdapter(this, thisInstance.nativeObject);
-                // 2. Calculate new value
-                Object? newValue =
-                    computeCompoundValue(currentValue, rhsValue, operatorType);
+                Object? newValue = computeCompoundValue(
+                  preparedCurrentValue,
+                  rhsValue,
+                  operatorType,
+                );
                 // 3. Set new value via setter adapter
                 Logger.debug(
                     "[Assignment] Compound assigning to bridged 'this'.$variableName via setter adapter.");
@@ -1996,8 +2249,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     // Case 2: PropertyAccess assignment (target.property op= value)
     else if (lhs is PropertyAccess) {
-      final targetExpression = lhs.target; // Keep expression for check below
-      final targetValue = targetExpression?.accept<Object?>(this);
+      final targetValue = preparedTargetValue;
       final propertyName = lhs.propertyName.name;
       // rhsValue and operatorType already available from the top
 
@@ -2007,7 +2259,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         final startClass = targetValue.startLookupClass;
         InterpretedClass? currentClass = startClass;
         InterpretedFunction? superSetter;
-        InterpretedFunction? superGetter;
 
         // Look for the setter in the superclass hierarchy starting from startClass
         BridgedClass? bridgedSetter;
@@ -2026,51 +2277,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             }
           }
           currentClass = currentClass.superclass;
-        }
-
-        // For compound operators, we also need to get the current value
-        Object? currentValue;
-        BridgedClass? bridgedGetter;
-        if (operatorType != TokenType.EQ) {
-          // First try to find a getter
-          currentClass = startClass;
-          while (currentClass != null) {
-            final getter = currentClass.findInstanceGetter(propertyName);
-            if (getter != null) {
-              superGetter = getter;
-              break;
-            }
-            // Check bridged superclass
-            if (currentClass.bridgedSuperclass != null) {
-              final bridged = currentClass.bridgedSuperclass!;
-              if (bridged.getters.containsKey(propertyName)) {
-                bridgedGetter = bridged;
-                break;
-              }
-            }
-            currentClass = currentClass.superclass;
-          }
-
-          // Get the current value using getter or bridged getter
-          if (superGetter != null) {
-            currentValue = superGetter.bind(instance).call(this, [], {});
-          } else if (bridgedGetter != null) {
-            final bridgedTarget = instance.bridgedSuperObject;
-            if (bridgedTarget == null) {
-              throw RuntimeError(
-                  "Cannot access bridged property '$propertyName': bridgedSuperObject is null");
-            }
-            currentValue =
-                bridgedGetter.getters[propertyName]!(this, bridgedTarget);
-          } else {
-            // Try to get field value directly
-            try {
-              currentValue = instance.get(propertyName);
-            } catch (e) {
-              throw RuntimeError(
-                  "Cannot read '$propertyName' from superclass chain of '${instance.klass.name}' for compound 'super' assignment: $e");
-            }
-          }
         }
 
         if (operatorType == TokenType.EQ) {
@@ -2099,8 +2305,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         } else {
           // Compound assignment: super.value += rhsValue, etc.
           // Compute new value
-          final newValue =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          final newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
 
           // Set new value
           if (superSetter != null) {
@@ -2161,12 +2370,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return rhsValue; // Simple Assignment returns RHS value
         } else {
           // Compound assignment: target.property op= rhsValue
-          // 1. Get current value
-          final currentValue = targetValue
-              .get(propertyName); // Use instance.get (handles field/getter)
-          // 2. Calculate new value
-          Object? newValue =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          Object? newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
           // 3. Set new value (via setter or direct field access)
           final setter = targetValue.klass.findInstanceSetter(propertyName);
           if (setter != null) {
@@ -2192,24 +2400,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return rhsValue; // Simple Assignment returns RHS value
         } else {
           // Compound assignment: Class.property op= rhsValue
-          // 1. Get current value (static field or getter)
-          Object? currentValue;
-          final staticGetter = targetValue.findStaticGetter(propertyName);
-          if (staticGetter != null) {
-            currentValue = staticGetter.call(this, [], {});
-          } else {
-            // If no getter, try getting the field directly
-            try {
-              currentValue = targetValue.getStaticField(propertyName);
-            } catch (_) {
-              throw RuntimeError(
-                  "Cannot get value for compound assignment on static member '$propertyName'. No getter or field found.");
-            }
-          }
-
-          // 2. Calculate new value
-          Object? newValue =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          Object? newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
 
           // 3. Set new value (static setter or direct field access)
           final staticSetter = targetValue.findStaticSetter(propertyName);
@@ -2237,18 +2432,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             return rhsValue; // Simple assignment returns RHS value
           } else {
             // Compound assignment: bridgedInstance.property op= value
-            // 1. Get current value (requires a getter adapter)
-            final getterAdapter = bridgedInstance.bridgedClass
-                .findInstanceGetterAdapter(propertyName);
-            if (getterAdapter == null) {
-              throw RuntimeError(
-                  "Cannot perform compound assignment on '${bridgedInstance.bridgedClass.name}.$propertyName': No getter adapter found.");
-            }
-            final currentValue =
-                getterAdapter(this, bridgedInstance.nativeObject);
-            // 2. Calculate new value
-            Object? newValue =
-                computeCompoundValue(currentValue, rhsValue, operatorType);
+            Object? newValue = computeCompoundValue(
+              preparedCurrentValue,
+              rhsValue,
+              operatorType,
+            );
             // 3. Set new value via setter adapter
             Logger.debug(
                 "[Assignment] Compound assigning to bridged instance property '${bridgedInstance.bridgedClass.name}.$propertyName' via setter adapter.");
@@ -2298,25 +2486,19 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
         } else {
           // Compound assignment: super.property += rhsValue, etc.
-          // Need both getter and setter
-          final getterAdapter =
-              bridgedSuper.findInstanceGetterAdapter(propertyName);
-          if (getterAdapter == null) {
-            throw RuntimeError(
-                "Cannot perform compound assignment on bridged super property '${bridgedSuper.name}.$propertyName': No getter adapter found.");
-          }
+          // Need a setter after the current value was read before the RHS.
           if (setterAdapter == null) {
             throw RuntimeError(
                 "Cannot perform compound assignment on bridged super property '${bridgedSuper.name}.$propertyName': No setter adapter found.");
           }
 
           try {
-            // Get current value
-            final currentValue = getterAdapter(this, nativeSuperObject);
-
             // Compute new value
-            final newValue =
-                computeCompoundValue(currentValue, rhsValue, operatorType);
+            final newValue = computeCompoundValue(
+              preparedCurrentValue,
+              rhsValue,
+              operatorType,
+            );
 
             // Set new value
             setterAdapter(this, nativeSuperObject, newValue);
@@ -2342,14 +2524,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
         } else {
           // Compound assignment: Enum.property op= rhsValue
-          final staticGetter = targetValue.staticGetters[propertyName];
-          if (staticGetter == null) {
-            throw RuntimeError(
-                "Cannot perform compound assignment on bridged enum '${targetValue.name}.$propertyName': No static getter found.");
-          }
-          final currentValue = staticGetter(this);
-          Object? newValue =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          Object? newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
           final staticSetter = targetValue.staticSetters[propertyName];
           if (staticSetter != null) {
             staticSetter(this, newValue);
@@ -2372,15 +2551,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 "Bridged class '${targetValue.name}' has no static setter named '$propertyName'.");
           }
         } else {
-          final staticGetter =
-              targetValue.findStaticGetterAdapter(propertyName);
-          if (staticGetter == null) {
-            throw RuntimeError(
-                "Cannot perform compound assignment on static member '${targetValue.name}.$propertyName': No static getter found.");
-          }
-          final currentValue = staticGetter(this);
-          Object? newValue =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          Object? newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
           final staticSetter =
               targetValue.findStaticSetterAdapter(propertyName);
           if (staticSetter != null) {
@@ -2398,7 +2573,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     }
     // Case 3: PrefixedIdentifier assignment (prefix.identifier op= value)
     else if (lhs is PrefixedIdentifier) {
-      final target = lhs.prefix.accept<Object?>(this);
+      final target = preparedTargetValue;
       final propertyName = lhs.identifier.name;
       // rhsValue and operatorType already available from the top
 
@@ -2438,9 +2613,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return rhsValue; // Simple Assignment returns RHS value
         } else {
           // Compound assignment: target.property op= rhsValue
-          final currentValue = target.get(propertyName);
-          Object? newValue =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          Object? newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
           final setter = target.klass.findInstanceSetter(propertyName);
           if (setter != null) {
             setter.bind(target).call(this, [newValue], {});
@@ -2462,20 +2639,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return rhsValue; // Simple Assignment returns RHS value
         } else {
           // Compound assignment: Class.property op= rhsValue
-          Object? currentValue;
-          final staticGetter = target.findStaticGetter(propertyName);
-          if (staticGetter != null) {
-            currentValue = staticGetter.call(this, [], {});
-          } else {
-            try {
-              currentValue = target.getStaticField(propertyName);
-            } catch (_) {
-              throw RuntimeError(
-                  "Cannot get value for compound assignment on static member '$propertyName'. No getter or field found.");
-            }
-          }
-          Object? newValue =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          Object? newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
           final staticSetter = target.findStaticSetter(propertyName);
           if (staticSetter != null) {
             staticSetter.call(this, [newValue], {});
@@ -2500,17 +2668,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return rhsValue; // Simple Assignment returns RHS value
         } else {
           // Compound assignment: BridgedClass.property op= rhsValue
-          // 1. Get current static value
-          final staticGetter =
-              bridgedClass.findStaticGetterAdapter(propertyName);
-          if (staticGetter == null) {
-            throw RuntimeError(
-                "Cannot perform compound assignment on static '${bridgedClass.name}.$propertyName': No static getter found.");
-          }
-          final currentValue = staticGetter(this);
-          // 2. Calculate new value
-          Object? newValue =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          Object? newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
           // 3. Set new static value
           final staticSetter =
               bridgedClass.findStaticSetterAdapter(propertyName);
@@ -2538,16 +2700,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return rhsValue; // Simple Assignment returns RHS value
         } else {
           // Compound assignment: BridgedEnum.property op= rhsValue
-          // 1. Get current static value
-          final staticGetter = target.staticGetters[propertyName];
-          if (staticGetter == null) {
-            throw RuntimeError(
-                "Cannot perform compound assignment on static '${target.name}.$propertyName': No static getter found.");
-          }
-          final currentValue = staticGetter(this);
-          // 2. Calculate new value
-          Object? newValue =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          Object? newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
           // 3. Set new static value
           final staticSetter = target.staticSetters[propertyName];
           if (staticSetter == null) {
@@ -2579,20 +2736,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return rhsValue;
         } else {
           // Compound assignment: Extension.property op= rhsValue
-          // 1. Get current value
-          Object? currentValue;
-          final staticGetter = extension.findStaticGetter(propertyName);
-          if (staticGetter != null) {
-            currentValue = staticGetter.call(this, [], {});
-          } else if (extension.staticFields.containsKey(propertyName)) {
-            currentValue = extension.getStaticField(propertyName);
-          } else {
-            throw RuntimeError(
-                "Cannot get value for compound assignment on static extension member '$propertyName'. No getter or field found.");
-          }
-          // 2. Calculate new value
-          Object? newValue =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          Object? newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
           // 3. Set new value
           final staticSetter = extension.findStaticSetter(propertyName);
           if (staticSetter != null) {
@@ -2623,18 +2771,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             return rhsValue; // Simple assignment returns RHS value
           } else {
             // Compound assignment: bridgedInstance.property op= value
-            // 1. Get current value (requires a getter adapter)
-            final getterAdapter = bridgedInstance.bridgedClass
-                .findInstanceGetterAdapter(propertyName);
-            if (getterAdapter == null) {
-              throw RuntimeError(
-                  "Cannot perform compound assignment on '${bridgedInstance.bridgedClass.name}.$propertyName': No getter adapter found.");
-            }
-            final currentValue =
-                getterAdapter(this, bridgedInstance.nativeObject);
-            // 2. Calculate new value
-            Object? newValue =
-                computeCompoundValue(currentValue, rhsValue, operatorType);
+            Object? newValue = computeCompoundValue(
+              preparedCurrentValue,
+              rhsValue,
+              operatorType,
+            );
             // 3. Set new value via setter adapter
             Logger.debug(
                 "[Assignment - PropertyAccess] Compound assigning to bridged instance property '${bridgedInstance.bridgedClass.name}.$propertyName' via setter adapter.");
@@ -2652,138 +2793,19 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
     } else {
       if (lhs is IndexExpression) {
-        final targetValue = lhs.target?.accept<Object?>(this);
-        final indexValue = lhs.index.accept<Object?>(this);
+        final targetValue = preparedTargetValue;
+        final indexValue = preparedIndexValue;
 
         // Determine the value to actually assign
         Object? finalValueToAssign;
         if (operatorType == TokenType.EQ) {
           finalValueToAssign = rhsValue; // Simple assignment
         } else {
-          // Compound assignment (e.g., list[i] += 10)
-          // 1. Get current value using index operator []
-          Object? currentValue;
-          if (targetValue is Map) {
-            currentValue = targetValue[indexValue];
-          } else if (targetValue is List && indexValue is int) {
-            if (indexValue < 0 || indexValue >= targetValue.length) {
-              throw RuntimeError(
-                  'Index out of range for compound assignment read: $indexValue');
-            }
-            currentValue = targetValue[indexValue];
-          } else if (targetValue is InterpretedExtensionTypeInstance) {
-            // Check for extension type operator [] method for reading current value
-            final operatorMethod =
-                targetValue.extensionType.findInstanceOperator('[]');
-            if (operatorMethod != null) {
-              try {
-                currentValue = operatorMethod
-                    .bind(targetValue)
-                    .call(this, [indexValue], {});
-              } on ReturnException catch (e) {
-                currentValue = e.value;
-              } catch (e) {
-                throw RuntimeError(
-                    "Error executing extension type operator '[]' for compound read: $e");
-              }
-            } else {
-              throw RuntimeError(
-                  'Cannot read current value for compound index assignment on ${targetValue.extensionType.name}: No operator [] found.');
-            }
-          } else if (targetValue is InterpretedInstance) {
-            // Check for class operator [] method for reading current value
-            final operatorMethod = targetValue.findOperator('[]');
-            if (operatorMethod != null) {
-              try {
-                currentValue = operatorMethod
-                    .bind(targetValue)
-                    .call(this, [indexValue], {});
-              } on ReturnException catch (e) {
-                currentValue = e.value;
-              } catch (e) {
-                throw RuntimeError(
-                    "Error executing class operator '[]' for compound read: $e");
-              }
-            } else {
-              // No class operator found, try extensions
-              try {
-                final extensionGetter = environment
-                    .findExtensionMember(targetValue, '[]', visitor: this);
-                if (extensionGetter is InterpretedExtensionMethod &&
-                    extensionGetter.isOperator) {
-                  final extensionPositionalArgs = [targetValue, indexValue];
-                  try {
-                    currentValue =
-                        extensionGetter.call(this, extensionPositionalArgs, {});
-                  } on ReturnException catch (e) {
-                    currentValue = e.value;
-                  } catch (e) {
-                    throw RuntimeError(
-                        "Error executing extension operator '[]' for compound read: $e");
-                  }
-                } else {
-                  throw RuntimeError(
-                      'Cannot read current value for compound index assignment on ${targetValue.klass.name}: No operator [] found (class or extension).');
-                }
-              } on RuntimeError catch (e) {
-                throw RuntimeError(
-                    'Cannot read current value for compound index assignment on ${targetValue.klass.name}: ${e.message}');
-              }
-            }
-          } else if (toBridgedInstance(targetValue).$2) {
-            // Handle BridgedInstance for reading current value via [] operator
-            final bridgedInstance = toBridgedInstance(targetValue).$1!;
-            final bridgedClass = bridgedInstance.bridgedClass;
-            final operatorName = '[]';
-
-            final methodAdapter =
-                bridgedClass.findInstanceMethodAdapter(operatorName);
-            if (methodAdapter != null) {
-              Logger.debug(
-                  "[visitAssignmentExpression-Index] Found bridged operator '$operatorName' for ${bridgedClass.name}. Calling adapter for compound read...");
-              try {
-                currentValue = methodAdapter(
-                    this, bridgedInstance.nativeObject, [indexValue], {});
-              } catch (e, s) {
-                Logger.error(
-                    "[visitAssignmentExpression-Index] Native exception during bridged operator '$operatorName' read on ${bridgedClass.name}: $e\\n$s");
-                throw RuntimeError(
-                    "Native error during bridged operator '$operatorName' read on ${bridgedClass.name}: $e");
-              }
-            } else {
-              throw RuntimeError(
-                  'Cannot read current value for compound index assignment on ${bridgedClass.name}: No bridged operator [] found.');
-            }
-          } else {
-            try {
-              final extensionGetter = environment
-                  .findExtensionMember(targetValue, '[]', visitor: this);
-              if (extensionGetter is InterpretedExtensionMethod &&
-                  extensionGetter.isOperator) {
-                final extensionPositionalArgs = [targetValue, indexValue];
-                try {
-                  currentValue =
-                      extensionGetter.call(this, extensionPositionalArgs, {});
-                } on ReturnException catch (e) {
-                  currentValue = e.value;
-                } // Handle potential returns
-                catch (e) {
-                  throw RuntimeError(
-                      "Error executing extension operator '[]' for compound read: $e");
-                }
-              } else {
-                throw RuntimeError(
-                    'Cannot read current value for compound index assignment on type ${targetValue?.runtimeType}: No standard or extension operator [] found.');
-              }
-            } on RuntimeError catch (e) {
-              throw RuntimeError(
-                  'Cannot read current value for compound index assignment on type ${targetValue?.runtimeType}: ${e.message}');
-            }
-          }
-
-          // 2. Calculate the new value
-          finalValueToAssign =
-              computeCompoundValue(currentValue, rhsValue, operatorType);
+          finalValueToAssign = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
         }
 
         // Now, perform the assignment with finalValueToAssign
@@ -2937,6 +2959,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitMethodInvocation(MethodInvocation node) {
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitMethodInvocation(node),
+    );
+  }
+
+  Object? _visitMethodInvocation(MethodInvocation node) {
     Object? calleeValue;
     Object? targetValue; // Keep track of the target object/class
     // Argument lists - declared here, evaluated later if needed
@@ -2946,11 +2975,17 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     if (node.target == null) {
       // Simple function call (or class constructor call)
-      calleeValue = node.methodName.accept<Object?>(this);
+      calleeValue = _evaluateContinuedExpression(node, node.methodName);
+      if (calleeValue is AsyncSuspensionRequest) {
+        return calleeValue;
+      }
       targetValue = null; // No target
     } else {
       // Property/Method call on a target (instance or class)
-      targetValue = node.target!.accept<Object?>(this);
+      targetValue = _evaluateContinuedExpression(node, node.target!);
+      if (targetValue is AsyncSuspensionRequest) {
+        return targetValue;
+      }
       final methodName = node.methodName.name;
 
       // Null safety support: if the target is null and the call is null-aware, return null
@@ -3849,7 +3884,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   // Update PropertyAccess to call getters AND handle 'super'
   @override
   Object? visitPropertyAccess(PropertyAccess node) {
-    final target = node.target?.accept<Object?>(this);
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitPropertyAccess(node),
+    );
+  }
+
+  Object? _visitPropertyAccess(PropertyAccess node) {
+    final target = node.target == null
+        ? null
+        : _evaluateContinuedExpression(node, node.target!);
     if (target is AsyncSuspensionRequest) {
       // Propagate suspension so the state machine resumes this node after resolution
       return target;
@@ -5011,6 +5055,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   // Add handler for VariableDeclarationList used in ForPartsWithDeclarations
   @override
   Object? visitVariableDeclarationList(VariableDeclarationList node) {
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitVariableDeclarationList(node),
+    );
+  }
+
+  Object? _visitVariableDeclarationList(VariableDeclarationList node) {
     final declaredType =
         node.type == null ? null : _resolveTypeAnnotation(node.type);
 
@@ -5020,7 +5071,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     for (final variable in node.variables) {
       if (variable.name.lexeme == '_') {
         // Evaluate initializer for potential side effects, but don't define
-        variable.initializer?.accept<Object?>(this);
+        final initializer = variable.initializer;
+        if (initializer != null) {
+          final result = _evaluateContinuedExpression(node, initializer);
+          if (result is AsyncSuspensionRequest) {
+            return result;
+          }
+        }
       } else {
         // Check if this is a late variable
         final isLate = node.lateKeyword != null;
@@ -5051,7 +5108,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           Object? result; // Value returned by accept() (could be suspension)
 
           if (variable.initializer != null) {
-            result = variable.initializer!.accept<Object?>(this);
+            result = _evaluateContinuedExpression(node, variable.initializer!);
             if (result is AsyncSuspensionRequest) {
               // Async initializer: Define as null for now, result holds suspension
               Logger.debug(
@@ -5111,7 +5168,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitYieldStatement(YieldStatement node) {
-    final value = node.expression.accept<Object?>(this);
+    final value = _runWithExpressionContinuation(
+      node,
+      () => _evaluateContinuedExpression(node, node.expression),
+    );
+    if (value is AsyncSuspensionRequest) {
+      return value;
+    }
     Logger.debug(
         "[YieldStatement] Yielding value: $value (star: ${node.star != null})");
 
@@ -5138,18 +5201,23 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     // If we're in an async* generator (with real async state), create a suspension
     if (currentAsyncState?.isGenerator == true) {
-      final controller = currentAsyncState!.generatorStreamController!;
+      final asyncState = currentAsyncState!;
+      final controller = asyncState.generatorStreamController!;
+
+      if (asyncState.generatorCancelled) {
+        return null;
+      }
 
       if (node.star != null) {
         // yield* - handle asynchronously
         return AsyncSuspensionRequest(
-            _handleYieldStarAsync(value, controller), currentAsyncState!,
+            _handleYieldStarAsync(value, controller, asyncState), asyncState,
             isYieldSuspension: true);
       } else {
         // regular yield - send to stream and create minimal suspension
         controller.add(value);
         // Create a completed future suspension to continue execution
-        return AsyncSuspensionRequest(Future.value(null), currentAsyncState!,
+        return AsyncSuspensionRequest(Future.value(null), asyncState,
             isYieldSuspension: true);
       }
     }
@@ -5159,17 +5227,51 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   }
 
   // Handle yield* in async generator context asynchronously
-  Future<Object?> _handleYieldStarAsync(
-      Object? value, StreamController<Object?> controller) async {
+  Future<Object?> _handleYieldStarAsync(Object? value,
+      StreamController<Object?> controller, AsyncExecutionState state) async {
+    if (state.generatorCancelled) {
+      return null;
+    }
     if (value is Stream) {
-      await for (final item in value) {
-        controller.add(item);
+      final done = Completer<void>();
+      late final StreamSubscription<dynamic> subscription;
+      subscription = value.listen(
+        (item) {
+          if (!state.generatorCancelled && !controller.isClosed) {
+            controller.add(item);
+          }
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!done.isCompleted) {
+            done.completeError(error, stackTrace);
+          }
+        },
+        onDone: () {
+          if (!done.isCompleted) {
+            done.complete();
+          }
+        },
+      );
+      state.generatorYieldStarSubscription = subscription;
+      state.generatorYieldStarCompletion = done;
+      try {
+        await done.future;
+      } finally {
+        if (identical(state.generatorYieldStarSubscription, subscription)) {
+          state.generatorYieldStarSubscription = null;
+        }
+        if (identical(state.generatorYieldStarCompletion, done)) {
+          state.generatorYieldStarCompletion = null;
+        }
       }
     } else if (value is Iterable) {
       for (final item in value) {
+        if (state.generatorCancelled || controller.isClosed) {
+          break;
+        }
         controller.add(item);
       }
-    } else {
+    } else if (!state.generatorCancelled && !controller.isClosed) {
       controller.addError(RuntimeError(
           "yield* expression must be a Stream or Iterable, got ${value.runtimeType}"));
     }
@@ -5178,40 +5280,61 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitListLiteral(ListLiteral node) {
-    final List<Object?> list = [];
-    for (final element in node.elements) {
-      _processCollectionElement(element, list, isMap: false);
+    final asyncState = currentAsyncState;
+    final existing = asyncState?.expressionContinuations[node];
+    final continuation = switch (existing) {
+      null => _CollectionContinuation(<Object?>[]),
+      _CollectionContinuation value => value,
+      _ => throw StateError('Mismatched async list continuation.'),
+    };
+    if (asyncState != null) {
+      asyncState.expressionContinuations[node] = continuation;
     }
+    final list = continuation.collection as List<Object?>;
 
-    RuntimeType? listRuntimeType;
-    final explicitTypeArguments = node.typeArguments?.arguments;
-    if (explicitTypeArguments != null && explicitTypeArguments.isNotEmpty) {
-      final listType = environment.get('List');
-      if (listType is RuntimeType) {
-        listRuntimeType = AppliedRuntimeType(
-            listType,
-            explicitTypeArguments
-                .map((typeNode) => _resolveTypeAnnotation(typeNode))
-                .toList());
+    try {
+      while (continuation.nextElement < node.elements.length) {
+        final element = node.elements[continuation.nextElement];
+        final result = _processCollectionElement(element, list, isMap: false);
+        if (result is AsyncSuspensionRequest) {
+          return result;
+        }
+        continuation.nextElement++;
       }
-    } else {
-      final inferredElementType = _inferCollectionElementRuntimeType(list);
-      final listType = environment.get('List');
-      if (inferredElementType != null && listType is RuntimeType) {
-        listRuntimeType = AppliedRuntimeType(listType, [inferredElementType]);
+
+      RuntimeType? listRuntimeType;
+      final explicitTypeArguments = node.typeArguments?.arguments;
+      if (explicitTypeArguments != null && explicitTypeArguments.isNotEmpty) {
+        final listType = environment.get('List');
+        if (listType is RuntimeType) {
+          listRuntimeType = AppliedRuntimeType(
+              listType,
+              explicitTypeArguments
+                  .map((typeNode) => _resolveTypeAnnotation(typeNode))
+                  .toList());
+        }
+      } else {
+        final inferredElementType = _inferCollectionElementRuntimeType(list);
+        final listType = environment.get('List');
+        if (inferredElementType != null && listType is RuntimeType) {
+          listRuntimeType = AppliedRuntimeType(listType, [inferredElementType]);
+        }
       }
+
+      asyncState?.expressionContinuations.remove(node);
+      if (node.constKeyword != null) {
+        final constList = List.unmodifiable(list);
+        environment.annotateRuntimeType(constList, listRuntimeType);
+        return constList;
+      }
+
+      environment.annotateRuntimeType(list, listRuntimeType);
+
+      return list;
+    } catch (_) {
+      asyncState?.expressionContinuations.remove(node);
+      rethrow;
     }
-
-    // If this is a const list, return an unmodifiable version
-    if (node.constKeyword != null) {
-      final constList = List.unmodifiable(list);
-      environment.annotateRuntimeType(constList, listRuntimeType);
-      return constList;
-    }
-
-    environment.annotateRuntimeType(list, listRuntimeType);
-
-    return list;
   }
 
   @override
@@ -5621,10 +5744,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     // Assignment in cascade doesn't produce a value to be used further.
   }
 
-  void _processCollectionElement(CollectionElement element, Object collection,
+  Object? _processCollectionElement(
+      CollectionElement element, Object collection,
       {required bool isMap}) {
     if (element is Expression) {
       final value = element.accept<Object?>(this);
+      if (value is AsyncSuspensionRequest) {
+        return value;
+      }
       if (isMap) {
         throw RuntimeError(
             "Expected a MapLiteralEntry ('key: value') but got an expression in map literal.");
@@ -5634,23 +5761,34 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         collection.add(value);
       }
     } else if (element is MapLiteralEntry) {
-      if (!isMap) {
-        throw RuntimeError(
-            "Unexpected MapLiteralEntry ('key: value') in a non-map literal.");
-      }
-      if (collection is Map) {
-        final key = element.key.accept<Object?>(this);
-        final value = element.value.accept<Object?>(this);
-        collection[key] = value;
-      } else {
-        // Should not happen if isMap is true
-        throw StateError("Internal error: Expected Map for map literal.");
-      }
+      return _runWithExpressionContinuation(element, () {
+        if (!isMap) {
+          throw RuntimeError(
+              "Unexpected MapLiteralEntry ('key: value') in a non-map literal.");
+        }
+        if (collection is Map) {
+          final key = _evaluateContinuedExpression(element, element.key);
+          if (key is AsyncSuspensionRequest) {
+            return key;
+          }
+          final value = _evaluateContinuedExpression(element, element.value);
+          if (value is AsyncSuspensionRequest) {
+            return value;
+          }
+          collection[key] = value;
+        } else {
+          throw StateError('Internal error: Expected Map for map literal.');
+        }
+        return null;
+      });
     } else if (element is SpreadElement) {
       final expressionValue = element.expression.accept<Object?>(this);
+      if (expressionValue is AsyncSuspensionRequest) {
+        return expressionValue;
+      }
       if (element.isNullAware && expressionValue == null) {
         // Null-aware spread with null value, do nothing
-        return;
+        return null;
       }
       if (isMap) {
         Map? mapToAdd;
@@ -5699,192 +5837,15 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         // else case handled by error throws above
       }
     } else if (element is IfElement) {
-      if (element.caseClause != null) {
-        final exprValue = element.expression.accept<Object?>(this);
-        final patternEnv = Environment(enclosing: environment);
-        final originalEnv = environment;
-        bool matched = false;
-        try {
-          _matchAndBind(element.caseClause!.guardedPattern.pattern, exprValue,
-              patternEnv);
-
-          bool guardPassed = true;
-          if (element.caseClause!.guardedPattern.whenClause != null) {
-            environment = patternEnv;
-            try {
-              final guardValue = element
-                  .caseClause!.guardedPattern.whenClause!.expression
-                  .accept<Object?>(this);
-              final bridgedGuard = toBridgedInstance(guardValue);
-              if (guardValue is bool) {
-                guardPassed = guardValue;
-              } else if (bridgedGuard.$2 &&
-                  bridgedGuard.$1?.nativeObject is bool) {
-                guardPassed = bridgedGuard.$1!.nativeObject as bool;
-              } else {
-                throw RuntimeError(
-                    "Guard condition must be a boolean, but was ${guardValue?.runtimeType}.");
-              }
-            } finally {
-              environment = originalEnv;
-            }
-          }
-
-          if (guardPassed) {
-            matched = true;
-            environment = patternEnv;
-            try {
-              _processCollectionElement(element.thenElement, collection,
-                  isMap: isMap);
-            } finally {
-              environment = originalEnv;
-            }
-          }
-        } on PatternMatchException {
-          matched = false;
-        }
-
-        if (!matched && element.elseElement != null) {
-          _processCollectionElement(element.elseElement!, collection,
-              isMap: isMap);
-        }
-      } else {
-        final conditionValue = element.expression.accept<Object?>(this);
-        bool conditionResult;
-        final bridgedInstance = toBridgedInstance(conditionValue);
-        if (conditionValue is bool) {
-          conditionResult = conditionValue;
-        } else if (bridgedInstance.$2 &&
-            bridgedInstance.$1?.nativeObject is bool) {
-          conditionResult = bridgedInstance.$1!.nativeObject as bool;
-        } else {
-          throw RuntimeError(
-              'Condition in collection \'if\' must be a boolean, but got ${conditionValue?.runtimeType}');
-        }
-
-        if (conditionResult) {
-          _processCollectionElement(element.thenElement, collection,
-              isMap: isMap);
-        } else if (element.elseElement != null) {
-          _processCollectionElement(element.elseElement!, collection,
-              isMap: isMap);
-        }
-      }
+      return _processCollectionIfElement(element, collection, isMap: isMap);
     } else if (element is ForElement) {
-      final loopParts = element.forLoopParts;
-      if (loopParts is ForEachPartsWithDeclaration ||
-          loopParts is ForEachPartsWithIdentifier) {
-        final iterableExpression = loopParts is ForEachPartsWithDeclaration
-            ? loopParts.iterable
-            : (loopParts as ForEachPartsWithIdentifier).iterable;
-        final loopVariableNode = loopParts is ForEachPartsWithDeclaration
-            ? loopParts.loopVariable
-            : (loopParts as ForEachPartsWithIdentifier).identifier;
-
-        final iterableValue = iterableExpression.accept<Object?>(this);
-
-        if (iterableValue is Iterable) {
-          final loopEnvironment = Environment(enclosing: environment);
-          final previousEnvironment = environment;
-          environment = loopEnvironment;
-
-          try {
-            String variableName;
-            if (loopVariableNode is DeclaredIdentifier) {
-              variableName = loopVariableNode.name.lexeme;
-              environment.define(variableName, null); // Define before loop
-            } else if (loopVariableNode is SimpleIdentifier) {
-              variableName = loopVariableNode.name;
-            } else {
-              throw StateError(
-                  'Unexpected for-in loop variable type: ${loopVariableNode.runtimeType}');
-            }
-
-            for (final item in iterableValue) {
-              environment.assign(variableName, item);
-              _processCollectionElement(element.body, collection, isMap: isMap);
-            }
-          } finally {
-            environment = previousEnvironment;
-          }
-        } else {
-          throw RuntimeError(
-              'Value used in collection \'for-in\' must be an Iterable, but got ${iterableValue?.runtimeType}');
-        }
-      } else if (loopParts is ForEachPartsWithPattern) {
-        final iterableValue = loopParts.iterable.accept<Object?>(this);
-        if (iterableValue is Iterable) {
-          for (final item in iterableValue) {
-            final loopEnvironment = Environment(enclosing: environment);
-            final previousEnvironment = environment;
-            environment = loopEnvironment;
-            try {
-              _matchAndBind(loopParts.pattern, item, loopEnvironment);
-              _processCollectionElement(element.body, collection, isMap: isMap);
-            } finally {
-              environment = previousEnvironment;
-            }
-          }
-        } else {
-          throw RuntimeError(
-              'Value used in collection \'for-in\' must be an Iterable, but got ${iterableValue?.runtimeType}');
-        }
-      } else if (loopParts is ForPartsWithDeclarations ||
-          loopParts is ForPartsWithExpression) {
-        AstNode? initialization;
-        Expression? condition;
-        List<Expression>? updaters;
-        if (loopParts is ForPartsWithDeclarations) {
-          initialization = loopParts.variables;
-          condition = loopParts.condition;
-          updaters = loopParts.updaters;
-        } else if (loopParts is ForPartsWithExpression) {
-          initialization = loopParts.initialization;
-          condition = loopParts.condition;
-          updaters = loopParts.updaters;
-        }
-        final loopEnvironment = Environment(enclosing: environment);
-        final previousEnvironment = environment;
-        environment = loopEnvironment;
-        try {
-          // Initialisation
-          if (initialization != null) {
-            initialization.accept<Object?>(this);
-          }
-          // Boucle
-          while (true) {
-            bool conditionResult = true;
-            if (condition != null) {
-              final evalResult = condition.accept<Object?>(this);
-              final bridgedInstance = toBridgedInstance(evalResult);
-              if (evalResult is bool) {
-                conditionResult = evalResult;
-              } else if (bridgedInstance.$2 &&
-                  bridgedInstance.$1?.nativeObject is bool) {
-                conditionResult = bridgedInstance.$1!.nativeObject as bool;
-              } else {
-                throw RuntimeError(
-                    "The condition of a 'for' loop must be a boolean, but was ${evalResult?.runtimeType}.");
-              }
-            }
-            if (!conditionResult) break;
-            _processCollectionElement(element.body, collection, isMap: isMap);
-            if (updaters != null) {
-              for (final updater in updaters) {
-                updater.accept<Object?>(this);
-              }
-            }
-          }
-        } finally {
-          environment = previousEnvironment;
-        }
-      } else {
-        throw UnimplementedError(
-            'Unsupported for-loop type in collection literal: ${loopParts.runtimeType}');
-      }
+      return _processCollectionForElement(element, collection, isMap: isMap);
     } else if (element is NullAwareElement) {
       // Use element.expression as per analyzer AST definition
       final value = element.value.accept<Object?>(this);
+      if (value is AsyncSuspensionRequest) {
+        return value;
+      }
       if (value != null) {
         if (collection is List) {
           collection.add(value);
@@ -5900,6 +5861,286 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     } else {
       throw UnimplementedError(
           'Collection element type not yet supported: ${element.runtimeType}');
+    }
+    return null;
+  }
+
+  Object? _processCollectionIfElement(
+    IfElement element,
+    Object collection, {
+    required bool isMap,
+  }) {
+    final asyncState = currentAsyncState;
+    final existing = asyncState?.expressionContinuations[element];
+    final continuation = switch (existing) {
+      null => _CollectionIfContinuation(environment),
+      _CollectionIfContinuation value => value,
+      _ => throw StateError('Mismatched async collection-if continuation.'),
+    };
+    asyncState?.expressionContinuations[element] = continuation;
+
+    try {
+      if (!continuation.selectionComplete) {
+        final caseClause = element.caseClause;
+        if (caseClause == null) {
+          final conditionValue = element.expression.accept<Object?>(this);
+          if (conditionValue is AsyncSuspensionRequest) {
+            return conditionValue;
+          }
+          final conditionResult = _collectionConditionValue(
+            conditionValue,
+            "Condition in collection 'if'",
+          );
+          continuation.selectedElement =
+              conditionResult ? element.thenElement : element.elseElement;
+          continuation.selectedEnvironment = continuation.environment;
+          continuation.selectionComplete = true;
+        } else {
+          if (continuation.patternEnvironment == null) {
+            final expressionValue = element.expression.accept<Object?>(this);
+            if (expressionValue is AsyncSuspensionRequest) {
+              return expressionValue;
+            }
+            final patternEnvironment =
+                Environment(enclosing: continuation.environment);
+            try {
+              _matchAndBind(
+                caseClause.guardedPattern.pattern,
+                expressionValue,
+                patternEnvironment,
+              );
+              continuation.patternEnvironment = patternEnvironment;
+            } on PatternMatchException {
+              continuation.selectedElement = element.elseElement;
+              continuation.selectedEnvironment = continuation.environment;
+              continuation.selectionComplete = true;
+            }
+          }
+
+          if (!continuation.selectionComplete) {
+            var guardPassed = true;
+            final guard = caseClause.guardedPattern.whenClause?.expression;
+            if (guard != null) {
+              final previousEnvironment = environment;
+              environment = continuation.patternEnvironment!;
+              try {
+                final guardValue = guard.accept<Object?>(this);
+                if (guardValue is AsyncSuspensionRequest) {
+                  return guardValue;
+                }
+                guardPassed = _collectionConditionValue(
+                  guardValue,
+                  'Guard condition',
+                );
+              } finally {
+                environment = previousEnvironment;
+              }
+            }
+            continuation.selectedElement =
+                guardPassed ? element.thenElement : element.elseElement;
+            continuation.selectedEnvironment = guardPassed
+                ? continuation.patternEnvironment
+                : continuation.environment;
+            continuation.selectionComplete = true;
+          }
+        }
+      }
+
+      final selectedElement = continuation.selectedElement;
+      if (selectedElement != null) {
+        final previousEnvironment = environment;
+        environment = continuation.selectedEnvironment!;
+        try {
+          final result = _processCollectionElement(
+            selectedElement,
+            collection,
+            isMap: isMap,
+          );
+          if (result is AsyncSuspensionRequest) {
+            return result;
+          }
+        } finally {
+          environment = previousEnvironment;
+        }
+      }
+      asyncState?.expressionContinuations.remove(element);
+      return null;
+    } catch (_) {
+      asyncState?.expressionContinuations.remove(element);
+      rethrow;
+    }
+  }
+
+  bool _collectionConditionValue(Object? value, String description) {
+    if (value is bool) {
+      return value;
+    }
+    final bridgedValue = toBridgedInstance(value);
+    if (bridgedValue.$2 && bridgedValue.$1?.nativeObject is bool) {
+      return bridgedValue.$1!.nativeObject as bool;
+    }
+    throw RuntimeError(
+      '$description must be a boolean, but was ${value?.runtimeType}.',
+    );
+  }
+
+  Object? _processCollectionForElement(
+    ForElement element,
+    Object collection, {
+    required bool isMap,
+  }) {
+    final asyncState = currentAsyncState;
+    final existing = asyncState?.expressionContinuations[element];
+    final continuation = switch (existing) {
+      null => _CollectionForContinuation(environment),
+      _CollectionForContinuation value => value,
+      _ => throw StateError('Mismatched async collection-for continuation.'),
+    };
+    asyncState?.expressionContinuations[element] = continuation;
+    final loopParts = element.forLoopParts;
+
+    try {
+      if (loopParts is ForEachParts) {
+        if (continuation.iterator == null) {
+          final iterableValue = loopParts.iterable.accept<Object?>(this);
+          if (iterableValue is AsyncSuspensionRequest) {
+            return iterableValue;
+          }
+          if (iterableValue is! Iterable) {
+            throw RuntimeError(
+              "Value used in collection 'for-in' must be an Iterable, but got ${iterableValue?.runtimeType}",
+            );
+          }
+          continuation.iterator = iterableValue.iterator;
+          if (loopParts is ForEachPartsWithDeclaration) {
+            continuation.variableName = loopParts.loopVariable.name.lexeme;
+            continuation.loopEnvironment
+                .define(continuation.variableName!, null);
+          } else if (loopParts is ForEachPartsWithIdentifier) {
+            continuation.variableName = loopParts.identifier.name;
+          }
+        }
+
+        while (true) {
+          if (!continuation.itemActive) {
+            final iterator = continuation.iterator!;
+            if (!iterator.moveNext()) {
+              asyncState?.expressionContinuations.remove(element);
+              return null;
+            }
+            final item = iterator.current;
+            if (loopParts is ForEachPartsWithPattern) {
+              final itemEnvironment =
+                  Environment(enclosing: continuation.environment);
+              _matchAndBind(loopParts.pattern, item, itemEnvironment);
+              continuation.itemEnvironment = itemEnvironment;
+            } else {
+              continuation.loopEnvironment
+                  .assign(continuation.variableName!, item);
+              continuation.itemEnvironment = continuation.loopEnvironment;
+            }
+            continuation.itemActive = true;
+          }
+
+          final previousEnvironment = environment;
+          environment = continuation.itemEnvironment!;
+          try {
+            final result = _processCollectionElement(
+              element.body,
+              collection,
+              isMap: isMap,
+            );
+            if (result is AsyncSuspensionRequest) {
+              return result;
+            }
+          } finally {
+            environment = previousEnvironment;
+          }
+          continuation.itemActive = false;
+          continuation.itemEnvironment = null;
+        }
+      }
+
+      AstNode? initialization;
+      Expression? condition;
+      List<Expression> updaters;
+      if (loopParts is ForPartsWithDeclarations) {
+        initialization = loopParts.variables;
+        condition = loopParts.condition;
+        updaters = loopParts.updaters;
+      } else if (loopParts is ForPartsWithExpression) {
+        initialization = loopParts.initialization;
+        condition = loopParts.condition;
+        updaters = loopParts.updaters;
+      } else {
+        throw UnimplementedError(
+          'Unsupported for-loop type in collection literal: ${loopParts.runtimeType}',
+        );
+      }
+
+      final previousEnvironment = environment;
+      environment = continuation.loopEnvironment;
+      try {
+        while (true) {
+          switch (continuation.phase) {
+            case _CollectionForPhase.initialization:
+              if (initialization != null) {
+                final result = initialization.accept<Object?>(this);
+                if (result is AsyncSuspensionRequest) {
+                  return result;
+                }
+              }
+              continuation.phase = _CollectionForPhase.condition;
+              continue;
+            case _CollectionForPhase.condition:
+              var conditionPassed = true;
+              if (condition != null) {
+                final result = condition.accept<Object?>(this);
+                if (result is AsyncSuspensionRequest) {
+                  return result;
+                }
+                conditionPassed = _collectionConditionValue(
+                  result,
+                  "The condition of a 'for' loop",
+                );
+              }
+              if (!conditionPassed) {
+                asyncState?.expressionContinuations.remove(element);
+                return null;
+              }
+              continuation.phase = _CollectionForPhase.body;
+              continue;
+            case _CollectionForPhase.body:
+              final result = _processCollectionElement(
+                element.body,
+                collection,
+                isMap: isMap,
+              );
+              if (result is AsyncSuspensionRequest) {
+                return result;
+              }
+              continuation.phase = _CollectionForPhase.updaters;
+              continuation.updaterIndex = 0;
+              continue;
+            case _CollectionForPhase.updaters:
+              while (continuation.updaterIndex < updaters.length) {
+                final result =
+                    updaters[continuation.updaterIndex].accept<Object?>(this);
+                if (result is AsyncSuspensionRequest) {
+                  return result;
+                }
+                continuation.updaterIndex++;
+              }
+              continuation.phase = _CollectionForPhase.condition;
+              continue;
+          }
+        }
+      } finally {
+        environment = previousEnvironment;
+      }
+    } catch (_) {
+      asyncState?.expressionContinuations.remove(element);
+      rethrow;
     }
   }
 
@@ -6065,7 +6306,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     Object? returnValue;
     if (node.expression != null) {
-      returnValue = node.expression!.accept<Object?>(this);
+      returnValue = _runWithExpressionContinuation(
+        node,
+        () => _evaluateContinuedExpression(node, node.expression!),
+      );
       if (returnValue is AsyncSuspensionRequest) {
         return returnValue;
       }
@@ -6218,7 +6462,17 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitConditionalExpression(ConditionalExpression node) {
-    final conditionValue = node.condition.accept<Object?>(this);
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitConditionalExpression(node),
+    );
+  }
+
+  Object? _visitConditionalExpression(ConditionalExpression node) {
+    final conditionValue = _evaluateContinuedExpression(node, node.condition);
+    if (conditionValue is AsyncSuspensionRequest) {
+      return conditionValue;
+    }
     bool conditionResult;
     final bridgedInstance = toBridgedInstance(conditionValue);
     if (conditionValue is bool) {
@@ -6231,17 +6485,27 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     }
 
     if (conditionResult) {
-      return node.thenExpression.accept<Object?>(this);
+      return _evaluateContinuedExpression(node, node.thenExpression);
     } else {
-      return node.elseExpression.accept<Object?>(this);
+      return _evaluateContinuedExpression(node, node.elseExpression);
     }
   }
 
   @override
   Object? visitPrefixExpression(PrefixExpression node) {
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitPrefixExpression(node),
+    );
+  }
+
+  Object? _visitPrefixExpression(PrefixExpression node) {
     final operatorType = node.operator.type;
     final operandNode = node.operand;
-    final operandValue = operandNode.accept<Object?>(this);
+    final operandValue = _evaluateContinuedExpression(node, operandNode);
+    if (operandValue is AsyncSuspensionRequest) {
+      return operandValue;
+    }
     final bridgedInstance = toBridgedInstance(operandValue);
     final operand =
         bridgedInstance.$2 ? bridgedInstance.$1!.nativeObject : operandValue;
@@ -7122,68 +7386,27 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   // Handle String Interpolation: "Value is ${expr}"
   @override
   Object? visitStringInterpolation(StringInterpolation node) {
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitStringInterpolation(node),
+    );
+  }
+
+  Object? _visitStringInterpolation(StringInterpolation node) {
     final buffer = StringBuffer();
-    final elementValues = <Object?>[];
-    final elementIndices = <int>[]; // Track which elements are expressions
-    int expressionIndex = 0;
-
-    AsyncSuspensionRequest? firstSuspension;
-
     for (final element in node.elements) {
       if (element is InterpolationString) {
         buffer.write(element.value);
-        elementValues.add(null); // Placeholder for non-expressions
       } else if (element is InterpolationExpression) {
-        final value = element.expression.accept<Object?>(this);
-        elementIndices
-            .add(expressionIndex); // Remember which expressions suspended
-        expressionIndex++;
-
-        // Handle async suspensions in string interpolation
+        final value = _evaluateContinuedExpression(node, element.expression);
         if (value is AsyncSuspensionRequest) {
-          // FIX: Create a continuation that builds the string when resolved
-          firstSuspension ??= value;
-          elementValues.add(value); // Store the suspension request
-        } else {
-          buffer.write(stringify(value));
-          elementValues.add(value); // Store the resolved value
+          return value;
         }
+        buffer.write(stringify(value));
       } else {
         throw StateError(
             'Unknown interpolation element: ${element.runtimeType}');
       }
-    }
-
-    if (firstSuspension != null) {
-      // Create a new future that, when resolved, will rebuild the string
-      final newFuture = firstSuspension.future.then((resolvedValue) {
-        // Rebuild the string with the resolved value
-        // Replace the suspended AsyncSuspensionRequest with the resolved value
-        final finalBuffer = StringBuffer();
-        int elemIndex = 0;
-
-        for (final element in node.elements) {
-          if (element is InterpolationString) {
-            finalBuffer.write(element.value);
-          } else if (element is InterpolationExpression) {
-            // Check if this was the suspended expression
-            if (elementValues[elemIndex] is AsyncSuspensionRequest) {
-              // Use the resolved value
-              finalBuffer.write(stringify(resolvedValue));
-            } else {
-              // Use the pre-computed value
-              finalBuffer.write(stringify(elementValues[elemIndex]));
-            }
-          }
-          elemIndex++;
-        }
-
-        return finalBuffer.toString();
-      });
-
-      // Return a new AsyncSuspensionRequest with the rebuilt string future
-      return AsyncSuspensionRequest(newFuture, firstSuspension.asyncState,
-          isYieldSuspension: firstSuspension.isYieldSuspension);
     }
 
     return buffer.toString();
@@ -8062,6 +8285,217 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     return null; // Declaration doesn't return a value
   }
 
+  Object? _readSimpleIdentifierForCompoundAssignment(String variableName) {
+    final definingEnvironment =
+        environment.findDefiningEnvironment(variableName);
+    if (definingEnvironment != null) {
+      final variable = definingEnvironment.get(variableName);
+      if (variable is LateVariable) {
+        return variable.value;
+      }
+      if (variable is PropertyAccessor) {
+        final getter = variable.getter;
+        if (getter == null) {
+          throw RuntimeError(
+            "Cannot read '$variableName' for compound assignment: "
+            'no getter defined.',
+          );
+        }
+        return getter.call(this, [], {});
+      }
+      if (variable is InterpretedFunction && variable.isSetter) {
+        throw RuntimeError(
+          "Cannot read setter '$variableName' for compound assignment.",
+        );
+      }
+      return variable;
+    }
+
+    final thisValue = environment.get('this');
+    if (thisValue is InterpretedInstance) {
+      return thisValue.get(variableName, visitor: this);
+    }
+    final bridgedThis = toBridgedInstance(thisValue);
+    if (bridgedThis.$2) {
+      final instance = bridgedThis.$1!;
+      final getter =
+          instance.bridgedClass.findInstanceGetterAdapter(variableName);
+      if (getter != null) {
+        return getter(this, instance.nativeObject);
+      }
+    }
+    throw RuntimeError(
+      "Cannot read '$variableName' for compound assignment.",
+    );
+  }
+
+  Object? _readPropertyForCompoundAssignment(
+    Object? target,
+    String propertyName,
+  ) {
+    if (target is BoundSuper) {
+      InterpretedClass? currentClass = target.startLookupClass;
+      while (currentClass != null) {
+        final getter = currentClass.findInstanceGetter(propertyName);
+        if (getter != null) {
+          return getter.bind(target.instance).call(this, [], {});
+        }
+        final bridged = currentClass.bridgedSuperclass;
+        final bridgedGetter = bridged?.getters[propertyName];
+        if (bridgedGetter != null) {
+          final bridgedTarget = target.instance.bridgedSuperObject;
+          if (bridgedTarget == null) {
+            throw RuntimeError(
+              "Cannot access bridged property '$propertyName': "
+              'bridgedSuperObject is null',
+            );
+          }
+          return bridgedGetter(this, bridgedTarget);
+        }
+        currentClass = currentClass.superclass;
+      }
+      return target.instance.get(propertyName, visitor: this);
+    }
+    if (target is InterpretedInstance) {
+      return target.get(propertyName, visitor: this);
+    }
+    if (target is InterpretedClass) {
+      final getter = target.findStaticGetter(propertyName);
+      return getter != null
+          ? getter.call(this, [], {})
+          : target.getStaticField(propertyName);
+    }
+    if (target is BoundBridgedSuper) {
+      final nativeTarget = target.instance.bridgedSuperObject;
+      if (nativeTarget == null) {
+        throw RuntimeError(
+          "Cannot access bridged super property '$propertyName': "
+          'bridgedSuperObject is null',
+        );
+      }
+      final getter =
+          target.startLookupClass.findInstanceGetterAdapter(propertyName);
+      if (getter == null) {
+        throw RuntimeError(
+          "Cannot read bridged super property '$propertyName': no getter found.",
+        );
+      }
+      return getter(this, nativeTarget);
+    }
+    if (target is BridgedEnum) {
+      final getter = target.staticGetters[propertyName];
+      if (getter == null) {
+        throw RuntimeError(
+          "Cannot read bridged enum property '${target.name}.$propertyName': "
+          'no getter found.',
+        );
+      }
+      return getter(this);
+    }
+    if (target is BridgedClass) {
+      final getter = target.findStaticGetterAdapter(propertyName);
+      if (getter == null) {
+        throw RuntimeError(
+          "Cannot read bridged class property '${target.name}.$propertyName': "
+          'no getter found.',
+        );
+      }
+      return getter(this);
+    }
+    if (target is InterpretedExtension) {
+      final getter = target.findStaticGetter(propertyName);
+      if (getter != null) {
+        return getter.call(this, [], {});
+      }
+      if (target.staticFields.containsKey(propertyName)) {
+        return target.getStaticField(propertyName);
+      }
+      throw RuntimeError(
+        "Cannot read static extension property '$propertyName': "
+        'no getter or field found.',
+      );
+    }
+
+    final bridgedTarget = toBridgedInstance(target);
+    if (bridgedTarget.$2) {
+      final instance = bridgedTarget.$1!;
+      final getter =
+          instance.bridgedClass.findInstanceGetterAdapter(propertyName);
+      if (getter == null) {
+        throw RuntimeError(
+          "Cannot read property '${instance.bridgedClass.name}.$propertyName': "
+          'no getter found.',
+        );
+      }
+      return getter(this, instance.nativeObject);
+    }
+
+    throw RuntimeError(
+      'Cannot read property for compound assignment on ${target?.runtimeType}.',
+    );
+  }
+
+  Object? _readIndexForCompoundAssignment(Object? target, Object? index) {
+    if (target is Map) {
+      return target[index];
+    }
+    if (target is List && index is int) {
+      if (index < 0 || index >= target.length) {
+        throw RuntimeError(
+          'Index out of range for compound assignment read: $index',
+        );
+      }
+      return target[index];
+    }
+    if (target is InterpretedExtensionTypeInstance) {
+      final operator = target.extensionType.findInstanceOperator('[]');
+      if (operator == null) {
+        throw RuntimeError(
+          'Cannot read current value for compound index assignment on '
+          '${target.extensionType.name}: no operator [] found.',
+        );
+      }
+      try {
+        return operator.bind(target).call(this, [index], {});
+      } on ReturnException catch (error) {
+        return error.value;
+      }
+    }
+    if (target is InterpretedInstance) {
+      final operator = target.findOperator('[]');
+      if (operator != null) {
+        try {
+          return operator.bind(target).call(this, [index], {});
+        } on ReturnException catch (error) {
+          return error.value;
+        }
+      }
+    }
+
+    final bridgedTarget = toBridgedInstance(target);
+    if (bridgedTarget.$2) {
+      final instance = bridgedTarget.$1!;
+      final operator = instance.bridgedClass.findInstanceMethodAdapter('[]');
+      if (operator != null) {
+        return operator(this, instance.nativeObject, [index], {});
+      }
+    }
+
+    final extension =
+        environment.findExtensionMember(target, '[]', visitor: this);
+    if (extension is InterpretedExtensionMethod && extension.isOperator) {
+      try {
+        return extension.call(this, [target, index], {});
+      } on ReturnException catch (error) {
+        return error.value;
+      }
+    }
+    throw RuntimeError(
+      'Cannot read current value for compound index assignment on '
+      '${target?.runtimeType}: no operator [] found.',
+    );
+  }
+
   // Helper function to compute compound assignment values
   Object? computeCompoundValue(
       Object? currentValue, Object? rhsValue, TokenType operatorType) {
@@ -8454,6 +8888,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitTryStatement(TryStatement node) {
+    if (currentAsyncState?.completedTryStatements.remove(node) ?? false) {
+      return null;
+    }
+
     // Store the internal exception if caught
     InternalInterpreterException? caughtInternalException;
     StackTrace? caughtStackTrace;
@@ -8509,94 +8947,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           "[TryStatement] Looking for catch clauses for thrown value: ${stringify(originalThrownValue)} (type: ${originalThrownValue?.runtimeType})");
 
       for (final clause in node.catchClauses) {
-        bool typeMatch = false;
-        String? targetCatchTypeName;
-
-        // Type check (on Type)
-        if (clause.exceptionType == null) {
-          // No 'on Type' clause, matches anything
-          typeMatch = true;
-          Logger.debug("[TryStatement] Catch clause matches any type.");
-        } else {
-          final typeNode = clause.exceptionType!;
-          if (typeNode is NamedType) {
-            targetCatchTypeName = typeNode.name.lexeme;
-            Logger.debug(
-                "[TryStatement] Checking catch clause for type: $targetCatchTypeName");
-
-            // Use originalThrownValue for type checking
-            switch (targetCatchTypeName) {
-              case 'int':
-                typeMatch = originalThrownValue is int;
-                break;
-              case 'double':
-                typeMatch = originalThrownValue is double;
-                break;
-              case 'num':
-                typeMatch = originalThrownValue is num;
-                break;
-              case 'String':
-                typeMatch = originalThrownValue is String;
-                break;
-              case 'bool':
-                typeMatch = originalThrownValue is bool;
-                break;
-              case 'List':
-                typeMatch = originalThrownValue is List;
-                break;
-              case 'Null':
-                // This is tricky. 'on Null' might not be common.
-                // Check if the original value is null.
-                typeMatch = originalThrownValue == null;
-                break;
-              case 'Object':
-                // Everything non-null is an Object?
-                // Dart's 'on Object' catches non-null exceptions.
-                typeMatch = originalThrownValue != null;
-                break;
-              case 'dynamic': // 'on dynamic' catches everything, like no 'on' clause
-                typeMatch = true;
-                break;
-              case 'void': // Cannot catch on void
-                typeMatch = false;
-                break;
-              default:
-                // User-defined type
-                try {
-                  final targetType = environment.get(targetCatchTypeName);
-                  if (targetType is InterpretedClass) {
-                    // Check if the ORIGINAL thrown value is an instance of the target type
-                    if (originalThrownValue is InterpretedInstance) {
-                      typeMatch =
-                          originalThrownValue.klass.isSubtypeOf(targetType);
-                      Logger.debug(
-                          "[TryStatement]   Checking instance '${originalThrownValue.klass.name}' against class '$targetCatchTypeName'. Result: $typeMatch");
-                    } else {
-                      // Native value cannot be subtype of user-defined class
-                      typeMatch = false;
-                      Logger.debug(
-                          "[TryStatement]   Thrown value is native (${originalThrownValue?.runtimeType}), cannot match user class '$targetCatchTypeName'.");
-                    }
-                  } else {
-                    // Target type name resolved, but it's not an InterpretedClass
-                    typeMatch = false;
-                    Logger.warn(
-                        "[TryStatement] Catch clause type '$targetCatchTypeName' not found or not a class/mixin.");
-                  }
-                } catch (e) {
-                  // Error resolving targetCatchTypeName
-                  Logger.warn(
-                      "[TryStatement] Error resolving catch clause type '$targetCatchTypeName': $e");
-                  typeMatch = false;
-                }
-            }
-          } else {
-            // Handle other type nodes like FunctionType if necessary
-            Logger.warn(
-                "[TryStatement] Unsupported catch clause type node: ${clause.exceptionType.runtimeType}");
-            typeMatch = false;
-          }
-        }
+        final targetCatchTypeName = clause.exceptionType is NamedType
+            ? (clause.exceptionType! as NamedType).name.lexeme
+            : null;
+        final typeMatch =
+            catchClauseMatches(clause, originalThrownValue, environment);
 
         if (typeMatch) {
           Logger.debug(
@@ -8743,8 +9098,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitThrowExpression(ThrowExpression node) {
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitThrowExpression(node),
+    );
+  }
+
+  Object? _visitThrowExpression(ThrowExpression node) {
     // 1. Evaluate the expression that is thrown
-    final thrownValue = node.expression.accept<Object?>(this);
+    final thrownValue = _evaluateContinuedExpression(node, node.expression);
+    if (thrownValue is AsyncSuspensionRequest) {
+      return thrownValue;
+    }
 
     // 2. Create and throw an InternalInterpreterException.
     final message = stringify(thrownValue); // Keep for debug log
@@ -8785,7 +9150,17 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitIsExpression(IsExpression node) {
-    final expressionValue = node.expression.accept<Object?>(this);
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitIsExpression(node),
+    );
+  }
+
+  Object? _visitIsExpression(IsExpression node) {
+    final expressionValue = _evaluateContinuedExpression(node, node.expression);
+    if (expressionValue is AsyncSuspensionRequest) {
+      return expressionValue;
+    }
     final typeNode = node.type;
     bool result = false;
 
@@ -8997,13 +9372,31 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
     }
 
-    // Create and populate the collection
-    final Object collection = isMap ? <Object?, Object?>{} : <Object?>{};
+    final asyncState = currentAsyncState;
+    final existing = asyncState?.expressionContinuations[node];
+    final continuation = switch (existing) {
+      null => _CollectionContinuation(
+          isMap ? <Object?, Object?>{} : <Object?>{},
+        ),
+      _CollectionContinuation value => value,
+      _ => throw StateError('Mismatched async set or map continuation.'),
+    };
+    if (asyncState != null) {
+      asyncState.expressionContinuations[node] = continuation;
+    }
+    final collection = continuation.collection;
 
-    for (final element in node.elements) {
+    while (continuation.nextElement < node.elements.length) {
+      final element = node.elements[continuation.nextElement];
       try {
-        _processCollectionElement(element, collection, isMap: isMap);
+        final result =
+            _processCollectionElement(element, collection, isMap: isMap);
+        if (result is AsyncSuspensionRequest) {
+          return result;
+        }
+        continuation.nextElement++;
       } on RuntimeError catch (e) {
+        asyncState?.expressionContinuations.remove(node);
         final literalType = isMap ? "Map" : "Set";
         // Check if error already contains context to avoid duplication
         if (!e.message.contains('in $literalType literal')) {
@@ -9046,6 +9439,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             AppliedRuntimeType(setType, [inferredElementType]);
       }
     }
+
+    asyncState?.expressionContinuations.remove(node);
 
     // If this is a const collection, return an unmodifiable version
     if (node.constKeyword != null) {
@@ -9448,63 +9843,95 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   /// Evaluates arguments for async function calls, handling await expressions.
   /// Returns either (List&lt;Object?&gt;, Map&lt;String, Object?&gt;) or AsyncSuspensionRequest.
   Object? _evaluateArgumentsAsync(ArgumentList argumentList) {
-    List<Object?> positionalArgs = [];
-    Map<String, Object?> namedArgs = {};
-    bool namedArgsEncountered = false;
-
-    for (final arg in argumentList.arguments) {
-      if (arg is NamedArgument) {
-        namedArgsEncountered = true;
-        final name = arg.name.lexeme;
-        final value = arg.argumentExpression.accept<Object?>(this);
-
-        // Check for async suspension in named arguments
-        if (value is AsyncSuspensionRequest) {
-          Logger.debug(
-              "[_evaluateArgumentsAsync] Async suspension in named argument '$name'");
-          return value; // Propagate suspension request
-        }
-
-        if (namedArgs.containsKey(name)) {
-          throw RuntimeError("Named argument '$name' provided more than once.");
-        }
-        final bridgedInstance = toBridgedInstance(value);
-        namedArgs[name] = _bridgeInterpreterValueToNative(
-            bridgedInstance.$2 ? bridgedInstance.$1!.nativeObject : value);
-      } else {
-        if (namedArgsEncountered) {
-          throw RuntimeError(
-              "Positional arguments cannot follow named arguments.");
-        }
-        final a = arg.accept<Object?>(this);
-
-        // Check for async suspension in positional arguments
-        if (a is AsyncSuspensionRequest) {
-          Logger.debug(
-              "[_evaluateArgumentsAsync] Async suspension in positional argument");
-          return a; // Propagate suspension request
-        }
-
-        final bridgedInstance = toBridgedInstance(a);
-        positionalArgs.add(_bridgeInterpreterValueToNative(
-            bridgedInstance.$2 ? bridgedInstance.$1!.nativeObject : a));
-      }
+    final asyncState = currentAsyncState;
+    if (asyncState == null) {
+      return _evaluateArguments(argumentList);
     }
 
-    Logger.debug(
-        "[_evaluateArgumentsAsync] All arguments evaluated successfully: ${positionalArgs.length} positional, ${namedArgs.length} named");
-    return (positionalArgs, namedArgs);
+    final existing = asyncState.expressionContinuations[argumentList];
+    final continuation = switch (existing) {
+      null => _ArgumentContinuation(),
+      _ArgumentContinuation value => value,
+      _ => throw StateError(
+          'Mismatched async argument continuation.',
+        ),
+    };
+    asyncState.expressionContinuations[argumentList] = continuation;
+
+    try {
+      while (continuation.nextArgument < argumentList.arguments.length) {
+        final arg = argumentList.arguments[continuation.nextArgument];
+        if (arg is NamedArgument) {
+          continuation.namedArgumentsEncountered = true;
+          final name = arg.name.lexeme;
+          final value = arg.argumentExpression.accept<Object?>(this);
+          if (value is AsyncSuspensionRequest) {
+            return value;
+          }
+          if (continuation.namedArguments.containsKey(name)) {
+            throw RuntimeError(
+                "Named argument '$name' provided more than once.");
+          }
+          final bridgedInstance = toBridgedInstance(value);
+          continuation.namedArguments[name] = _bridgeInterpreterValueToNative(
+            bridgedInstance.$2 ? bridgedInstance.$1!.nativeObject : value,
+          );
+        } else {
+          if (continuation.namedArgumentsEncountered) {
+            throw RuntimeError(
+              'Positional arguments cannot follow named arguments.',
+            );
+          }
+          final value = arg.accept<Object?>(this);
+          if (value is AsyncSuspensionRequest) {
+            return value;
+          }
+          final bridgedInstance = toBridgedInstance(value);
+          continuation.positionalArguments.add(
+            _bridgeInterpreterValueToNative(
+              bridgedInstance.$2 ? bridgedInstance.$1!.nativeObject : value,
+            ),
+          );
+        }
+        continuation.nextArgument++;
+      }
+
+      asyncState.expressionContinuations.remove(argumentList);
+      return (
+        continuation.positionalArguments,
+        continuation.namedArguments,
+      );
+    } catch (_) {
+      asyncState.expressionContinuations.remove(argumentList);
+      rethrow;
+    }
   }
 
   // Add FunctionExpressionInvocation handler
   @override
   Object? visitFunctionExpressionInvocation(FunctionExpressionInvocation node) {
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitFunctionExpressionInvocation(node),
+    );
+  }
+
+  Object? _visitFunctionExpressionInvocation(
+      FunctionExpressionInvocation node) {
     // 1. Evaluate the function expression itself.
     // This should result in a Callable (like InterpretedFunction or NativeFunction).
-    final calleeValue = node.function.accept<Object?>(this);
+    final calleeValue = _evaluateContinuedExpression(node, node.function);
+    if (calleeValue is AsyncSuspensionRequest) {
+      return calleeValue;
+    }
 
     // 2. Evaluate arguments (shared logic).
-    final (positionalArgs, namedArgs) = _evaluateArguments(node.argumentList);
+    final evaluationResult = _evaluateArgumentsAsync(node.argumentList);
+    if (evaluationResult is AsyncSuspensionRequest) {
+      return evaluationResult;
+    }
+    final (positionalArgs, namedArgs) =
+        evaluationResult as (List<Object?>, Map<String, Object?>);
 
     // 3. Evaluate type arguments (shared logic).
     List<RuntimeType>? evaluatedTypeArguments;
@@ -9706,62 +10133,67 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitSwitchStatement(SwitchStatement node) {
-    final switchValue = node.expression.accept<Object?>(this);
-    final switchEnvironment = Environment(enclosing: environment);
-    final previousEnvironment = environment;
-    environment = switchEnvironment;
-
-    bool matched = false; // Has any case matched the switchValue?
-    bool execute =
-        false; // Should we execute statements in the current/next section?
-
-    try {
-      // Build a map of case labels to their index for continue statement support
-      final Map<String, int> labelIndexMap = {};
-      for (int i = 0; i < node.members.length; i++) {
-        final member = node.members[i];
-        if (member is SwitchCase) {
-          for (final label in member.labels) {
-            final labelName = label.name.lexeme;
-            labelIndexMap[labelName] = i;
-          }
-        } else if (member is SwitchPatternCase) {
-          for (final label in member.labels) {
-            final labelName = label.name.lexeme;
-            labelIndexMap[labelName] = i;
-          }
-        } else if (member is SwitchDefault) {
-          for (final label in member.labels) {
-            final labelName = label.name.lexeme;
-            labelIndexMap[labelName] = i;
-          }
+    final asyncState = currentAsyncState;
+    final existing = asyncState?.expressionContinuations[node];
+    late final _SwitchContinuation continuation;
+    if (existing == null) {
+      final switchValue = node.expression.accept<Object?>(this);
+      if (switchValue is AsyncSuspensionRequest) {
+        return switchValue;
+      }
+      final labelIndexMap = <String, int>{};
+      for (var index = 0; index < node.members.length; index++) {
+        final member = node.members[index];
+        for (final label in member.labels) {
+          labelIndexMap[label.name.lexeme] = index;
         }
       }
+      continuation = _SwitchContinuation(
+        environment: Environment(enclosing: environment),
+        labelIndexMap: labelIndexMap,
+        switchValue: switchValue,
+      );
+      asyncState?.expressionContinuations[node] = continuation;
+    } else if (existing is _SwitchContinuation) {
+      continuation = existing;
+    } else {
+      throw StateError('Mismatched async switch continuation.');
+    }
 
-      for (int memberIndex = 0;
-          memberIndex < node.members.length;
-          memberIndex++) {
-        final member = node.members[memberIndex];
+    final previousEnvironment = environment;
+    environment = continuation.environment;
+
+    try {
+      while (continuation.memberIndex < node.members.length) {
+        final member = node.members[continuation.memberIndex];
         List<Statement> statementsToExecute = [];
 
-        if (member is SwitchCase) {
-          if (!matched) {
+        if (!continuation.memberPrepared && member is SwitchCase) {
+          if (!continuation.matched) {
             final caseValue = member.expression.accept<Object?>(this);
+            if (caseValue is AsyncSuspensionRequest) {
+              return caseValue;
+            }
             Logger.debug(
-                "[Switch] Checking legacy case value: $caseValue against $switchValue");
-            if (_areValuesEqual(switchValue, caseValue)) {
-              matched = true;
-              execute = true;
+                "[Switch] Checking legacy case value: $caseValue against ${continuation.switchValue}");
+            if (_areValuesEqual(continuation.switchValue, caseValue)) {
+              continuation.matched = true;
+              continuation.execute = true;
               Logger.debug("[Switch] Matched legacy case: $caseValue");
             }
           }
-          statementsToExecute = member.statements;
-        } else if (member is SwitchPatternCase) {
-          if (!matched) {
+          continuation.memberPrepared = true;
+        } else if (!continuation.memberPrepared &&
+            member is SwitchPatternCase) {
+          if (!continuation.matched) {
             final pattern = member.guardedPattern.pattern;
             final tempEnvironment = Environment(enclosing: environment);
             try {
-              _matchAndBind(pattern, switchValue, tempEnvironment);
+              _matchAndBind(
+                pattern,
+                continuation.switchValue,
+                tempEnvironment,
+              );
 
               bool guardPassed = true;
               if (member.guardedPattern.whenClause != null) {
@@ -9771,6 +10203,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                   final guardValue = member
                       .guardedPattern.whenClause!.expression
                       .accept<Object?>(this);
+                  if (guardValue is AsyncSuspensionRequest) {
+                    return guardValue;
+                  }
                   final bridgedGuard = toBridgedInstance(guardValue);
                   if (guardValue is bool) {
                     guardPassed = guardValue;
@@ -9787,8 +10222,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               }
 
               if (guardPassed) {
-                matched = true;
-                execute = true;
+                continuation.matched = true;
+                continuation.execute = true;
                 for (final name in tempEnvironment.values.keys) {
                   try {
                     final value = tempEnvironment.get(name);
@@ -9803,32 +10238,41 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                   "[Switch] Pattern ${pattern.runtimeType} did not match: ${e.message}");
             }
           }
-          statementsToExecute = member.statements;
-        } else if (member is SwitchDefault) {
+          continuation.memberPrepared = true;
+        } else if (!continuation.memberPrepared && member is SwitchDefault) {
           Logger.debug("[Switch] Reached default case.");
           // Execute default only if no previous case matched
-          if (!matched) {
-            execute = true;
+          if (!continuation.matched) {
+            continuation.execute = true;
           }
-          statementsToExecute = member.statements;
-        } else {
+          continuation.memberPrepared = true;
+        } else if (member is! SwitchCase &&
+            member is! SwitchPatternCase &&
+            member is! SwitchDefault) {
           throw StateError('Unknown switch member type: ${member.runtimeType}');
         }
+        statementsToExecute = member.statements;
 
         // Execute statements if needed (either matched this round or fell through)
-        if (execute) {
+        if (continuation.execute) {
           Logger.debug(
               "[Switch] Executing statements for matched/fallthrough/default...");
           try {
-            for (final statement in statementsToExecute) {
-              statement.accept<Object?>(this);
+            while (continuation.statementIndex < statementsToExecute.length) {
+              final statement =
+                  statementsToExecute[continuation.statementIndex];
+              final result = statement.accept<Object?>(this);
+              if (result is AsyncSuspensionRequest) {
+                return result;
+              }
+              continuation.statementIndex++;
             }
             // In modern Dart, after executing non-empty statements in a case,
             // we should exit the switch (unless it's truly a fall-through to an empty case)
             if (statementsToExecute.isNotEmpty) {
               // We just executed actual statements, so stop here
               // (no fall-through unless explicitly continuing with labeled continue)
-              execute = false;
+              continuation.execute = false;
               break; // Exit the switch
             }
           } on BreakException catch (e) {
@@ -9837,7 +10281,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             if (e.label == null || _currentStatementLabels.contains(e.label)) {
               // Unlabeled break OR labeled break targeting this switch.
               Logger.debug("[Switch] Breaking switch.");
-              execute = false; // Stop execution after this block
+              continuation.execute = false; // Stop execution after this block
               break; // Exit the loop over members
             } else {
               // Labeled break targeting an outer construct.
@@ -9845,14 +10289,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               rethrow;
             }
           } on ContinueException catch (e) {
-            if (e.label != null && labelIndexMap.containsKey(e.label)) {
+            if (e.label != null &&
+                continuation.labelIndexMap.containsKey(e.label)) {
               // Labeled continue targeting a case label in this switch
-              final targetIndex = labelIndexMap[e.label]!;
-              // Jump to the target case - set up for next iteration
-              memberIndex =
-                  targetIndex - 1; // -1 because the loop will increment it
-              matched = true; // Mark as matched so we continue executing
-              execute = true;
+              continuation.memberIndex = continuation.labelIndexMap[e.label]!;
+              continuation.statementIndex = 0;
+              continuation.memberPrepared = true;
+              continuation.matched = true;
+              continuation.execute = true;
               continue; // Skip to the target case
             } else if (e.label == null) {
               // Unlabeled continue in a switch is invalid
@@ -9864,7 +10308,15 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             }
           }
         }
+
+        continuation.memberIndex++;
+        continuation.memberPrepared = false;
+        continuation.statementIndex = 0;
       }
+      asyncState?.expressionContinuations.remove(node);
+    } catch (_) {
+      asyncState?.expressionContinuations.remove(node);
+      rethrow;
     } finally {
       environment = previousEnvironment;
     }
@@ -9887,11 +10339,24 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       throw RuntimeError("'await' can only be used inside an async function.");
     }
 
-    // Check if we are in invocation resumption mode
-    if (currentAsyncState!.isInvocationResumptionMode) {
+    final asyncState = currentAsyncState!;
+    if (asyncState.hasCompletedAwaitValue &&
+        identical(asyncState.completedAwaitExpression, node)) {
+      final completedValue = asyncState.completedAwaitValue;
+      asyncState.completedAwaitExpression = null;
+      asyncState.completedAwaitValue = null;
+      asyncState.hasCompletedAwaitValue = false;
+      asyncState.lastAwaitResult = null;
+      asyncState.awaitingEnvironment = null;
       Logger.debug(
-          "[AwaitExpression] In invocation resumption mode, returning last await result: ${currentAsyncState!.lastAwaitResult}");
-      return currentAsyncState!.lastAwaitResult;
+          '[AwaitExpression] Substituting the completed value at its exact await expression.');
+      return completedValue;
+    }
+    if (asyncState.hasCompletedAwaitValue) {
+      throw StateError(
+        'Async evaluation resumed at a different await expression than the '
+        'one completed by its owning frame.',
+      );
     }
 
     Logger.debug("[AwaitExpression] Evaluating expression for await...");
@@ -9899,7 +10364,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     // HANDLING NESTED SUSPENSIONS
     if (expressionValue is AsyncSuspensionRequest) {
-      // If the awaited expression itself is an await, just propagate its suspension request.
+      if (!identical(expressionValue.asyncState, asyncState)) {
+        throw StateError(
+          'An async suspension request crossed its owning function frame.',
+        );
+      }
       Logger.debug(
           "[AwaitExpression] Awaited expression itself suspended. Propagating AsyncSuspensionRequest.");
       return expressionValue;
@@ -9916,11 +10385,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       Logger.debug(
           "[AwaitExpression] Expression evaluated to a Future. Returning AsyncSuspensionRequest.");
       final future = futureValue as Future<Object?>;
+      asyncState.awaitingEnvironment = environment;
 
       // CRUCIAL: Return the suspension request with the future and the current state.
       // The async state machine will use this information.
       // Note: currentAsyncState cannot be null here because of the previous check.
-      return AsyncSuspensionRequest(future, currentAsyncState!);
+      return AsyncSuspensionRequest(
+        future,
+        asyncState,
+        awaitExpression: node,
+      );
     } else {
       // The argument to 'await' MUST be a Future.
       throw RuntimeError(
@@ -10610,36 +11084,68 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitRecordLiteral(RecordLiteral node) {
-    final positional = <Object?>[];
-    final named = <String, Object?>{};
-
-    for (final field in node.fields) {
-      if (field is RecordLiteralNamedField) {
-        final name = field.name.lexeme;
-        final value = field.fieldExpression.accept<Object?>(this);
-        if (named.containsKey(name)) {
-          throw RuntimeError(
-              "Record literal field '$name' specified more than once.");
-        }
-        named[name] = value;
-      } else {
-        // Positional field: expression
-        if (named.isNotEmpty) {
-          // As per Dart spec, positional fields must come before named fields
-          throw RuntimeError(
-              "Positional fields must come before named fields in record literal.");
-        }
-        positional.add(field.fieldExpression.accept<Object?>(this));
-      }
+    final asyncState = currentAsyncState;
+    final existing = asyncState?.expressionContinuations[node];
+    final continuation = switch (existing) {
+      null => _RecordContinuation(),
+      _RecordContinuation value => value,
+      _ => throw StateError('Mismatched async record continuation.'),
+    };
+    if (asyncState != null) {
+      asyncState.expressionContinuations[node] = continuation;
     }
-    Logger.debug("[visitRecordLiteral] Created record: ($positional, $named)");
-    return InterpretedRecord(positional, named);
+
+    try {
+      while (continuation.nextField < node.fields.length) {
+        final field = node.fields[continuation.nextField];
+        final value = field.fieldExpression.accept<Object?>(this);
+        if (value is AsyncSuspensionRequest) {
+          return value;
+        }
+        if (field is RecordLiteralNamedField) {
+          final name = field.name.lexeme;
+          if (continuation.namedFields.containsKey(name)) {
+            throw RuntimeError(
+                "Record literal field '$name' specified more than once.");
+          }
+          continuation.namedFields[name] = value;
+        } else {
+          if (continuation.namedFields.isNotEmpty) {
+            throw RuntimeError(
+                'Positional fields must come before named fields in record literal.');
+          }
+          continuation.positionalFields.add(value);
+        }
+        continuation.nextField++;
+      }
+
+      asyncState?.expressionContinuations.remove(node);
+      Logger.debug(
+          "[visitRecordLiteral] Created record: (${continuation.positionalFields}, ${continuation.namedFields})");
+      return InterpretedRecord(
+        continuation.positionalFields,
+        continuation.namedFields,
+      );
+    } catch (_) {
+      asyncState?.expressionContinuations.remove(node);
+      rethrow;
+    }
   }
 
   @override
   Object? visitPatternAssignment(PatternAssignment node) {
+    return _runWithExpressionContinuation(
+      node,
+      () => _visitPatternAssignment(node),
+    );
+  }
+
+  Object? _visitPatternAssignment(PatternAssignment node) {
     // 1. Evaluate the right-hand side expression
-    final rhsValue = node.expression.accept<Object?>(this);
+    final rhsValue = _evaluateContinuedExpression(node, node.expression);
+    if (rhsValue is AsyncSuspensionRequest) {
+      return rhsValue;
+    }
 
     // 2. Match the pattern against the value and bind variables
     try {
@@ -10658,70 +11164,96 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitSwitchExpression(SwitchExpression node) {
-    final switchValue = node.expression.accept<Object?>(this);
-    final originalEnvironment = environment; // Backup current environment
+    final asyncState = currentAsyncState;
+    final existing = asyncState?.expressionContinuations[node];
+    final continuation = switch (existing) {
+      null => _SwitchExpressionContinuation(environment),
+      _SwitchExpressionContinuation value => value,
+      _ => throw StateError('Mismatched async switch expression continuation.'),
+    };
+    asyncState?.expressionContinuations[node] = continuation;
 
-    for (final caseExpr in node.cases) {
-      final pattern = caseExpr.guardedPattern.pattern;
-      final guard = caseExpr.guardedPattern.whenClause?.expression;
-      final body = caseExpr.expression;
-
-      // Create a temporary environment for this case's pattern variables
-      // Enclose the *original* environment where the switch expression is evaluated
-      final caseEnvironment = Environment(enclosing: originalEnvironment);
-
-      try {
-        // Attempt to match and bind variables in the temporary environment
-        _matchAndBind(pattern, switchValue, caseEnvironment);
-        Logger.debug(
-            "[SwitchExpr] Pattern ${pattern.runtimeType} matched value ${switchValue?.runtimeType}");
-
-        // Pattern matched, now check the guard (if it exists)
-        bool guardPassed = true;
-        if (guard != null) {
-          final previousVisitorEnv = environment; // Backup
-          try {
-            environment = caseEnvironment; // Evaluate guard in case scope
-            final guardResult = guard.accept<Object?>(this);
-            if (guardResult is! bool) {
-              throw RuntimeError(
-                  "Switch expression 'when' clause must evaluate to a boolean.");
-            }
-            guardPassed = guardResult;
-            Logger.debug("[SwitchExpr] Guard evaluated to: $guardPassed");
-          } finally {
-            environment = previousVisitorEnv; // Restore
-          }
+    try {
+      if (!continuation.selectorComplete) {
+        final switchValue = node.expression.accept<Object?>(this);
+        if (switchValue is AsyncSuspensionRequest) {
+          return switchValue;
         }
-
-        // If guard passed (or no guard), evaluate and return the body result
-        if (guardPassed) {
-          Logger.debug("[SwitchExpr] Guard passed or absent. Evaluating body.");
-
-          final previousVisitorEnv = environment; // Backup
-          try {
-            environment = caseEnvironment; // Evaluate body in case scope
-            final result = body.accept<Object?>(this);
-            Logger.debug("[SwitchExpr] Body evaluated to: $result. Returning.");
-            return result; // Return the result of the matching case's body
-          } finally {
-            environment = previousVisitorEnv; // Restore
-          }
-        }
-      } on PatternMatchException catch (e) {
-        // Pattern didn't match, try the next case
-        Logger.debug(
-            "[SwitchExpr] Pattern ${pattern.runtimeType} did not match: ${e.message}. Trying next case.");
-        continue;
+        continuation.switchValue = switchValue;
+        continuation.selectorComplete = true;
       }
-      // If we reach here, it means the pattern matched but the guard failed.
-      Logger.debug(
-          "[SwitchExpr] Pattern matched but guard failed. Trying next case.");
-    } // End of loop through cases
 
-    // If no case matched and returned a value
-    throw RuntimeError(
-        "Switch expression was not exhaustive for value: $switchValue (${switchValue?.runtimeType})");
+      while (continuation.caseIndex < node.cases.length) {
+        final caseExpression = node.cases[continuation.caseIndex];
+        final pattern = caseExpression.guardedPattern.pattern;
+
+        if (continuation.caseEnvironment == null) {
+          final caseEnvironment =
+              Environment(enclosing: continuation.environment);
+          try {
+            _matchAndBind(pattern, continuation.switchValue, caseEnvironment);
+            continuation.caseEnvironment = caseEnvironment;
+          } on PatternMatchException catch (error) {
+            Logger.debug(
+              '[SwitchExpr] Pattern ${pattern.runtimeType} did not match: '
+              '${error.message}. Trying next case.',
+            );
+            continuation.caseIndex++;
+            continue;
+          }
+        }
+
+        if (!continuation.guardComplete) {
+          var guardPassed = true;
+          final guard = caseExpression.guardedPattern.whenClause?.expression;
+          if (guard != null) {
+            final previousEnvironment = environment;
+            environment = continuation.caseEnvironment!;
+            try {
+              final guardResult = guard.accept<Object?>(this);
+              if (guardResult is AsyncSuspensionRequest) {
+                return guardResult;
+              }
+              if (guardResult is! bool) {
+                throw RuntimeError(
+                  "Switch expression 'when' clause must evaluate to a boolean.",
+                );
+              }
+              guardPassed = guardResult;
+            } finally {
+              environment = previousEnvironment;
+            }
+          }
+          if (!guardPassed) {
+            continuation.caseIndex++;
+            continuation.caseEnvironment = null;
+            continue;
+          }
+          continuation.guardComplete = true;
+        }
+
+        final previousEnvironment = environment;
+        environment = continuation.caseEnvironment!;
+        try {
+          final result = caseExpression.expression.accept<Object?>(this);
+          if (result is AsyncSuspensionRequest) {
+            return result;
+          }
+          asyncState?.expressionContinuations.remove(node);
+          return result;
+        } finally {
+          environment = previousEnvironment;
+        }
+      }
+
+      throw RuntimeError(
+        'Switch expression was not exhaustive for value: '
+        '${continuation.switchValue} (${continuation.switchValue?.runtimeType})',
+      );
+    } catch (_) {
+      asyncState?.expressionContinuations.remove(node);
+      rethrow;
+    }
   }
 
   @override
