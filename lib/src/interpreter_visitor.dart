@@ -90,6 +90,10 @@ final class _SwitchExpressionContinuation {
 /// Main visitor that walks the AST and interprets the code.
 /// Uses a two-pass approach (DeclarationVisitor first).
 class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
+  // Interpreted literals use Object?-typed backing collections. Never inspect
+  // host collections to infer their reified type arguments.
+  static final Expando<bool> _interpretedCollections =
+      Expando<bool>('d4rt.interpretedCollection');
   Environment environment;
   final Environment globalEnvironment;
   final ModuleLoader moduleLoader; // Field for ModuleLoader
@@ -3308,28 +3312,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               evaluationResult as (List<Object?>, Map<String, Object?>);
 
           try {
-            // Handle factory constructors differently from regular constructors
-            if (namedConstructor.isFactory) {
-              // Factory constructors should create and return their own instance
-              // Do NOT create an instance beforehand
-              Logger.debug(
-                  "[MethodInvocation] Calling factory constructor '$methodName' directly");
-              final result =
-                  namedConstructor.call(this, positionalArgs, namedArgs);
-              return result;
-            } else {
-              // Regular constructor: create instance first, then call constructor
-              // 1. Create and initialize instance fields (using the class's public helper)
-              // Pass null for type arguments as they aren't applicable to named constructor resolution here
-              final instance =
-                  targetValue.createAndInitializeInstance(this, null);
-              // 2. Bind 'this' and call the named constructor logic
-              final boundConstructor = namedConstructor.bind(instance);
-              boundConstructor.call(
-                  this, positionalArgs, namedArgs); // Pass evaluated args
-              // Constructor call implicitly returns the bound instance.
-              return instance; // Return the created and potentially modified instance
-            }
+            return targetValue.invokeConstructor(
+              this,
+              methodName,
+              positionalArgs,
+              namedArgs,
+              null,
+            );
           } on ReturnException catch (e) {
             return e.value;
           } on RuntimeError catch (e) {
@@ -5325,10 +5314,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       if (node.constKeyword != null) {
         final constList = List.unmodifiable(list);
         environment.annotateRuntimeType(constList, listRuntimeType);
+        _interpretedCollections[constList] = true;
         return constList;
       }
 
       environment.annotateRuntimeType(list, listRuntimeType);
+      _interpretedCollections[list] = true;
 
       return list;
     } catch (_) {
@@ -9185,45 +9176,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           result = expressionValue is bool;
           break;
         case 'List':
-          if (expressionValue is! List) {
-            result = false;
-          } else if (typeNode.typeArguments == null ||
-              typeNode.typeArguments!.arguments.isEmpty) {
-            // No type arguments specified, just check if it's a List
-            result = true;
-          } else {
-            // Check generic type arguments
-            result = _checkGenericListType(
-                expressionValue, typeNode.typeArguments!.arguments[0]);
-          }
-          break;
         case 'Map':
-          if (expressionValue is! Map) {
-            result = false;
-          } else if (typeNode.typeArguments == null ||
-              typeNode.typeArguments!.arguments.isEmpty) {
-            // No type arguments specified, just check if it's a Map
-            result = true;
-          } else {
-            // Check generic type arguments
-            final typeArgs = typeNode.typeArguments!.arguments;
-            if (typeArgs.length >= 2) {
-              result = _checkGenericMapType(
-                  expressionValue, typeArgs[0], typeArgs[1]);
-            } else {
-              result = true; // Partial generic, just accept
-            }
-          }
-          break;
         case 'Set':
-          final unwrapped = expressionValue is BridgedInstance
-              ? expressionValue.nativeObject
-              : expressionValue;
-          if (unwrapped is! Set) {
-            result = false;
-          } else {
-            result = true;
-          }
+          final targetType = _resolveTypeAnnotation(typeNode);
+          result = _valueMatchesType(
+            expressionValue,
+            targetType,
+            typeAnnotation: typeNode,
+          );
           break;
         case 'Null':
           result = expressionValue == null;
@@ -9447,15 +9407,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       if (isMap) {
         final constMap = Map.unmodifiable(collection as Map<Object?, Object?>);
         environment.annotateRuntimeType(constMap, collectionRuntimeType);
+        _interpretedCollections[constMap] = true;
         return constMap;
       } else {
         final constSet = Set.unmodifiable(collection as Set<Object?>);
         environment.annotateRuntimeType(constSet, collectionRuntimeType);
+        _interpretedCollections[constSet] = true;
         return constSet;
       }
     }
 
     environment.annotateRuntimeType(collection, collectionRuntimeType);
+    _interpretedCollections[collection] = true;
 
     return collection;
   }
@@ -9639,18 +9602,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final (positionalArgs, namedArgs) =
           evaluationResult as (List<Object?>, Map<String, Object?>);
 
-      // Find and call the constructor (interpreted)
-      final constructorLookupName =
-          namedConstructorPart ?? ''; // Use '' for default
-      final constructor = klass.findConstructor(constructorLookupName);
-
-      if (constructor == null) {
-        throw RuntimeError(
-            "Class '$constructorName' does not have a constructor named '$constructorLookupName'.");
-      }
+      final constructorLookupName = namedConstructorPart ?? '';
 
       try {
-        // Evaluate the type arguments
         List<RuntimeType>? evaluatedTypeArguments;
         final typeArgsNode = node.constructorName.type.typeArguments;
         if (typeArgsNode != null) {
@@ -9659,45 +9613,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               .toList();
         }
 
-        // Handle factory constructors differently from regular constructors
-        if (constructor.isFactory) {
-          // Factory constructors don't need a pre-created instance
-          // They are responsible for creating and returning their own instance
-          Logger.debug(
-              "[InstanceCreation] Calling factory constructor '$constructorLookupName'");
-
-          // Call the factory constructor directly without creating an instance first
-          // The factory will create its own instance and return it
-          final result = constructor.call(
-              this, positionalArgs, namedArgs, evaluatedTypeArguments);
-
-          // Factory constructors should return an instance of the expected type
-          if (result is InterpretedInstance && result.klass == klass) {
-            return result;
-          } else if (result is InterpretedInstance) {
-            throw RuntimeError(
-                "Factory constructor '$constructorLookupName' returned an instance of '${result.klass.name}' but expected '$constructorName'.");
-          } else {
-            throw RuntimeError(
-                "Factory constructor '$constructorLookupName' must return an instance, but returned ${result?.runtimeType}.");
-          }
-        } else {
-          // Regular constructors: create instance first, then call constructor
-          Logger.debug(
-              "[InstanceCreation] Calling regular constructor '$constructorLookupName'");
-
-          // Create and initialize the fields, passing the type arguments
-          final instance =
-              klass.createAndInitializeInstance(this, evaluatedTypeArguments);
-          // Bind 'this' and call the constructor logic
-          final boundConstructor = constructor.bind(instance);
-          boundConstructor.call(
-              this, positionalArgs, namedArgs, evaluatedTypeArguments);
-          // The constructor call returns the instance
-          return instance;
-        }
+        return klass.invokeConstructor(
+          this,
+          constructorLookupName,
+          positionalArgs,
+          namedArgs,
+          evaluatedTypeArguments,
+        );
       } on RuntimeError catch (e) {
-        // Simplified error message
         throw RuntimeError(
             "Constructor execution error for '$constructorName.': ${e.message}");
       }
@@ -10448,7 +10371,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               typeAnnotation, environment);
 
           // Check if the value matches the expected type
-          if (!_valueMatchesType(value, expectedType)) {
+          if (!_valueMatchesType(
+            value,
+            expectedType,
+            typeAnnotation: typeAnnotation,
+          )) {
             throw PatternMatchException(
                 "Pattern type ${expectedType.name} does not match value type ${value?.runtimeType}");
           }
@@ -11071,8 +10998,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final typeAnnotation = pattern.type;
       final expectedType = InterpretedClass.resolveTypeAnnotationDynamic(
           typeAnnotation, environment);
-      if (!_valueMatchesType(value, expectedType)) {
-        throw PatternMatchException(
+      if (!_valueMatchesType(
+        value,
+        expectedType,
+        typeAnnotation: typeAnnotation,
+      )) {
+        throw RuntimeError(
             "Cast pattern failed: value is not of type ${expectedType.name}");
       }
       _matchAndBind(pattern.pattern, value, environment);
@@ -11706,26 +11637,156 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     return null; // Import directives do not produce a value.
   }
 
-  /// Helper method to check if a value matches a specific type in pattern matching
-  bool _valueMatchesType(Object? value, RuntimeType expectedType) {
-    // Handle null case
+  bool _nativeCollectionIs<T>(Object value, String collection, int index) {
+    return switch (collection) {
+      'List' => value is List<T>,
+      'Map' => index == 0 ? value is Map<T, dynamic> : value is Map<dynamic, T>,
+      'Set' => value is Set<T>,
+      _ => false,
+    };
+  }
+
+  bool _matchesNativeCollectionArgument(
+      Object value, String collection, int index, NamedType argument) {
+    final nullable = argument.question != null;
+    return switch (argument.name.lexeme) {
+      'dynamic' => _nativeCollectionIs<dynamic>(value, collection, index),
+      'Object' => nullable
+          ? _nativeCollectionIs<Object?>(value, collection, index)
+          : _nativeCollectionIs<Object>(value, collection, index),
+      'Null' => _nativeCollectionIs<Null>(value, collection, index),
+      'Never' => _nativeCollectionIs<Never>(value, collection, index),
+      'int' => nullable
+          ? _nativeCollectionIs<int?>(value, collection, index)
+          : _nativeCollectionIs<int>(value, collection, index),
+      'double' => nullable
+          ? _nativeCollectionIs<double?>(value, collection, index)
+          : _nativeCollectionIs<double>(value, collection, index),
+      'num' => nullable
+          ? _nativeCollectionIs<num?>(value, collection, index)
+          : _nativeCollectionIs<num>(value, collection, index),
+      'String' => nullable
+          ? _nativeCollectionIs<String?>(value, collection, index)
+          : _nativeCollectionIs<String>(value, collection, index),
+      'bool' => nullable
+          ? _nativeCollectionIs<bool?>(value, collection, index)
+          : _nativeCollectionIs<bool>(value, collection, index),
+      _ => false,
+    };
+  }
+
+  /// Checks host collection arguments using Dart's reified interface checks.
+  /// RuntimeType cannot recover generic arguments from an unannotated host value.
+  bool _valueMatchesType(
+    Object? value,
+    RuntimeType expectedType, {
+    TypeAnnotation? typeAnnotation,
+  }) {
     if (value == null) {
-      // Null only matches nullable types (we'll just check String, int, etc. exact matches)
-      return false;
+      return typeAnnotation is NamedType &&
+          (typeAnnotation.question != null ||
+              typeAnnotation.name.lexeme == 'dynamic' ||
+              typeAnnotation.name.lexeme == 'Null');
     }
 
-    // Check for exact type matches
-    if (expectedType.name == 'String' && value is String) return true;
-    if (expectedType.name == 'int' && value is int) return true;
-    if (expectedType.name == 'double' && value is double) return true;
-    if (expectedType.name == 'bool' && value is bool) return true;
-    if (expectedType.name == 'List' && value is List) return true;
-    if (expectedType.name == 'Map' && value is Map) return true;
-    if (expectedType.name == 'Set' && value is Set) return true;
+    final nativeValue = value is BridgedInstance ? value.nativeObject : value;
+    if (expectedType is AppliedRuntimeType &&
+        (expectedType.baseType.name == 'List' ||
+            expectedType.baseType.name == 'Map' ||
+            expectedType.baseType.name == 'Set')) {
+      if ((expectedType.baseType.name == 'List' && nativeValue is! List) ||
+          (expectedType.baseType.name == 'Map' && nativeValue is! Map) ||
+          (expectedType.baseType.name == 'Set' && nativeValue is! Set)) {
+        return false;
+      }
+      final arguments = typeAnnotation is NamedType
+          ? typeAnnotation.typeArguments?.arguments
+          : null;
+      if (arguments == null ||
+          arguments.length != expectedType.typeArguments.length ||
+          arguments.any((argument) => argument is! NamedType)) {
+        return false;
+      }
+      // A literal created by the interpreter has an Object?-typed backing
+      // collection. Its retained annotation takes precedence over contents;
+      // when nested inference was unavailable, inspect only that owned backing
+      // collection. Host collections never enter this path.
+      if (_interpretedCollections[nativeValue] == true) {
+        final annotated = environment.getAnnotatedRuntimeType(nativeValue);
+        if (annotated != null &&
+            !annotated.isSubtypeOf(expectedType, value: nativeValue)) {
+          return false;
+        }
+        if (nativeValue is List) {
+          return nativeValue.isEmpty
+              ? annotated != null ||
+                  _matchesNativeCollectionArgument(
+                      nativeValue, 'List', 0, arguments.first as NamedType)
+              : nativeValue.every((element) => _valueMatchesType(
+                    element,
+                    expectedType.typeArguments.first,
+                    typeAnnotation: arguments.first,
+                  ));
+        }
+        if (nativeValue is Map) {
+          return nativeValue.isEmpty
+              ? annotated != null ||
+                  (_matchesNativeCollectionArgument(
+                          nativeValue, 'Map', 0, arguments[0] as NamedType) &&
+                      _matchesNativeCollectionArgument(
+                          nativeValue, 'Map', 1, arguments[1] as NamedType))
+              : nativeValue.entries.every((entry) =>
+                  _valueMatchesType(
+                    entry.key,
+                    expectedType.typeArguments[0],
+                    typeAnnotation: arguments[0],
+                  ) &&
+                  _valueMatchesType(
+                    entry.value,
+                    expectedType.typeArguments[1],
+                    typeAnnotation: arguments[1],
+                  ));
+        }
+        if (nativeValue is Set) {
+          return nativeValue.isEmpty
+              ? annotated != null ||
+                  _matchesNativeCollectionArgument(
+                      nativeValue, 'Set', 0, arguments.first as NamedType)
+              : nativeValue.every((element) => _valueMatchesType(
+                    element,
+                    expectedType.typeArguments.first,
+                    typeAnnotation: arguments.first,
+                  ));
+        }
+        return false;
+      }
+      for (var index = 0; index < arguments.length; index++) {
+        final argument = arguments[index];
+        if (argument is! NamedType ||
+            !_matchesNativeCollectionArgument(
+                nativeValue, expectedType.baseType.name, index, argument)) {
+          return false;
+        }
+      }
+      return true;
+    }
 
-    // Check for InterpretedClass instances
+    value = nativeValue;
+    final expectedTypeName = expectedType is AppliedRuntimeType
+        ? expectedType.baseType.name
+        : expectedType.name;
+    if (expectedTypeName == 'dynamic') return true;
+    if (expectedTypeName == 'Object') return true;
+    if (expectedTypeName == 'String' && value is String) return true;
+    if (expectedTypeName == 'int' && value is int) return true;
+    if (expectedTypeName == 'double' && value is double) return true;
+    if (expectedTypeName == 'num' && value is num) return true;
+    if (expectedTypeName == 'bool' && value is bool) return true;
+    if (expectedTypeName == 'List' && value is List) return true;
+    if (expectedTypeName == 'Map' && value is Map) return true;
+    if (expectedTypeName == 'Set' && value is Set) return true;
+
     if (value is InterpretedInstance && expectedType is InterpretedClass) {
-      // Check if the instance's class matches or is a subclass
       InterpretedClass? currentClass = value.klass;
       while (currentClass != null) {
         if (currentClass == expectedType) {
@@ -11733,10 +11794,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
         currentClass = currentClass.superclass;
       }
-      return false;
     }
 
-    // Default: no match
     return false;
   }
 

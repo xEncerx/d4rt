@@ -109,6 +109,9 @@ class InterpretedFunction implements Callable {
   final bool isAsyncGenerator;
   // Factory flag for constructors
   final bool isFactory;
+
+  /// The analyzer descriptor for a redirecting factory target, if present.
+  final ConstructorName? redirectedConstructor;
   // Default constructor flag - set for classes without explicit constructors
   final bool isDefaultConstructor;
 
@@ -193,6 +196,7 @@ class InterpretedFunction implements Callable {
     this.isGenerator = false,
     this.isAsyncGenerator = false,
     this.isFactory = false,
+    this.redirectedConstructor,
     this.isDefaultConstructor = false,
     this.declaredReturnType,
     this.isNullable = false,
@@ -282,6 +286,7 @@ class InterpretedFunction implements Callable {
           isAsync: false, // Constructors cannot be async
           isFactory:
               declaration.factoryKeyword != null, // Detect factory constructors
+          redirectedConstructor: declaration.redirectedConstructor,
           // Constructors don't have their own type parameters - they inherit from their class
           typeParameterNames: const [],
           typeParameterBounds: const {},
@@ -449,6 +454,7 @@ class InterpretedFunction implements Callable {
       isGenerator: isGenerator,
       isAsyncGenerator: isAsyncGenerator,
       isFactory: isFactory, // Copy the factory flag
+      redirectedConstructor: redirectedConstructor,
       isDefaultConstructor:
           isDefaultConstructor, // Copy default constructor flag
       declaredReturnType: declaredReturnType,

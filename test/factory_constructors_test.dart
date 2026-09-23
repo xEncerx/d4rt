@@ -82,4 +82,67 @@ void main() {
     expect(list[0], equals('test@domain.com'));
     expect(list[1], equals('invalid@example.com'));
   });
+
+  test('Unnamed block factory forwards its initialized instance', () {
+    final source = '''
+      class Value {
+        final String value;
+
+        Value._(this.value);
+
+        factory Value(String value) {
+          return Value._(value);
+        }
+      }
+
+      main() {
+        final instance = Value('forwarded');
+        return [instance is Value, instance.value];
+      }
+    ''';
+
+    expect(execute(source), equals([true, 'forwarded']));
+  });
+
+  test('Redirecting factory forwards to its initialized target', () {
+    final source = '''
+      class RedirectedValue {
+        final String value;
+
+        RedirectedValue._(this.value);
+
+        factory RedirectedValue(String value) = RedirectedValue._;
+      }
+
+      main() {
+        final instance = RedirectedValue('redirected');
+        return [instance is RedirectedValue, instance.value];
+      }
+    ''';
+
+    expect(execute(source), equals([true, 'redirected']));
+  });
+
+  test('Factory calls return independent instances', () {
+    final source = '''
+      class MutableValue {
+        String value;
+
+        MutableValue._(this.value);
+
+        factory MutableValue(String value) {
+          return MutableValue._(value);
+        }
+      }
+
+      main() {
+        final first = MutableValue('first');
+        final second = MutableValue('second');
+        first.value = 'changed';
+        return [first.value, second.value];
+      }
+    ''';
+
+    expect(execute(source), equals(['changed', 'second']));
+  });
 }

@@ -575,46 +575,83 @@ class InterpretedClass implements Callable, RuntimeType {
     return instance;
   }
 
+  Object? invokeConstructor(
+    InterpreterVisitor visitor,
+    String constructorName,
+    List<Object?> positionalArguments,
+    Map<String, Object?> namedArguments,
+    List<RuntimeType>? typeArguments,
+  ) {
+    final constructor = findConstructor(constructorName);
+    if (constructor == null) {
+      throw RuntimeError(
+          "Class '$name' does not have a constructor named '$constructorName'.");
+    }
+
+    if (constructor.isFactory) {
+      final redirectTarget = constructor.redirectedConstructor;
+      final Object? result;
+      if (redirectTarget != null) {
+        final targetType = redirectTarget.type;
+        final targetClassName =
+            targetType.importPrefix?.name.lexeme ?? targetType.name.lexeme;
+        final targetConstructorName = targetType.importPrefix != null
+            ? targetType.name.lexeme
+            : redirectTarget.name?.name ?? '';
+        final targetClassValue = constructor.closure.get(targetClassName);
+        if (targetClassValue is! InterpretedClass) {
+          throw RuntimeError(
+              "Redirecting factory constructor '$name.$constructorName' targets non-interpreted class '$targetClassName'.");
+        }
+        result = targetClassValue.invokeConstructor(
+          visitor,
+          targetConstructorName,
+          positionalArguments,
+          namedArguments,
+          typeArguments,
+        );
+      } else {
+        result = constructor.call(
+          visitor,
+          positionalArguments,
+          namedArguments,
+          typeArguments,
+        );
+      }
+
+      if (result is! InterpretedInstance || !result.klass.isSubtypeOf(this)) {
+        final actualType = result is InterpretedInstance
+            ? result.klass.name
+            : '${result?.runtimeType}';
+        throw RuntimeError(
+            "Factory constructor '$name.$constructorName' returned '$actualType', which is not an instance of '$name'.");
+      }
+      return result;
+    }
+
+    final instance = createAndInitializeInstance(visitor, typeArguments);
+    constructor
+        .bind(instance)
+        .call(visitor, positionalArguments, namedArguments, typeArguments);
+    return instance;
+  }
+
   @override
   Object? call(InterpreterVisitor visitor, List<Object?> positionalArguments,
       [Map<String, Object?> namedArguments = const {},
       List<RuntimeType>? typeArguments]) {
-    // 1. Create and initialize instance using the new helper
-    final instance = createAndInitializeInstance(visitor, typeArguments);
-
-    // 2. Find the UNNAMED constructor
-    final constructor = findConstructor(''); // Look for the default constructor
-
-    // 3. Call constructor if found, binding 'this' (which is the instance)
-    if (constructor != null) {
-      try {
-        // The constructor function already has the class closure.
-        // Binding it adds 'this' to a new environment enclosing the class closure.
-        // Parameter evaluation and body execution will happen in environments
-        // enclosing this bound environment.
-        final boundConstructor = constructor.bind(instance);
-        // Pass initializers to call?
-        boundConstructor.call(
-            visitor, positionalArguments, namedArguments, typeArguments);
-      } on RuntimeError catch (e) {
-        throw RuntimeError(
-            "Error during constructor execution for class '$name': ${e.message}");
-      }
-    } else {
-      // No explicit constructor found. Check arity for default constructor.
-      if (positionalArguments.isNotEmpty || (namedArguments.isNotEmpty)) {
-        throw RuntimeError(
-            "Class '$name' does not have an unnamed constructor that accepts arguments.");
-      }
-      // If no constructor and no args passed, it's okay (implicit default constructor).
+    try {
+      return invokeConstructor(
+        visitor,
+        '',
+        positionalArguments,
+        namedArguments,
+        typeArguments,
+      );
+    } on RuntimeError catch (e) {
+      throw RuntimeError(
+          "Error during constructor execution for class '$name': ${e.message}");
     }
-
-    // Field initializers from constructor list (e.g., : this.x = y) need separate handling.
-    // This should happen *after* field initializers above but *before* constructor body.
-    // This logic needs to be added to InterpretedFunction.call for constructors.
-
-    // 4. Return the initialized instance
-    return instance;
   }
 
   @override
