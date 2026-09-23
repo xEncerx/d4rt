@@ -1,3 +1,7 @@
+## 0.3.1
+- Return the value produced by unnamed factory constructors and execute redirecting factory constructors.
+- Match reified generic `List`, `Map`, and `Set` types for host collections in `is`, declared type patterns, and cast patterns while retaining nested interpreter-literal matching.
+
 ## 0.3.0
 - **BREAKING**: Require `analyzer ^13.3.0` and migrate interpreter AST handling to the analyzer 13 API.
 - Preserve callable, introspection, and generator semantics across the analyzer migration with focused compatibility tests.
