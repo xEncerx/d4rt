@@ -464,6 +464,57 @@ class InterpretedFunction implements Callable {
     return boundFunction;
   }
 
+  // Bind omitted type arguments from the invocation's typed parameters.
+  // Keep these bindings in the execution environment, never on the callable:
+  // the same function can be invoked with different element types.
+  void _inferTypeArgument(TypeAnnotation? parameterType, RuntimeType? valueType,
+      Environment executionEnvironment) {
+    if (parameterType is! NamedType || valueType == null) return;
+
+    final name = parameterType.name.lexeme;
+    if (typeParameterNames.contains(name)) {
+      final bound = typeParameterBounds[name];
+      if (bound != null && !_checkTypeSatisfiesBound(valueType, bound)) {
+        throw RuntimeError(
+            "Type argument '${valueType.name}' for type parameter '$name' does not satisfy bound '${bound.name}' in function '${_name ?? '<anonymous>'}'");
+      }
+
+      final previous = executionEnvironment.get(name) as RuntimeType;
+      if (previous is TypeParameter) {
+        executionEnvironment.assign(name, valueType);
+      } else if (valueType.name != previous.name &&
+          !valueType.isSubtypeOf(previous)) {
+        RuntimeType inferred;
+        if (previous.isSubtypeOf(valueType)) {
+          inferred = valueType;
+        } else if (bound != null) {
+          inferred = bound;
+        } else {
+          final numType = executionEnvironment.get('num') as RuntimeType;
+          inferred = _checkTypeSatisfiesBound(previous, numType) &&
+                  _checkTypeSatisfiesBound(valueType, numType)
+              ? numType
+              : executionEnvironment.get('Object') as RuntimeType;
+        }
+        executionEnvironment.assign(name, inferred);
+      }
+      return;
+    }
+
+    final arguments = parameterType.typeArguments?.arguments;
+    if (arguments == null ||
+        valueType is! AppliedRuntimeType ||
+        name != valueType.baseType.name ||
+        arguments.length != valueType.typeArguments.length) {
+      return;
+    }
+
+    for (var i = 0; i < arguments.length; i++) {
+      _inferTypeArgument(
+          arguments[i], valueType.typeArguments[i], executionEnvironment);
+    }
+  }
+
   /// Helper to setup environment, bind args, and run initializers.
   /// Returns the execution environment and whether redirection occurred.
   _ExecutionPreparationResult _prepareExecutionEnvironment(
@@ -648,6 +699,15 @@ class InterpretedFunction implements Callable {
             // Optional parameters default to null if no default value specified
             valueToDefine = null;
           }
+        }
+
+        if (typeParameterNames.isNotEmpty &&
+            (typeArguments == null || typeArguments.isEmpty) &&
+            actualParam is RegularFormalParameter) {
+          _inferTypeArgument(
+              actualParam.type,
+              executionEnvironment.getRuntimeType(valueToDefine),
+              executionEnvironment);
         }
 
         // Store super parameter values for later forwarding to parent constructor

@@ -6322,6 +6322,15 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           declaredType = currentCallable.declaredReturnType;
           isNullable = currentCallable.isNullable;
 
+          // The declaration's type can still contain T. Resolve it in this
+          // invocation's environment, where inferred or explicit type
+          // arguments are bound, rather than in the declaration's closure.
+          if (currentCallable.typeParameterNames.isNotEmpty) {
+            declaredType = _resolveTypeAnnotationWithEnvironment(
+                eDecl.returnType, environment,
+                isAsync: eDecl.functionExpression.body.isAsynchronous);
+          }
+
           if (eDecl.functionExpression.body.isAsynchronous &&
               eDecl.returnType is NamedType) {
             final returnTypeNode = eDecl.returnType as NamedType;

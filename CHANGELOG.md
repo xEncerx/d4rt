@@ -1,6 +1,7 @@
 ## 0.3.1
 - Return the value produced by unnamed factory constructors and execute redirecting factory constructors.
 - Match reified generic `List`, `Map`, and `Set` types for host collections in `is`, declared type patterns, and cast patterns while retaining nested interpreter-literal matching.
+- Check generic function `List<T>` returns against invocation-scoped type arguments, including inferred arguments in constructor initializers and nested calls.
 
 ## 0.3.0
 - **BREAKING**: Require `analyzer ^13.3.0` and migrate interpreter AST handling to the analyzer 13 API.

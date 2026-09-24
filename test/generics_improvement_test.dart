@@ -256,6 +256,157 @@ void main() {
       );
     });
 
+    test(
+        'Inferred generic list returns stay scoped through initializers and nested calls',
+        () {
+      final code = '''
+        enum Kind { first, second }
+
+        List<T> echo<T>(List<T> values) {
+          return values;
+        }
+
+        List<T> forward<T>(List<T> values) {
+          return echo<T>(values);
+        }
+
+        class Holder {
+          Holder(List<Kind> input)
+              : direct = echo(input),
+                nested = forward(input);
+
+          final List<Kind> direct;
+          final List<Kind> nested;
+        }
+
+        main() {
+          final holder = Holder(<Kind>[Kind.first, Kind.second]);
+          final numbers = echo(<int>[7]);
+          final labels = forward(<String>['label']);
+          final again = Holder(<Kind>[Kind.second]);
+          return [
+            echo(<Kind>[Kind.first])[0] == Kind.first,
+            holder.direct[1] == Kind.second,
+            forward(<Kind>[Kind.second])[0] == Kind.second,
+            holder.nested[0] == Kind.first,
+            numbers is List<int>,
+            numbers[0] == 7,
+            labels is List<String>,
+            labels[0] == 'label',
+            holder.direct[0] == Kind.first,
+            again.nested[0] == Kind.second,
+          ];
+        }
+      ''';
+
+      expect(execute(code), equals(List<bool>.filled(10, true)));
+    });
+
+    test(
+        'Incompatible inferred generic list return is rejected inside nested initializer',
+        () {
+      final code = '''
+        enum Kind { first }
+
+        List<T> malformed<T>(List<T> values) {
+          return <int>[7];
+        }
+
+        List<T> forward<T>(List<T> values) {
+          return malformed<T>(values);
+        }
+
+        class Holder {
+          Holder(List<Kind> input) : values = forward(input);
+          final List<Kind> values;
+        }
+
+        main() => Holder(<Kind>[Kind.first]).values;
+      ''';
+
+      expect(
+        () => execute(code),
+        throwsA(isA<RuntimeError>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains("can't be returned"), contains("malformed")),
+        )),
+      );
+    });
+
+    test('Inferred generic list type respects its declared numeric bound', () {
+      final code = '''
+        List<T> malformed<T extends num>(List<T> values) {
+          return <String>['bad'];
+        }
+
+        main() => malformed(<String>['input']);
+      ''';
+
+      expect(
+        () => execute(code),
+        throwsA(isA<RuntimeError>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('String'), contains('does not satisfy bound')),
+        )),
+      );
+    });
+
+    test('Repeated inferred list parameters retain a common numeric type', () {
+      final code = '''
+        List<T> first<T>(List<T> a, List<T> b) {
+          return a;
+        }
+
+        main() {
+          final broadFirst = first(<num>[1.5], <int>[2]);
+          final narrowFirst = first(<int>[2], <num>[1.5]);
+          final mixedNumbers = first(<int>[2], <double>[1.5]);
+          return [
+            broadFirst[0] == 1.5,
+            narrowFirst[0] == 2,
+            mixedNumbers[0] == 2,
+          ];
+        }
+      ''';
+
+      expect(execute(code), equals([true, true, true]));
+    });
+
+    test(
+        'Explicit generic list returns are checked against their type argument',
+        () {
+      final validCode = '''
+        List<T> echo<T>(List<T> values) {
+          return values;
+        }
+
+        main() {
+          final ints = echo<int>(<int>[7]);
+          final strings = echo<String>(<String>['label']);
+          return [ints[0] == 7, strings[0] == 'label'];
+        }
+      ''';
+      expect(execute(validCode), equals([true, true]));
+
+      final invalidCode = '''
+        List<T> malformed<T>(List<T> values) {
+          return <String>['bad'];
+        }
+
+        main() => malformed<int>(<int>[7]);
+      ''';
+      expect(
+        () => execute(invalidCode),
+        throwsA(isA<RuntimeError>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains("can't be returned"), contains('malformed')),
+        )),
+      );
+    });
+
     test('Typed variable declarations annotate empty collections', () {
       final code = '''
         List<int> build() {
