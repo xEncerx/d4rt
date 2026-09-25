@@ -1,3 +1,5 @@
+import 'package:d4rt/d4rt.dart';
+
 import 'package:test/test.dart';
 
 import '../../interpreter_test.dart';
@@ -572,6 +574,103 @@ void main() {
         result.sort();
         expect(result, equals([1, 3]));
       });
+    });
+    test('typed literals and unmodifiable factories retain distinct types', () {
+      final interpreter = D4rt();
+      var hostSawReifiedList = false;
+      interpreter.registertopLevelFunction('inspect',
+          (visitor, args, named, types) {
+        final value = args.single;
+        hostSawReifiedList = value is List<String> &&
+            value.runtimeType.toString().contains('String');
+        return null;
+      });
+      final result = interpreter.execute(source: '''
+        Object main() {
+          final literal = <String>['a'];
+          final immutable = List<String>.unmodifiable(literal);
+          inspect(immutable);
+          bool caught = false;
+          try {
+            immutable.add('b');
+          } on UnsupportedError {
+            caught = true;
+          }
+          return [
+            literal.runtimeType.toString(),
+            immutable is List<String>,
+            caught,
+            immutable.single
+          ];
+        }
+      ''');
+      expect(result, ['List<String>', true, true, 'a']);
+      expect(hostSawReifiedList, isTrue);
+    });
+
+    test('host lists retain reification and mutability through invocation', () {
+      const definitions = '''
+        Object inspectList(List<String> values) {
+          bool caught = false;
+          try {
+            values.add('forbidden');
+          } on UnsupportedError {
+            caught = true;
+          }
+          return [
+            values is List<String>,
+            values.runtimeType.toString(),
+            caught,
+            values.single
+          ];
+        }
+        List<String> append(List<String> values) {
+          values.add('new');
+          return values;
+        }
+        class Probe {
+          Object inspect(List<String> values) => inspectList(values);
+          List<String> appendValue(List<String> values) => append(values);
+        }
+      ''';
+      for (final instanceMethod in [true, false]) {
+        final interpreter = D4rt();
+        final entry = interpreter.execute(
+          source: '$definitions main() => '
+              '${instanceMethod ? 'Probe()' : 'inspectList'};',
+        );
+        final immutable = List<String>.unmodifiable(['original']);
+        final observed = instanceMethod
+            ? interpreter.invoke('inspect', [immutable])
+            : interpreter.invokeInterpretedFunction(
+                entry as InterpretedFunction, [immutable]);
+        expect(observed,
+            [true, immutable.runtimeType.toString(), true, 'original'],
+            reason:
+                'host immutable list through ${instanceMethod ? 'invoke' : 'invokeInterpretedFunction'}');
+        expect(immutable, ['original']);
+        expect(() => immutable.add('forbidden'), throwsUnsupportedError);
+
+        final writable = <String>['original'];
+        final appended = instanceMethod
+            ? interpreter.invoke('appendValue', [writable])
+            : interpreter.invokeInterpretedFunction(
+                interpreter.execute(
+                  source: '$definitions main() => append;',
+                ) as InterpretedFunction,
+                [writable],
+              );
+        expect(writable, ['original', 'new']);
+        expect(appended, same(writable));
+      }
+    });
+
+    test('typed unmodifiable factory rejects incompatible values', () {
+      final interpreter = D4rt();
+      expect(() => interpreter.execute(source: '''
+            Object main() =>
+                List<String>.unmodifiable(<Object?>['ok', 7]);
+          '''), throwsA(isA<RuntimeError>()));
     });
   });
 }

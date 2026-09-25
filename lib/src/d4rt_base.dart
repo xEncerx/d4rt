@@ -1220,9 +1220,23 @@ class D4rt {
       return nativeValue;
     }
     if (nativeValue is List) {
-      return nativeValue
-          .map((v) => _bridgeNativeValueToInterpreter(v, globalEnv))
-          .toList();
+      // Retain native reification, mutability and identity when no element
+      // needs bridging. Only materialize a new list for converted elements.
+      List<Object?>? converted;
+      for (var index = 0; index < nativeValue.length; index++) {
+        final element = nativeValue[index];
+        final bridged = _bridgeNativeValueToInterpreter(element, globalEnv);
+        if (converted != null) {
+          converted.add(bridged);
+        } else if (!identical(element, bridged)) {
+          converted = <Object?>[];
+          for (var previous = 0; previous < index; previous++) {
+            converted.add(nativeValue[previous]);
+          }
+          converted.add(bridged);
+        }
+      }
+      return converted ?? nativeValue;
     }
     if (nativeValue is Map) {
       return nativeValue.map((key, value) => MapEntry(
@@ -1294,6 +1308,9 @@ class D4rt {
       return interpreterValue.nativeValue;
     }
     if (interpreterValue is List) {
+      if (!InterpreterVisitor.isInterpretedCollection(interpreterValue)) {
+        return interpreterValue;
+      }
       return interpreterValue.map(_bridgeInterpreterValueToNative).toList();
     }
     if (interpreterValue is Map) {

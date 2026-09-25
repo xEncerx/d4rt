@@ -1,5 +1,32 @@
 import 'package:d4rt/d4rt.dart';
 
+/// Creates a native unmodifiable list whose supported core type is reified.
+///
+/// Interpreter-defined type arguments cannot be reified by Dart; they must
+/// not be passed to the host as a differently typed native list.
+List<Object?> unmodifiableListWithType(Iterable values, RuntimeType type) {
+  switch (type.name) {
+    case 'String':
+      return List<String>.unmodifiable(values.cast<String>());
+    case 'int':
+      return List<int>.unmodifiable(values.cast<int>());
+    case 'double':
+      return List<double>.unmodifiable(values.cast<double>());
+    case 'num':
+      return List<num>.unmodifiable(values.cast<num>());
+    case 'bool':
+      return List<bool>.unmodifiable(values.cast<bool>());
+    case 'Object':
+      return List<Object>.unmodifiable(values.cast<Object>());
+    case 'dynamic':
+    case 'Object?':
+      return List<Object?>.unmodifiable(values);
+    default:
+      throw RuntimeError(
+          'Cannot create a native List<${type.name}>: type is not reifiable by the bridge.');
+  }
+}
+
 class ListCore {
   static BridgedClass get definition => BridgedClass(
         nativeType: List,

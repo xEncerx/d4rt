@@ -95,6 +95,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   // host collections to infer their reified type arguments.
   static final Expando<bool> _interpretedCollections =
       Expando<bool>('d4rt.interpretedCollection');
+
+  /// Whether a collection has interpreter-owned backing rather than a native
+  /// host representation with reified type arguments.
+  static bool isInterpretedCollection(Object value) =>
+      _interpretedCollections[value] == true;
   Environment environment;
   final Environment globalEnvironment;
   final ModuleLoader moduleLoader; // Field for ModuleLoader
@@ -352,12 +357,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         return className;
       }
 
-      // For BridgedInstance, return the native object's runtimeType
-      if (value is BridgedInstance) {
-        return value.nativeObject.runtimeType;
+      // Interpreter-owned literals retain generic metadata; host collections
+      // always report their actual native reified type.
+      final nativeValue = value is BridgedInstance ? value.nativeObject : value;
+      if (nativeValue is List && _interpretedCollections[nativeValue] == true) {
+        final annotated = environment.getAnnotatedRuntimeType(nativeValue);
+        if (annotated != null) return annotated;
       }
-      // For other types, use default runtimeType
-      return value?.runtimeType;
+      return nativeValue?.runtimeType;
     }
     return null;
   }
@@ -3266,10 +3273,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             // Native calls shouldn't throw ReturnException directly, but handle defensively
             return e.value;
+          } on UnsupportedError {
+            rethrow;
           } catch (e, s) {
-            // Add the stack trace for debugging
-            Logger.log("Native Error Stack Trace: $s"); // Print stack trace
-            // Catch potential errors from the native code/adapter
+            Logger.log("Native Error Stack Trace: $s");
             throw RuntimeError(
                 "Native error during bridged method call '$methodName' on ${bridgedClass.name}: $e");
           }
@@ -3482,8 +3489,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             // Relaunch the adapter error
             throw RuntimeError(
                 "Error during bridged constructor '$methodName' for class '${bridgedClass.name}': ${e.message}");
+          } on UnsupportedError {
+            rethrow;
           } catch (e, s) {
-            // Catch native errors from the adapter/native constructor
             Logger.error(
                 "[visitMethodInvocation] Native exception during bridged constructor '${bridgedClass.name}.$methodName': $e\n$s");
             throw RuntimeError(
@@ -3511,6 +3519,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on RuntimeError catch (e) {
               throw RuntimeError(
                   "Error during static bridged method call '$methodName' on ${bridgedClass.name}: ${e.message}");
+            } on UnsupportedError {
+              rethrow;
             } catch (e, s) {
               Logger.warn(
                   "[visitMethodInvocation] Native exception during static bridged method call '${bridgedClass.name}.$methodName': $e\n$s");
@@ -9671,8 +9681,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               _evaluateArguments(node.argumentList);
 
           try {
-            // Call the static method adapter
-            final result = staticMethodAdapter(this, positionalArgs, namedArgs);
+            final typeArgs = constructorNameNode.typeArguments?.arguments;
+            final result = constructorName == 'List' &&
+                    namedConstructorPart == 'unmodifiable' &&
+                    typeArgs != null &&
+                    typeArgs.length == 1
+                ? unmodifiableListWithType(
+                    positionalArgs[0] as Iterable,
+                    _resolveTypeAnnotation(typeArgs.single),
+                  )
+                : staticMethodAdapter(this, positionalArgs, namedArgs);
 
             // Static methods return values directly (often native values like bool, String, etc.)
             Logger.debug(

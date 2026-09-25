@@ -58,6 +58,10 @@ bool catchClauseMatches(
         return thrownValue != null;
       case 'dynamic':
         return true;
+      case 'UnsupportedError':
+        return thrownValue is UnsupportedError;
+      case 'NoSuchMethodError':
+        return thrownValue is NoSuchMethodError;
       case 'void':
         return false;
     }
