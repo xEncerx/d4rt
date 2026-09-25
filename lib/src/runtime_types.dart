@@ -1338,6 +1338,15 @@ class InterpretedInstance implements RuntimeValue {
       currentClass = currentClass.superclass;
     }
 
+    // A getter without a setter is not an expando field. All interpreted
+    // assignment forms eventually reach this write boundary.
+    if (!_fields.containsKey(name) && klass.findInstanceGetter(name) != null) {
+      throw NoSuchMethodError.withInvocation(
+        this,
+        Invocation.setter(Symbol(name), value),
+      );
+    }
+
     // No setter found in the hierarchy or bridge, assign directly to the field
     Logger.debug(
         "[Instance.set] No setter found for '$name'. Setting field directly. Instance $hashCode");

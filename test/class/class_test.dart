@@ -1,3 +1,4 @@
+import 'package:d4rt/d4rt.dart';
 import 'package:test/test.dart';
 
 import '../interpreter_test.dart';
@@ -50,6 +51,51 @@ void main() {
         }
       ''';
       expect(execute(source), equals(['initial', 'updated']));
+    });
+    test('inherited getter-only writes fail across assignment forms', () {
+      const source = '''
+        class Parent {
+          int get locked => 5;
+          int writable = 1;
+          int _setValue = 0;
+          set setValue(int value) { _setValue = value; }
+          int get setValue => _setValue;
+        }
+        class Child extends Parent {
+          bool writeSuper() {
+            try { super.locked = 7; } on NoSuchMethodError { return true; }
+            return false;
+          }
+          bool writeImplicit() {
+            try { locked = 8; } on NoSuchMethodError { return true; }
+            return false;
+          }
+        }
+        Object main() {
+          dynamic item = Child();
+          int rejected = 0;
+          try { item.locked = 6; } on NoSuchMethodError { rejected++; }
+          try { item.locked += 1; } on NoSuchMethodError { rejected++; }
+          try { item.locked++; } on NoSuchMethodError { rejected++; }
+          try { item..locked = 9; } on NoSuchMethodError { rejected++; }
+          try { item..locked += 1; } on NoSuchMethodError { rejected++; }
+          if (item.writeSuper()) rejected++;
+          if (item.writeImplicit()) rejected++;
+          item.writable = 3;
+          item.setValue = 4;
+          item..setValue += 3;
+          return [rejected, item.locked, item.writable, item.setValue];
+        }
+      ''';
+      expect(execute(source), [7, 5, 3, 7]);
+    });
+    test('Type variables dispatch instance methods without static fallthrough',
+        () {
+      expect(
+          execute('String main() { Type type = int; return type.toString(); }'),
+          'int');
+      expect(() => execute('Object main() => int.toString();'),
+          throwsA(isA<RuntimeError>()));
     });
 
     test('Instance method call (no parameters)', () {

@@ -2309,6 +2309,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             try {
               instance.set(propertyName, rhsValue);
               return rhsValue;
+            } on NoSuchMethodError {
+              rethrow;
             } catch (e) {
               throw RuntimeError(
                   "Setter for '$propertyName' not found in superclass chain of '${instance.klass.name}' for 'super' assignment: $e");
@@ -2337,6 +2339,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             // Try direct field assignment
             try {
               instance.set(propertyName, newValue);
+            } on NoSuchMethodError {
+              rethrow;
             } catch (e) {
               throw RuntimeError(
                   "Cannot set '$propertyName' in superclass chain of '${instance.klass.name}' for compound 'super' assignment: $e");
@@ -3433,6 +3437,15 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               "Bridged enum '${bridgedEnum.name}' has no static method named '$methodName'.");
         }
       } else if (targetValue is BridgedClass) {
+        // A class object stored in a variable is a Type receiver, not a
+        // static access on the named class.
+        final target = node.target;
+        if (target is SimpleIdentifier && target.name != targetValue.name) {
+          if (node.methodName.name == 'toString' &&
+              node.argumentList.arguments.isEmpty) {
+            return targetValue.name;
+          }
+        }
         // This is a method call on a bridged class (bridged constructor or static method)
         final bridgedClass = targetValue;
         final methodName = node.methodName.name;
@@ -5564,7 +5577,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         Object? currentValue;
         // Need to get the current value from the target
         if (targetValue is InterpretedInstance) {
-          currentValue = targetValue.get(propertyName);
+          currentValue = targetValue.get(propertyName, visitor: this);
         } else if (toBridgedInstance(targetValue).$2) {
           final bridgedInstance = toBridgedInstance(targetValue).$1!;
           final getter = bridgedInstance.bridgedClass
@@ -5583,12 +5596,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
       // Set the value on the target
       if (targetValue is InterpretedInstance) {
-        final setter = targetValue.klass.findInstanceSetter(propertyName);
-        if (setter != null) {
-          setter.bind(targetValue).call(this, [newValue], {});
-        } else {
-          targetValue.set(propertyName, newValue, this); // Direct field set
-        }
+        targetValue.set(propertyName, newValue, this);
       } else if (toBridgedInstance(targetValue).$2) {
         final bridgedInstance = toBridgedInstance(targetValue).$1!;
         final setter = bridgedInstance.bridgedClass
@@ -5699,7 +5707,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         Object? currentValue;
         // 1. Get current value from targetValue using propertyName
         if (targetValue is InterpretedInstance) {
-          currentValue = targetValue.get(propertyName); // Handles field/getter
+          currentValue = targetValue.get(propertyName, visitor: this);
         } else if (toBridgedInstance(targetValue).$2) {
           final bridgedInstance = toBridgedInstance(targetValue).$1!;
           final getter = bridgedInstance.bridgedClass
@@ -5719,13 +5727,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
       // 3. Set the new value on targetValue using propertyName
       if (targetValue is InterpretedInstance) {
-        final setter = targetValue.klass.findInstanceSetter(propertyName);
-        if (setter != null) {
-          setter.bind(targetValue).call(this, [newValue], {});
-        } else {
-          // Direct field assignment if no setter
-          targetValue.set(propertyName, newValue, this);
-        }
+        targetValue.set(propertyName, newValue, this);
       } else if (toBridgedInstance(targetValue).$2) {
         final bridgedInstance = toBridgedInstance(targetValue).$1!;
         final setter = bridgedInstance.bridgedClass
@@ -6731,7 +6733,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
           if (targetValue is InterpretedInstance) {
             // Get current value via getter or field
-            final currentValue = targetValue.get(propertyName);
+            final currentValue = targetValue.get(propertyName, visitor: this);
 
             // Calculate new value
             Object? newValue;
@@ -6787,7 +6789,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
           if (targetValue is InterpretedInstance) {
             // Get current value via getter or field
-            final currentValue = targetValue.get(propertyName);
+            final currentValue = targetValue.get(propertyName, visitor: this);
 
             // Calculate new value
             Object? newValue;
@@ -7147,7 +7149,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
       if (targetValue is InterpretedInstance) {
         // Get current value via getter or field
-        final currentValue = targetValue.get(propertyName);
+        final currentValue = targetValue.get(propertyName, visitor: this);
         final originalValue = currentValue; // Save for return
 
         // Calculate new value
@@ -7203,7 +7205,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
       if (targetValue is InterpretedInstance) {
         // Get current value via getter or field
-        final currentValue = targetValue.get(propertyName);
+        final currentValue = targetValue.get(propertyName, visitor: this);
         final originalValue = currentValue; // Save for return
 
         // Calculate new value
