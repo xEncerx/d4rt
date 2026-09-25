@@ -4,6 +4,7 @@ import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/analysis/features.dart';
 import 'package:d4rt/src/stdlib/convert.dart';
 import 'package:d4rt/src/stdlib/isolate.dart';
+import 'package:d4rt/src/invocation_deadline.dart';
 import 'package:d4rt/src/stdlib/math.dart';
 import 'package:d4rt/src/stdlib/collection.dart';
 import 'package:d4rt/src/stdlib/typed_data.dart';
@@ -55,9 +56,8 @@ class ModuleLoader {
   final List<Map<String, BridgedEnumDefinition>> bridgedEnumDefinitions;
   final List<Map<String, BridgedClass>> bridgedClases;
   final D4rt? d4rt; // Reference to D4rt instance for permission checking
-  final Duration? _rootTimeout;
+  final InvocationDeadline? deadline;
   final int? _rootMaxSteps;
-  final DateTime? _rootStartTime;
   final void Function(String)? _rootOnPrint;
 
   ModuleLoader(this.globalEnvironment, this.sources,
@@ -65,13 +65,10 @@ class ModuleLoader {
       {this.d4rt,
       this.basePath,
       this.allowFileSystemImports = false,
-      Duration? rootTimeout,
+      this.deadline,
       int? rootMaxSteps,
-      DateTime? rootStartTime,
       void Function(String)? rootOnPrint})
-      : _rootTimeout = rootTimeout,
-        _rootMaxSteps = rootMaxSteps,
-        _rootStartTime = rootStartTime,
+      : _rootMaxSteps = rootMaxSteps,
         _rootOnPrint = rootOnPrint {
     Logger.debug(
         "[ModuleLoader] Initialized with ${sources.length} preloaded sources.");
@@ -389,9 +386,8 @@ class ModuleLoader {
             moduleEnvironment, // Important: use the module's local environment as base
         moduleLoader: this, // Pass the current loader
         initiallibrary: uri, // The URI of the module being interpreted
-        timeout: isRootModule ? _rootTimeout : null,
+        deadline: deadline,
         maxSteps: isRootModule ? _rootMaxSteps : null,
-        startTime: isRootModule ? _rootStartTime : null,
         onPrint: isRootModule ? _rootOnPrint : null,
       );
 

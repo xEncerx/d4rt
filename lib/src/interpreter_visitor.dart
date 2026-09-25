@@ -4,6 +4,7 @@ import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:d4rt/d4rt.dart';
 import 'package:d4rt/src/catch_clause_matcher.dart';
+import 'package:d4rt/src/invocation_deadline.dart';
 import 'package:d4rt/src/module_loader.dart';
 import 'package:d4rt/src/stdlib/core/list.dart';
 import 'package:d4rt/src/type_annotation_utils.dart';
@@ -104,14 +105,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       currentSyncGeneratorYields; // Collect yields in sync* generators
   Set<String> _currentStatementLabels = {};
 
-  /// Maximum allowed execution duration (if any).
-  final Duration? timeout;
+  /// The invocation-owned deadline, shared with imported module visitors.
+  final InvocationDeadline? deadline;
+
+  Duration? get timeout => deadline?.timeout;
 
   /// Maximum allowed execution steps (if any).
   final int? maxSteps;
 
-  /// Execution start time for timeout calculations.
-  final DateTime? _startTime;
+  /// True even when the timeout timer has not yet been serviced.
+  bool get executionTimedOut => deadline?.expired ?? false;
 
   /// Total number of execution steps performed so far.
   int _stepCount = 0;
@@ -129,16 +132,31 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     required this.globalEnvironment,
     required this.moduleLoader, // Accept ModuleLoader in the constructor
     Uri? initiallibrary, // New: Optional URI for the initial source
-    this.timeout,
+    Duration? timeout,
+    InvocationDeadline? deadline,
     this.maxSteps,
-    DateTime? startTime,
     this.onPrint,
   })  : currentLibrary = initiallibrary,
-        _startTime = startTime ?? (timeout != null ? DateTime.now() : null),
+        deadline =
+            deadline ?? (timeout == null ? null : InvocationDeadline(timeout)),
         environment = globalEnvironment {
     if (initiallibrary != null) {
       Logger.debug(
           "[InterpreterVisitor] Initial source URI set to: $initiallibrary");
+    }
+  }
+
+  /// Checks the invocation clock without charging an interpreter step.
+  void checkDeadline() {
+    if (deadline?.expired ?? false) throw deadline!.exception;
+  }
+
+  Object? _evaluateBeforeDeadline(Object? Function() evaluate) {
+    checkDeadline();
+    try {
+      return evaluate();
+    } finally {
+      checkDeadline();
     }
   }
 
@@ -148,7 +166,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   ) {
     final asyncState = currentAsyncState;
     if (asyncState == null) {
-      return evaluate();
+      return _evaluateBeforeDeadline(evaluate);
     }
 
     final existing = asyncState.expressionContinuations[owner];
@@ -163,7 +181,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     asyncState.expressionContinuations[owner] = continuation;
 
     try {
-      final result = evaluate();
+      final result = _evaluateBeforeDeadline(evaluate);
       if (result is! AsyncSuspensionRequest) {
         asyncState.expressionContinuations.remove(owner);
       }
@@ -187,7 +205,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   ) {
     final asyncState = currentAsyncState;
     if (asyncState == null) {
-      return evaluate();
+      return _evaluateBeforeDeadline(evaluate);
     }
 
     final continuation = asyncState.expressionContinuations[owner];
@@ -203,7 +221,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       return continuation.completedValues[cursor];
     }
 
-    final result = evaluate();
+    final result = _evaluateBeforeDeadline(evaluate);
     if (result is! AsyncSuspensionRequest) {
       continuation.completedValues.add(result);
       continuation.replayCursor++;
@@ -214,6 +232,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   /// Checks if the execution has exceeded configured timeout or step limits.
   /// Throws [ExecutionLimitException] or [ExecutionTimeoutException] if limits are exceeded.
   void checkExecutionLimits() {
+    checkDeadline();
     if (maxSteps != null) {
       _stepCount++;
       if (_stepCount > maxSteps!) {
@@ -224,19 +243,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
     } else if (timeout != null) {
       _stepCount++;
-    }
-
-    if (timeout != null && _startTime != null) {
-      // Check elapsed time periodically (every 50 steps) to reduce overhead
-      if (_stepCount % 50 == 0) {
-        final elapsed = DateTime.now().difference(_startTime);
-        if (elapsed > timeout!) {
-          throw ExecutionTimeoutException(
-            'Execution timed out after ${timeout!.inMilliseconds}ms.',
-            timeout: timeout!,
-          );
-        }
-      }
     }
   }
 
@@ -456,6 +462,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         : _resolveTypeAnnotation(node.variables.type);
 
     for (final variable in node.variables.variables) {
+      checkDeadline();
       if (variable.name.lexeme == '_') {
         // Evaluate initializer for potential side effects, but don't define
         variable.initializer?.accept<Object?>(this);
@@ -468,6 +475,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         environment.define(variable.name.lexeme, value);
       }
     }
+    checkDeadline();
     return null;
   }
 
@@ -5336,10 +5344,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   @override
   Object? visitCascadeExpression(CascadeExpression node) {
     // 1. Evaluate the target expression ONCE.
+    checkDeadline();
     final targetValue = node.target.accept<Object?>(this);
 
     // 2. Execute each cascade section ON THE ORIGINAL targetValue.
     for (final section in node.cascadeSections) {
+      checkDeadline();
       // We need to manually handle each section type, forcing the target.
       if (section is MethodInvocation) {
         _executeCascadeMethodInvocation(targetValue, section);
@@ -5357,6 +5367,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             'Cascade section type not handled: ${section.runtimeType}');
       }
     }
+    checkDeadline();
 
     // 3. The cascade expression evaluates to the original target value.
     return targetValue;
@@ -8928,6 +8939,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       caughtInternalException = e; // Store the internal exception
       caughtStackTrace = s;
       returnValue = null; // No normal try result
+    } on ExecutionTimeoutException {
+      // Invocation deadlines are not interpreted exceptions: no catch/finally
+      // clause may run once the terminal deadline has been reached.
+      rethrow;
     } catch (userException, userStack) {
       // Catch any other exception (potentially native)
       Logger.debug(
@@ -9043,6 +9058,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
       } // fin boucle for catchClauses
     } // fin if (caughtInternalException != null)
+
+    if (executionTimedOut) throw deadline!.exception;
 
     // 3. Execute the finally block (always)
     // Store potential exception from finally block (must be internal type now)
@@ -9722,11 +9739,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     Map<String, Object?> namedArgs = {};
     bool namedArgsEncountered = false;
 
+    checkDeadline();
     for (final arg in argumentList.arguments) {
       if (arg is NamedArgument) {
         namedArgsEncountered = true;
         final name = arg.name.lexeme;
         final value = arg.argumentExpression.accept<Object?>(this);
+        checkDeadline();
 
         // Check for async suspension in named arguments
         if (value is AsyncSuspensionRequest) {
@@ -9745,6 +9764,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               "Positional arguments cannot follow named arguments.");
         }
         final a = arg.accept<Object?>(this);
+        checkDeadline();
 
         // Check for async suspension in positional arguments
         if (a is AsyncSuspensionRequest) {
@@ -9756,6 +9776,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             bridgedInstance.$2 ? bridgedInstance.$1!.nativeObject : a));
       }
     }
+    checkDeadline();
 
     return (positionalArgs, namedArgs);
   }
@@ -9792,11 +9813,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     try {
       while (continuation.nextArgument < argumentList.arguments.length) {
+        checkDeadline();
         final arg = argumentList.arguments[continuation.nextArgument];
         if (arg is NamedArgument) {
           continuation.namedArgumentsEncountered = true;
           final name = arg.name.lexeme;
           final value = arg.argumentExpression.accept<Object?>(this);
+          checkDeadline();
           if (value is AsyncSuspensionRequest) {
             return value;
           }
@@ -9815,6 +9838,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             );
           }
           final value = arg.accept<Object?>(this);
+          checkDeadline();
           if (value is AsyncSuspensionRequest) {
             return value;
           }
@@ -9827,6 +9851,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
         continuation.nextArgument++;
       }
+      checkDeadline();
 
       asyncState.expressionContinuations.remove(argumentList);
       return (

@@ -11,6 +11,7 @@ import 'package:d4rt/src/environment.dart';
 import 'package:d4rt/src/interpreter_visitor.dart';
 import 'package:d4rt/src/module_loader.dart';
 import 'package:d4rt/src/exceptions.dart';
+import 'package:d4rt/src/invocation_deadline.dart';
 import 'package:d4rt/src/callable.dart';
 import 'package:d4rt/src/declaration_visitor.dart';
 import 'package:d4rt/src/stdlib/stdlib.dart';
@@ -190,9 +191,8 @@ class D4rt {
   ModuleLoader _initModule(Map<String, String>? sources,
       {String? basePath,
       bool allowFileSystemImports = false,
-      Duration? timeout,
+      InvocationDeadline? deadline,
       int? maxSteps,
-      DateTime? startTime,
       void Function(String)? onPrint,
       bool configureLoadedRoot = false}) {
     final moduleLoader = ModuleLoader(
@@ -203,9 +203,8 @@ class D4rt {
       d4rt: this,
       basePath: basePath,
       allowFileSystemImports: allowFileSystemImports,
-      rootTimeout: configureLoadedRoot ? timeout : null,
+      deadline: deadline,
       rootMaxSteps: configureLoadedRoot ? maxSteps : null,
-      rootStartTime: configureLoadedRoot ? startTime : null,
       rootOnPrint: configureLoadedRoot ? onPrint ?? this.onPrint : null,
     );
     _visitor = configureLoadedRoot
@@ -213,9 +212,8 @@ class D4rt {
         : InterpreterVisitor(
             globalEnvironment: moduleLoader.globalEnvironment,
             moduleLoader: moduleLoader,
-            timeout: timeout,
+            deadline: deadline,
             maxSteps: maxSteps,
-            startTime: startTime,
             onPrint: onPrint ?? this.onPrint,
           );
     Stdlib(moduleLoader.globalEnvironment).register();
@@ -432,18 +430,18 @@ class D4rt {
       positionalArgs = [args];
     }
 
-    final startTime = (timeout != null) ? DateTime.now() : null;
-    _moduleLoader = _initModule(
+    final deadline = timeout == null ? null : InvocationDeadline(timeout);
+    final moduleLoader = _moduleLoader = _initModule(
       sources,
       basePath: script.basePath,
       allowFileSystemImports: allowFileSystemImports,
-      timeout: timeout,
+      deadline: deadline,
       maxSteps: maxSteps,
-      startTime: startTime,
       onPrint: onPrint ?? this.onPrint,
     );
 
     return _executeCompilationUnit(
+      moduleLoader: moduleLoader,
       compilationUnit: script.compilationUnit,
       name: name,
       positionalArgs: positionalArgs,
@@ -451,9 +449,8 @@ class D4rt {
       libraryUri: script.uri,
       basePath: script.basePath,
       allowFileSystemImports: allowFileSystemImports,
-      timeout: timeout,
       maxSteps: maxSteps,
-      startTime: startTime,
+      deadline: deadline,
       onPrint: onPrint ?? this.onPrint,
     );
   }
@@ -496,14 +493,13 @@ class D4rt {
       positionalArgs = [args];
     }
 
-    final startTime = (timeout != null) ? DateTime.now() : null;
-    _moduleLoader = _initModule(
+    final deadline = timeout == null ? null : InvocationDeadline(timeout);
+    final moduleLoader = _moduleLoader = _initModule(
       sources,
       basePath: basePath,
       allowFileSystemImports: allowFileSystemImports,
-      timeout: timeout,
+      deadline: deadline,
       maxSteps: maxSteps,
-      startTime: startTime,
       onPrint: onPrint ?? this.onPrint,
       configureLoadedRoot: library != null,
     );
@@ -513,7 +509,7 @@ class D4rt {
       Logger.debug(
           "[D4rt.execute] Attempting to load the $name source via ModuleLoader for URI: $library");
 
-      if (!_moduleLoader.sources.containsKey(library.toString()) &&
+      if (!moduleLoader.sources.containsKey(library.toString()) &&
           !allowFileSystemImports) {
         final errorMessage =
             "[D4rt.execute] The $name source URI '$library' was not found in sources. If this module should be loaded from the filesystem, provide basePath and enable allowFileSystemImports.";
@@ -528,10 +524,11 @@ class D4rt {
 
       late final LoadedModule loadedRootModule;
       try {
-        loadedRootModule = _moduleLoader.loadModule(Uri.parse(library));
+        loadedRootModule = moduleLoader.loadModule(Uri.parse(library));
         Logger.debug(
             "[D4rt.execute] $name source loaded and parsed successfully via ModuleLoader for $library.");
       } catch (e) {
+        if (deadline?.expired ?? false) throw deadline!.exception;
         Logger.error(
             "[D4rt.execute] Failed to load $name source $library via ModuleLoader: $e");
         if (e is SourceCodeException || e is RuntimeError) {
@@ -547,6 +544,7 @@ class D4rt {
         name: name,
         positionalArgs: positionalArgs,
         namedArgs: namedArgs,
+        deadline: deadline,
       );
     }
 
@@ -591,6 +589,7 @@ class D4rt {
     }
 
     return _executeCompilationUnit(
+      moduleLoader: moduleLoader,
       compilationUnit: compilationUnit,
       name: name,
       positionalArgs: positionalArgs,
@@ -598,9 +597,8 @@ class D4rt {
       libraryUri: null,
       basePath: basePath,
       allowFileSystemImports: allowFileSystemImports,
-      timeout: timeout,
       maxSteps: maxSteps,
-      startTime: startTime,
+      deadline: deadline,
       onPrint: onPrint ?? this.onPrint,
     );
   }
@@ -608,12 +606,15 @@ class D4rt {
   dynamic _executeLoadedModule({
     required LoadedModule loadedModule,
     required String name,
+    required InvocationDeadline? deadline,
     List<Object?>? positionalArgs,
     Map<String, Object?>? namedArgs,
   }) {
-    _visitor = loadedModule.interpreter;
+    final visitor = _visitor = loadedModule.interpreter;
     return _invokeFunction(
+      visitor: visitor,
       executionEnvironment: loadedModule.environment,
+      deadline: deadline,
       name: name,
       positionalArgs: positionalArgs,
       namedArgs: namedArgs,
@@ -622,18 +623,18 @@ class D4rt {
 
   dynamic _executeCompilationUnit({
     required CompilationUnit compilationUnit,
+    required ModuleLoader moduleLoader,
     required String name,
+    required InvocationDeadline? deadline,
     List<Object?>? positionalArgs,
     Map<String, Object?>? namedArgs,
     Uri? libraryUri,
     String? basePath,
     bool allowFileSystemImports = false,
-    Duration? timeout,
     int? maxSteps,
-    DateTime? startTime,
     void Function(String)? onPrint,
   }) {
-    final Environment executionEnvironment = _moduleLoader.globalEnvironment;
+    final Environment executionEnvironment = moduleLoader.globalEnvironment;
     Logger.debug("[execute] Starting Pass 1: Declaration");
     final declarationVisitor = DeclarationVisitor(executionEnvironment);
     for (final declaration in compilationUnit.declarations) {
@@ -641,16 +642,15 @@ class D4rt {
     }
     Logger.debug("[execute] Finished Pass 1: Declaration");
 
-    _visitor = InterpreterVisitor(
+    final visitor = _visitor = InterpreterVisitor(
         globalEnvironment: executionEnvironment,
-        moduleLoader: _moduleLoader,
+        moduleLoader: moduleLoader,
         initiallibrary: libraryUri ??
             (allowFileSystemImports && basePath != null
                 ? basePathDirectoryUri(basePath)
                 : null),
-        timeout: timeout,
+        deadline: deadline,
         maxSteps: maxSteps,
-        startTime: startTime,
         onPrint: onPrint ?? this.onPrint);
     try {
       Logger.debug(" [execute] Starting Pass 2: Interpretation");
@@ -660,7 +660,7 @@ class D4rt {
         if (directive is ImportDirective) {
           Logger.debug(
               " [execute]   - Processing ImportDirective: ${directive.uri.stringValue}");
-          _visitor!.visitImportDirective(directive);
+          visitor.visitImportDirective(directive);
         } else {
           Logger.debug(
               " [execute]   - Skipping directive of type: ${directive.runtimeType}");
@@ -680,8 +680,9 @@ class D4rt {
       for (final declaration in compilationUnit.declarations) {
         if (declaration is ExtensionDeclaration) {
           try {
-            declaration.accept<Object?>(_visitor!);
+            declaration.accept<Object?>(visitor);
           } catch (e) {
+            if (deadline?.expired ?? false) throw deadline!.exception;
             Logger.warn(
                 " [execute] Warning while processing extension '${declaration.name}': $e");
           }
@@ -692,17 +693,19 @@ class D4rt {
       // Process all other declarations
       for (final declaration in compilationUnit.declarations) {
         if (declaration is! ExtensionDeclaration) {
-          declaration.accept<Object?>(_visitor!);
+          declaration.accept<Object?>(visitor);
         }
       }
       Logger.debug(" [execute] Finished processing declarations");
     } on InternalInterpreterException catch (e) {
+      if (deadline?.expired ?? false) throw deadline!.exception;
       if (e.originalThrownValue is RuntimeError) {
         throw e.originalThrownValue as RuntimeError;
       } else {
         throw e.originalThrownValue!;
       }
     } catch (e) {
+      if (deadline?.expired ?? false) throw deadline!.exception;
       if (e is RuntimeError || e is SourceCodeException) {
         rethrow;
       } else {
@@ -710,8 +713,11 @@ class D4rt {
       }
     }
 
+    if (deadline?.expired ?? false) throw deadline!.exception;
     return _invokeFunction(
+      visitor: visitor,
       executionEnvironment: executionEnvironment,
+      deadline: deadline,
       name: name,
       positionalArgs: positionalArgs,
       namedArgs: namedArgs,
@@ -719,7 +725,9 @@ class D4rt {
   }
 
   dynamic _invokeFunction({
+    required InterpreterVisitor visitor,
     required Environment executionEnvironment,
+    required InvocationDeadline? deadline,
     required String name,
     List<Object?>? positionalArgs,
     Map<String, Object?>? namedArgs,
@@ -752,46 +760,51 @@ class D4rt {
 
       Logger.debug(
           "[execute] Calling '$name' with positionalArgs: $interpreterArgs, namedArgs: $interpreterNamedArgs");
-      functionResult = functionCallable.call(
-          _visitor!, interpreterArgs, interpreterNamedArgs);
+      functionResult =
+          functionCallable.call(visitor, interpreterArgs, interpreterNamedArgs);
       Logger.debug(" [execute] Finished Pass 2: Interpretation");
     } on InternalInterpreterException catch (e) {
+      if (deadline?.expired ?? false) throw deadline!.exception;
       if (e.originalThrownValue is RuntimeError) {
         throw e.originalThrownValue as RuntimeError;
       } else {
         throw e.originalThrownValue!;
       }
     } catch (e) {
+      if (deadline?.expired ?? false) throw deadline!.exception;
       if (e is RuntimeError || e is SourceCodeException) {
         rethrow;
       } else {
         throw RuntimeError('Unexpected error: $e');
       }
     }
+    if (deadline?.expired ?? false) throw deadline!.exception;
 
     if (functionResult is InterpretedInstance) {
       _interpretedInstance = functionResult;
     }
     final resultValue = _bridgeInterpreterValueToNative(functionResult);
     if (resultValue is Future) {
-      try {
-        _hasExecutedOnce = true;
+      _hasExecutedOnce = true;
+      if (deadline == null) {
         return resultValue
             .then((value) => _bridgeInterpreterValueToNative(value));
-      } on InternalInterpreterException catch (e) {
-        if (e.originalThrownValue is RuntimeError) {
-          throw e.originalThrownValue as RuntimeError;
-        } else {
-          throw e.originalThrownValue!;
-        }
-      } catch (e) {
-        if (e is RuntimeError) {
-          rethrow;
-        } else {
-          throw RuntimeError('Unexpected error: $e');
-        }
       }
+      // Check the monotonic clock on completion, not just in the timer callback:
+      // a native Future can finish before an overdue timer is delivered.
+      final bridgedResult = resultValue.then((value) {
+        if (deadline.expired) throw deadline.exception;
+        return _bridgeInterpreterValueToNative(value);
+      }, onError: (Object error, StackTrace stackTrace) {
+        if (deadline.expired) throw deadline.exception;
+        Error.throwWithStackTrace(error, stackTrace);
+      });
+      return bridgedResult.timeout(deadline.remaining, onTimeout: () {
+        deadline.expire();
+        throw deadline.exception;
+      });
     }
+    if (deadline?.expired ?? false) throw deadline!.exception;
     _hasExecutedOnce = true;
     return resultValue;
   }

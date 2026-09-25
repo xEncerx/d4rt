@@ -1422,6 +1422,7 @@ class InterpretedFunction implements Callable {
 
     // Main loop of state machine execution
     while (currentNode != null) {
+      if (visitor.executionTimedOut) return;
       // Save current visitor environment (in case of error)
       final originalVisitorEnv = visitor.environment;
       final previousAsyncState = visitor.currentAsyncState;
@@ -2337,6 +2338,7 @@ class InterpretedFunction implements Callable {
 
           // Attach the callbacks to the Future
           suspension.future.then((futureResult) {
+            if (visitor.executionTimedOut) return;
             if (currentState.generatorCancelled &&
                 !resumesGeneratorCancellation) {
               return;
@@ -2415,6 +2417,7 @@ class InterpretedFunction implements Callable {
             // Reschedule the state machine execution
             _scheduleStateMachineRun(visitor, currentState);
           }).catchError((Object error, StackTrace stackTrace) {
+            if (visitor.executionTimedOut) return;
             if (currentState.generatorCancelled &&
                 !resumesGeneratorCancellation) {
               return;
@@ -2634,6 +2637,7 @@ class InterpretedFunction implements Callable {
   // Schedule the state machine execution via microtask
   static void _scheduleStateMachineRun(
       InterpreterVisitor visitor, AsyncExecutionState state) {
+    if (visitor.executionTimedOut) return;
     // Check if the completer is already completed to avoid unnecessary executions
     if (state.completer.isCompleted) {
       Logger.debug(
@@ -2745,6 +2749,7 @@ class InterpretedFunction implements Callable {
 
   static void _handleAsyncError(InterpreterVisitor visitor,
       AsyncExecutionState state, AstNode nodeWhereErrorOccurred) {
+    if (visitor.executionTimedOut) return;
     state.returnAfterFinally = null;
     state.hasReturnAfterFinally = false;
     state.resumeReturnAfterFinallyFrom = null;
@@ -4400,8 +4405,13 @@ class NativeFunction implements Callable, RuntimeType {
   Object? call(InterpreterVisitor visitor, List<Object?> positionalArguments,
       [Map<String, Object?> namedArguments = const {},
       List<RuntimeType>? typeArguments]) {
-    return _function(
-        visitor, positionalArguments, namedArguments, typeArguments);
+    visitor.checkDeadline();
+    try {
+      return _function(
+          visitor, positionalArguments, namedArguments, typeArguments);
+    } finally {
+      visitor.checkDeadline();
+    }
   }
 
   @override
