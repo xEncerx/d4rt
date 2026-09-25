@@ -1,3 +1,10 @@
+## 0.3.2
+- Give each invocation, including same-instance reentrant initializer calls, an independent monotonic terminal deadline shared with imported modules and async frames; stop interpreted calls after a synchronous native callback crosses the deadline, and discard late native results/errors even when their completion precedes an overdue timeout timer. Already-started native work remains noncancellable.
+- Reject writes to inherited getter-only members, including compound cascades, while preserving legal fields and setters.
+- Retain interpreted list literal type reporting, reify supported typed unmodifiable native lists, and preserve host-origin native list types and immutability when passing them into interpreted calls.
+- Allow interpreted catches of native `UnsupportedError` from unmodifiable collection mutations.
+- Dispatch `Type` variables as instance receivers without permitting invalid static calls.
+
 ## 0.3.1
 - Return the value produced by unnamed factory constructors and execute redirecting factory constructors.
 - Match reified generic `List`, `Map`, and `Set` types for host collections in `is`, declared type patterns, and cast patterns while retaining nested interpreter-literal matching.
