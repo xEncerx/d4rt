@@ -10344,10 +10344,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       return completedValue;
     }
     if (asyncState.hasCompletedAwaitValue) {
-      throw StateError(
-        'Async evaluation resumed at a different await expression than the '
-        'one completed by its owning frame.',
-      );
+      // An enclosing await must evaluate its operand to reach the completed
+      // inner await. No other await may consume or bypass that frame's value.
+      AstNode? ancestor = asyncState.completedAwaitExpression?.parent;
+      while (ancestor != null && !identical(ancestor, node.expression)) {
+        ancestor = ancestor.parent;
+      }
+      if (ancestor == null) {
+        throw StateError(
+          'Async evaluation resumed at a different await expression than the '
+          'one completed by its owning frame.',
+        );
+      }
     }
 
     Logger.debug("[AwaitExpression] Evaluating expression for await...");

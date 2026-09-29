@@ -1,3 +1,6 @@
+## 0.3.4
+- Resume nested awaits inside arguments and map entries at their exact expressions, preserving evaluation order, completed values, and async error handling without repeating earlier effects.
+
 ## 0.3.3
 - Return native list and map views directly from interpreted constructors so nested collections remain usable by native consumers without traversing collection graphs at the bridge.
 - Reify supported nullable core element types in interpreted `List<T>.unmodifiable` factories while preserving host collection identity and immutability; unreifiable element types retain their existing error behavior.

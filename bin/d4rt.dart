@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:d4rt/d4rt.dart';
 
-const String version = '0.3.0';
+const String version = '0.3.4';
 
 void main(List<String> args) async {
   if (args.contains('-h') || args.contains('--help')) {
