@@ -1219,29 +1219,10 @@ class D4rt {
         nativeValue is bool) {
       return nativeValue;
     }
-    if (nativeValue is List) {
-      // Retain native reification, mutability and identity when no element
-      // needs bridging. Only materialize a new list for converted elements.
-      List<Object?>? converted;
-      for (var index = 0; index < nativeValue.length; index++) {
-        final element = nativeValue[index];
-        final bridged = _bridgeNativeValueToInterpreter(element, globalEnv);
-        if (converted != null) {
-          converted.add(bridged);
-        } else if (!identical(element, bridged)) {
-          converted = <Object?>[];
-          for (var previous = 0; previous < index; previous++) {
-            converted.add(nativeValue[previous]);
-          }
-          converted.add(bridged);
-        }
-      }
-      return converted ?? nativeValue;
-    }
-    if (nativeValue is Map) {
-      return nativeValue.map((key, value) => MapEntry(
-          _bridgeNativeValueToInterpreter(key, globalEnv),
-          _bridgeNativeValueToInterpreter(value, globalEnv)));
+    if (nativeValue is List || nativeValue is Map) {
+      // Native collections retain their reified types and mutability. Their
+      // elements are bridged on access rather than copied into Object? storage.
+      return nativeValue;
     }
 
     final nativeType = nativeValue.runtimeType;
@@ -1294,37 +1275,14 @@ class D4rt {
   }
 
   Object? _bridgeInterpreterValueToNative(Object? interpreterValue) {
-    if (interpreterValue == null ||
-        interpreterValue is String ||
-        interpreterValue is num ||
-        interpreterValue is bool) {
-      return interpreterValue;
-    }
     if (interpreterValue is BridgedInstance) {
       return interpreterValue.nativeObject;
     }
-
     if (interpreterValue is BridgedEnumValue) {
       return interpreterValue.nativeValue;
     }
-    if (interpreterValue is List) {
-      if (!InterpreterVisitor.isInterpretedCollection(interpreterValue)) {
-        return interpreterValue;
-      }
-      return interpreterValue.map(_bridgeInterpreterValueToNative).toList();
-    }
-    if (interpreterValue is Map) {
-      return interpreterValue.map((key, value) => MapEntry(
-          _bridgeInterpreterValueToNative(key),
-          _bridgeInterpreterValueToNative(value)));
-    }
-    if (interpreterValue is InterpretedInstance ||
-        interpreterValue is InterpretedFunction ||
-        interpreterValue is NativeFunction ||
-        interpreterValue is Callable) {
-      return interpreterValue;
-    }
-
+    // Collections cross this boundary intact. A serializer or other native
+    // consumer must enforce its own limits before traversing their contents.
     return interpreterValue;
   }
 

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
@@ -3481,10 +3482,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               throw RuntimeError(
                   "Bridged constructor adapter for '${bridgedClass.name}.$methodName' returned null unexpectedly.");
             }
-            final bridgedInstance = BridgedInstance(bridgedClass, nativeObject);
-            Logger.debug(
-                "[visitMethodInvocation]   Created BridgedInstance wrapping native: ${nativeObject.runtimeType}");
-            return bridgedInstance; // Retourner l'instance pontée créée
+            return _bridgeConstructorResult(bridgedClass, nativeObject);
           } on RuntimeError catch (e) {
             // Relaunch the adapter error
             throw RuntimeError(
@@ -3716,10 +3714,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             throw RuntimeError(
                 "Default bridged constructor adapter for '${bridgedClass.name}' returned null.");
           }
-          final bridgedInstance = BridgedInstance(bridgedClass, nativeObject);
-          Logger.debug(
-              "[visitMethodInvocation]   Created BridgedInstance wrapping native: ${nativeObject.runtimeType}");
-          return bridgedInstance;
+          return _bridgeConstructorResult(bridgedClass, nativeObject);
         } on RuntimeError catch (e) {
           throw RuntimeError(
               "Error during default bridged constructor for '${bridgedClass.name}': ${e.message}");
@@ -9686,10 +9681,19 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                     namedConstructorPart == 'unmodifiable' &&
                     typeArgs != null &&
                     typeArgs.length == 1
-                ? unmodifiableListWithType(
-                    positionalArgs[0] as Iterable,
-                    _resolveTypeAnnotation(typeArgs.single),
-                  )
+                ? () {
+                    final type = _resolveTypeAnnotation(typeArgs.single);
+                    final list = unmodifiableListWithType(
+                      positionalArgs[0] as Iterable,
+                      type,
+                      typeArgs.single is NamedType &&
+                          (typeArgs.single as NamedType).question != null,
+                    );
+                    environment.annotateRuntimeType(
+                        list, AppliedRuntimeType(bridgedClass, [type]));
+                    _interpretedCollections[list] = true;
+                    return list;
+                  }()
                 : staticMethodAdapter(this, positionalArgs, namedArgs);
 
             // Static methods return values directly (often native values like bool, String, etc.)
@@ -9732,11 +9736,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               "Bridged constructor adapter for '$constructorName.$constructorLookupName' returned null unexpectedly.");
         }
 
-        final bridgedInstance = BridgedInstance(bridgedClass, nativeObject,
-            typeArguments: evaluatedTypeArguments ?? const []);
-        Logger.debug(
-            "[InstanceCreation]   Successfully created BridgedInstance wrapping native object: ${nativeObject.runtimeType}");
-        return bridgedInstance;
+        return _bridgeConstructorResult(
+            bridgedClass, nativeObject, evaluatedTypeArguments);
       } on RuntimeError catch (e) {
         throw RuntimeError(
             "Error during bridged constructor '$constructorLookupName' for class '$constructorName': ${e.message}");
@@ -9751,6 +9752,21 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       throw RuntimeError(
           "Identifier '$constructorName' resolved to ${typeValue?.runtimeType}, which is not a class type that can be instantiated.");
     }
+  }
+
+  Object _bridgeConstructorResult(
+      BridgedClass bridgedClass, Object nativeObject,
+      [List<RuntimeType>? typeArguments]) {
+    // Collection view constructors expose their native List/Map interfaces to
+    // native consumers even when the view is nested inside another collection.
+    // Other bridged constructors keep their usual instance representation.
+    if (nativeObject is UnmodifiableListView ||
+        nativeObject is MapView ||
+        nativeObject is UnmodifiableMapView) {
+      return nativeObject;
+    }
+    return BridgedInstance(bridgedClass, nativeObject,
+        typeArguments: typeArguments ?? const []);
   }
 
   (List<Object?>, Map<String, Object?>) _evaluateArguments(
@@ -9805,11 +9821,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     if (interpreterValue is BridgedInstance) {
       return interpreterValue.nativeObject;
     }
-
     if (interpreterValue is BridgedEnumValue) {
       return interpreterValue.nativeValue;
     }
-
     return interpreterValue;
   }
 

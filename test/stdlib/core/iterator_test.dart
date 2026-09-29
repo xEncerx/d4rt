@@ -1,3 +1,5 @@
+import 'package:d4rt/d4rt.dart';
+
 import '../../interpreter_test.dart';
 import 'package:test/test.dart';
 
@@ -126,6 +128,39 @@ void main() {
       }
       ''';
       expect(execute(source), equals([1, 3, 5]));
+    });
+    test('typed host and collection-view iterators retain moveNext and current',
+        () {
+      final values = List<String?>.unmodifiable(['a', null, 'b']);
+      final interpreter = D4rt();
+      interpreter.registertopLevelFunction(
+          'provide', (visitor, args, named, types) => values);
+      final result = interpreter.execute(source: '''
+        import 'dart:collection';
+        Object main() {
+          final source = provide() as List<String?>;
+          final view = UnmodifiableListView(source);
+          final direct = source.iterator;
+          final throughView = view.iterator;
+          final first = [];
+          final second = [];
+          while (direct.moveNext()) {
+            first.add(direct.current);
+          }
+          while (throughView.moveNext()) {
+            second.add(throughView.current);
+          }
+          return [first, second, direct.moveNext(), throughView.moveNext()];
+        }
+      ''');
+      expect(result, [
+        ['a', null, 'b'],
+        ['a', null, 'b'],
+        false,
+        false
+      ]);
+      expect(values, ['a', null, 'b']);
+      expect(() => values.clear(), throwsUnsupportedError);
     });
   });
 }

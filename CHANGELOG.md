@@ -1,3 +1,9 @@
+## 0.3.3
+- Return native list and map views directly from interpreted constructors so nested collections remain usable by native consumers without traversing collection graphs at the bridge.
+- Reify supported nullable core element types in interpreted `List<T>.unmodifiable` factories while preserving host collection identity and immutability; unreifiable element types retain their existing error behavior.
+- Resolve bridged generic objects by their outer runtime type, so map entries containing nested generic lists or maps retain their key and value getters.
+- Match native iterator implementations by their Iterator interface to retain iteration over typed and immutable collections.
+
 ## 0.3.2
 - Give each invocation, including same-instance reentrant initializer calls, an independent monotonic terminal deadline shared with imported modules and async frames; stop interpreted calls after a synchronous native callback crosses the deadline, and discard late native results/errors even when their completion precedes an overdue timeout timer. Already-started native work remains noncancellable.
 - Reject writes to inherited getter-only members, including compound cascades, while preserving legal fields and setters.

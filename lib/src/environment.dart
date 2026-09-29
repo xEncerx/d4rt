@@ -155,6 +155,10 @@ class Environment {
         bridgedClass = _bridgedClassesLookupByType[Iterable] ??
             _bridgedClassesLookupByType.values
                 .firstWhereOrNull((e) => e.name == 'Iterable');
+      } else if (nativeObject is Iterator) {
+        bridgedClass = _bridgedClassesLookupByType[Iterator] ??
+            _bridgedClassesLookupByType.values
+                .firstWhereOrNull((e) => e.name == 'Iterator');
       } else if (nativeObject is String) {
         bridgedClass = _bridgedClassesLookupByType[String] ??
             _bridgedClassesLookupByType.values
@@ -189,8 +193,11 @@ class Environment {
                   false))
           ?.value;
     } else if (bridgedClass == null && nativeTypeName.contains('<')) {
+      // Match only the outer generic type. A nested argument such as
+      // MapEntry<String, List<Object?>> must not resolve to List.
       bridgedClass = _bridgedClassesLookupByType.entries
-          .firstWhereOrNull((e) => nativeTypeName.contains('${e.value.name}<'))
+          .firstWhereOrNull(
+              (e) => nativeTypeName.startsWith('${e.value.name}<'))
           ?.value;
     }
     bridgedClass ??= _bridgedClassesLookupByType.entries

@@ -1,3 +1,6 @@
+import 'dart:collection';
+import 'dart:convert';
+
 import 'package:d4rt/d4rt.dart';
 
 import 'package:test/test.dart';
@@ -663,6 +666,292 @@ void main() {
         expect(writable, ['original', 'new']);
         expect(appended, same(writable));
       }
+    });
+
+    test('nested collection views reach native JSON as ordinary lists and maps',
+        () {
+      const expected = {
+        'nested': [
+          [
+            [3, null, 5],
+            {
+              'tags': ['red', 'blue'],
+              'flags': [true, null]
+            }
+          ]
+        ],
+        'mutable': {
+          'count': 2,
+          'inside': [false, null]
+        }
+      };
+      final interpreter = D4rt();
+      interpreter.registertopLevelFunction('inspect',
+          (visitor, args, named, types) {
+        final value = args.single as Map;
+        final nested = (value['nested'] as List).single as List;
+        expect(nested, isA<UnmodifiableListView>());
+        expect(nested[1], isA<UnmodifiableMapView>());
+        expect(value['mutable'], isA<MapView>());
+        expect(jsonDecode(jsonEncode(value)), expected);
+        return value;
+      });
+      const script = '''
+        import 'dart:collection';
+        Object main() => inspect({
+          'nested': [
+            UnmodifiableListView([
+              [3, null, 5],
+              UnmodifiableMapView({
+                'tags': ['red', 'blue'],
+                'flags': [true, null]
+              })
+            ])
+          ],
+          'mutable': MapView({
+            'count': 2,
+            'inside': [false, null]
+          })
+        });
+      ''';
+      for (var call = 0; call < 2; call++) {
+        final result = interpreter.execute(source: script) as Map;
+        final nested = (result['nested'] as List).single as List;
+        final view = nested[1] as Map;
+        final mutable = result['mutable'] as Map;
+        expect(nested, isA<UnmodifiableListView>());
+        expect(view, isA<UnmodifiableMapView>());
+        expect(mutable, isA<MapView>());
+        expect(() => nested.add(null), throwsUnsupportedError);
+        expect(() => view['extra'] = null, throwsUnsupportedError);
+        expect(jsonDecode(jsonEncode(result)), expected);
+        mutable['extra'] = 6;
+        expect(mutable['extra'], 6);
+      }
+    });
+
+    test('interpreted JSON encoder rejects cycles and recovers', () {
+      final self = <Object?>[];
+      self.add(self);
+      final first = <String, Object?>{};
+      final second = <String, Object?>{'next': first};
+      first['next'] = second;
+      final sources = <Object?>[
+        self,
+        first,
+        {
+          'ok': [1]
+        }
+      ];
+      final interpreter = D4rt();
+      var index = 0;
+      var provided = 0;
+      interpreter.registertopLevelFunction('provide',
+          (visitor, args, named, types) {
+        provided++;
+        return sources[index];
+      });
+      const script = '''
+        import 'dart:convert';
+        Object main() => jsonEncode(provide());
+      ''';
+      for (; index < 2; index++) {
+        // The interpreter wraps native codec errors as RuntimeError; the
+        // identical entrypoint succeeds for the next acyclic graph.
+        expect(() => interpreter.execute(source: script),
+            throwsA(isA<RuntimeError>()));
+        expect(provided, index + 1);
+      }
+      expect(interpreter.execute(source: script), '{"ok":[1]}');
+      expect(provided, 3);
+      expect(self.single, same(self));
+      expect(second['next'], same(first));
+    });
+
+    test('nullable host list types survive both invocation boundaries', () {
+      const definitions = '''
+        Object inspect(List<int?> numbers, List<bool?> flags,
+            List<double?> writable) {
+          bool immutable = false;
+          try {
+            numbers.add(null);
+          } on UnsupportedError {
+            immutable = true;
+          }
+          writable.add(2.5);
+          return [
+            numbers is List<int?>,
+            flags is List<bool?>,
+            numbers[1] == null,
+            flags[1] == null,
+            immutable,
+            numbers[0] + 2,
+            writable is List<double?>,
+            writable[1] == null,
+            writable[2],
+          ];
+        }
+        class Probe {
+          Object check(List<int?> numbers, List<bool?> flags,
+              List<double?> writable) =>
+              inspect(numbers, flags, writable);
+        }
+      ''';
+      final numbers = List<int?>.unmodifiable([3, null]);
+      final flags = UnmodifiableListView<bool?>([true, null]);
+      final writable = <double?>[1.5, null];
+      for (final instanceMethod in [false, true]) {
+        final interpreter = D4rt();
+        final entry = interpreter.execute(
+          source: '$definitions main() => '
+              '${instanceMethod ? 'Probe()' : 'inspect'};',
+        );
+        final result = instanceMethod
+            ? interpreter.invoke('check', [numbers, flags, writable])
+            : interpreter.invokeInterpretedFunction(
+                entry as InterpretedFunction, [numbers, flags, writable]);
+        expect(result, [true, true, true, true, true, 5, true, true, 2.5]);
+        expect(() => numbers.add(7), throwsUnsupportedError);
+        expect(() => flags.add(false), throwsUnsupportedError);
+        expect(writable, [1.5, null, 2.5]);
+        writable.removeLast();
+      }
+    });
+
+    test('host lists with bridged object elements keep their native type', () {
+      final dates = <DateTime?>[DateTime.utc(2024), null];
+      final interpreter = D4rt();
+      final entry = interpreter.execute(source: '''
+        Object inspect(Object source) {
+          final values = source as List;
+          return [values[0].year, values[1] == null, values];
+        }
+        Object main() => inspect;
+      ''') as InterpretedFunction;
+      final result =
+          interpreter.invokeInterpretedFunction(entry, [dates]) as List;
+      expect(result[0], 2024);
+      expect(result[1], isTrue);
+      expect(result[2], same(dates));
+      expect(result[2], isA<List<DateTime?>>());
+      dates.add(DateTime.utc(2025));
+      expect(dates.length, 3);
+    });
+
+    test('host immutable core lists retain their elements and native types',
+        () {
+      final examples = <(String, List<Object?>)>[
+        ('String', List<String>.unmodifiable(['a'])),
+        ('int', List<int>.unmodifiable([1])),
+        ('double', List<double>.unmodifiable([1.5])),
+        ('num', List<num>.unmodifiable([1, 2.5])),
+        ('bool', List<bool>.unmodifiable([true])),
+        ('Object', List<Object>.unmodifiable(['a'])),
+        ('Object?', List<Object?>.unmodifiable([null])),
+        ('dynamic', List<dynamic>.unmodifiable([null])),
+        ('Null', List<Null>.unmodifiable([null])),
+        ('String?', List<String?>.unmodifiable([null])),
+        ('int?', List<int?>.unmodifiable([null])),
+        ('double?', List<double?>.unmodifiable([null])),
+        ('num?', List<num?>.unmodifiable([null])),
+        ('bool?', List<bool?>.unmodifiable([null])),
+      ];
+      for (final (type, values) in examples) {
+        final interpreter = D4rt();
+        final function = interpreter.execute(source: '''
+          Object inspect(List<$type> values) {
+            bool immutable = false;
+            try {
+              values.clear();
+            } on UnsupportedError {
+              immutable = true;
+            }
+            return [values is List<$type>, values.first, immutable, values];
+          }
+          Object main() => inspect;
+        ''') as InterpretedFunction;
+        final result =
+            interpreter.invokeInterpretedFunction(function, [values]) as List;
+        expect(result[0], isTrue, reason: type);
+        expect(result[1], values.first, reason: type);
+        expect(result[2], isTrue, reason: type);
+        expect(result[3], same(values), reason: type);
+        expect(() => values.clear(), throwsUnsupportedError, reason: type);
+      }
+    });
+
+    test('interpreted nullable core factory has a reified immutable list', () {
+      final interpreter = D4rt();
+      List<int?>? observed;
+      interpreter.registertopLevelFunction('inspect',
+          (visitor, args, named, types) {
+        observed = args.single as List<int?>;
+        return null;
+      });
+      final result = interpreter.execute(source: '''
+        Object main() {
+          final values = List<int?>.unmodifiable(<int?>[1, null]);
+          inspect(values);
+          bool immutable = false;
+          try {
+            values.add(null);
+          } on UnsupportedError {
+            immutable = true;
+          }
+          return [values is List<int?>, values[1] == null, immutable];
+        }
+      ''');
+      expect(result, [true, true, true]);
+      expect(observed, [1, null]);
+      expect(observed, isA<List<int?>>());
+      expect(() => observed!.add(2), throwsUnsupportedError);
+    });
+
+    test('core immutable factories retain native element reification', () {
+      final examples = <(String, String, bool Function(Object?))>[
+        ('String', "['a']", (value) => value is List<String>),
+        ('int', '[1]', (value) => value is List<int>),
+        ('double', '[1.5]', (value) => value is List<double>),
+        ('num', '[1, 2.5]', (value) => value is List<num>),
+        ('bool', '[true]', (value) => value is List<bool>),
+        ('Object', "['a', 1]", (value) => value is List<Object>),
+        ('Object?', "['a', null]", (value) => value is List<Object?>),
+        ('dynamic', '[1, null]', (value) => value is List<dynamic>),
+        ('Null', '[null]', (value) => value is List<Null>),
+        ('String?', "['a', null]", (value) => value is List<String?>),
+        ('int?', '[1, null]', (value) => value is List<int?>),
+        ('double?', '[1.5, null]', (value) => value is List<double?>),
+        ('num?', '[1, 2.5, null]', (value) => value is List<num?>),
+        ('bool?', '[true, null]', (value) => value is List<bool?>),
+      ];
+      for (final (type, contents, matches) in examples) {
+        final interpreter = D4rt();
+        Object? observed;
+        interpreter.registertopLevelFunction('inspect',
+            (visitor, args, named, types) {
+          observed = args.single;
+          return null;
+        });
+        final result = interpreter.execute(source: '''
+          Object main() {
+            final values = List<$type>.unmodifiable(<$type>$contents);
+            inspect(values);
+            return values;
+          }
+        ''');
+        expect(matches(result), isTrue, reason: type);
+        expect(observed, same(result), reason: type);
+        expect(() => (result as List).clear(), throwsUnsupportedError,
+            reason: type);
+      }
+    });
+
+    test('unreifiable interpreted element types retain the factory error', () {
+      final interpreter = D4rt();
+      expect(() => interpreter.execute(source: '''
+        class Custom {}
+        Object main() => List<Custom>.unmodifiable([Custom()]);
+      '''), throwsA(isA<RuntimeError>()));
     });
 
     test('typed unmodifiable factory rejects incompatible values', () {

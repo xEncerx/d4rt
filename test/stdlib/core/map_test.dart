@@ -1,3 +1,5 @@
+import 'package:d4rt/d4rt.dart';
+
 import '../../interpreter_test.dart';
 import 'package:test/test.dart';
 
@@ -172,6 +174,67 @@ void main() {
             [1, 'one'],
             [2, 'two']
           ]));
+    });
+
+    test(
+        'host MapEntry getters follow the outer type with nested generic values',
+        () {
+      final numbers = <int>[1, 2];
+      final listValue = <Object?>[
+        'alpha',
+        null,
+        {'label': 'nested'}
+      ];
+      final listMap = <String, List<Object?>>{'items': listValue};
+      final mapValue = <String, List<int>>{'numbers': numbers};
+      final nestedMap = <String, Map<String, List<int>>>{'deep': mapValue};
+      final interpreter = D4rt();
+      interpreter.registertopLevelFunction(
+          'listMap', (visitor, args, named, types) => listMap);
+      interpreter.registertopLevelFunction(
+          'nestedMap', (visitor, args, named, types) => nestedMap);
+
+      final result = interpreter.execute(source: '''
+        import 'dart:convert';
+        Object readEntries(Map source) {
+          final observed = [];
+          for (final entry in source.entries) {
+            observed.add([entry.key, entry.value]);
+          }
+          return observed;
+        }
+        Object main() {
+          final first = readEntries(listMap());
+          final second = readEntries(nestedMap());
+          return [
+            first,
+            second,
+            JsonCodec().encode({'nested': first, 'other': second})
+          ];
+        }
+      ''') as List;
+      expect(result[0], [
+        [
+          'items',
+          [
+            'alpha',
+            null,
+            {'label': 'nested'}
+          ]
+        ]
+      ]);
+      expect(result[1], [
+        [
+          'deep',
+          {
+            'numbers': [1, 2]
+          }
+        ]
+      ]);
+      expect(result[2],
+          '{"nested":[["items",["alpha",null,{"label":"nested"}]]],"other":[["deep",{"numbers":[1,2]}]]}');
+      expect((result[0] as List).single[1], same(listValue));
+      expect((result[1] as List).single[1], same(mapValue));
     });
 
     test('cast', () {

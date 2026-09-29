@@ -1,26 +1,39 @@
 import 'package:d4rt/d4rt.dart';
 
-/// Creates a native unmodifiable list whose supported core type is reified.
+/// Creates an immutable native list for reifiable core element types.
 ///
-/// Interpreter-defined type arguments cannot be reified by Dart; they must
-/// not be passed to the host as a differently typed native list.
-List<Object?> unmodifiableListWithType(Iterable values, RuntimeType type) {
+/// Interpreter-defined type arguments cannot be reified by Dart.
+List<Object?> unmodifiableListWithType(
+    Iterable values, RuntimeType type, bool nullable) {
   switch (type.name) {
     case 'String':
-      return List<String>.unmodifiable(values.cast<String>());
+      return nullable
+          ? List<String?>.unmodifiable(values.cast<String?>())
+          : List<String>.unmodifiable(values.cast<String>());
     case 'int':
-      return List<int>.unmodifiable(values.cast<int>());
+      return nullable
+          ? List<int?>.unmodifiable(values.cast<int?>())
+          : List<int>.unmodifiable(values.cast<int>());
     case 'double':
-      return List<double>.unmodifiable(values.cast<double>());
+      return nullable
+          ? List<double?>.unmodifiable(values.cast<double?>())
+          : List<double>.unmodifiable(values.cast<double>());
     case 'num':
-      return List<num>.unmodifiable(values.cast<num>());
+      return nullable
+          ? List<num?>.unmodifiable(values.cast<num?>())
+          : List<num>.unmodifiable(values.cast<num>());
     case 'bool':
-      return List<bool>.unmodifiable(values.cast<bool>());
+      return nullable
+          ? List<bool?>.unmodifiable(values.cast<bool?>())
+          : List<bool>.unmodifiable(values.cast<bool>());
     case 'Object':
-      return List<Object>.unmodifiable(values.cast<Object>());
+      return nullable
+          ? List<Object?>.unmodifiable(values)
+          : List<Object>.unmodifiable(values.cast<Object>());
     case 'dynamic':
-    case 'Object?':
-      return List<Object?>.unmodifiable(values);
+      return List<dynamic>.unmodifiable(values);
+    case 'Null':
+      return List<Null>.unmodifiable(values.cast<Null>());
     default:
       throw RuntimeError(
           'Cannot create a native List<${type.name}>: type is not reifiable by the bridge.');
