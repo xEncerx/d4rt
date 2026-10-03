@@ -1,7 +1,12 @@
+import 'dart:collection';
+import 'dart:math' show Random;
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:d4rt/d4rt.dart';
 import 'bridge/bridged_types.dart' as bridge;
 import 'type_annotation_utils.dart';
+import 'package:d4rt/src/native_collection_types.dart';
+
+part 'interpreted_collections.dart';
 
 /// Represents a class definition at runtime.
 class InterpretedClass implements Callable, RuntimeType {
@@ -46,6 +51,9 @@ class InterpretedClass implements Callable, RuntimeType {
 
   // Add field for bridged superclass
   BridgedClass? bridgedSuperclass;
+
+  /// The extends annotation retains native collection arguments and substitutions.
+  NamedType? superclassType;
 
   // Helper methods to extract type parameter information from AST (similar to InterpretedFunction)
   static List<String> extractTypeParameterNames(
@@ -434,6 +442,54 @@ class InterpretedClass implements Callable, RuntimeType {
     return effective;
   }
 
+  InterpretedInstance _createInstance(
+      InterpreterVisitor visitor, List<RuntimeType> typeArguments) {
+    var current = this;
+    var arguments = typeArguments;
+    while (true) {
+      final env = Environment(enclosing: current.classDefinitionEnvironment);
+      for (var i = 0; i < current.typeParameterNames.length; i++) {
+        env.define(current.typeParameterNames[i], arguments[i]);
+      }
+      final superArguments = current.superclassType?.typeArguments?.arguments
+              .map((node) => resolveNativeCollectionType(node, env))
+              .toList() ??
+          const <RuntimeType>[];
+      final nativeName = current.bridgedSuperclass?.name;
+      if (nativeName == 'UnmodifiableListView') {
+        final element = superArguments.isEmpty
+            ? const NamedRuntimeType('dynamic')
+            : superArguments.single;
+        return reifyNativeCollectionType(
+            element,
+            <T>() =>
+                _InterpretedList<T>(this, visitor, typeArguments: typeArguments)
+                  ..nativeSuperclassArguments = superArguments);
+      }
+      if (nativeName == 'MapView' || nativeName == 'UnmodifiableMapView') {
+        final key = superArguments.isEmpty
+            ? const NamedRuntimeType('dynamic')
+            : superArguments[0];
+        final value = superArguments.isEmpty
+            ? const NamedRuntimeType('dynamic')
+            : superArguments[1];
+        return reifyNativeCollectionType(
+            key,
+            <K>() => reifyNativeCollectionType(
+                value,
+                <V>() => _InterpretedMap<K, V>(this, visitor,
+                    typeArguments: typeArguments)
+                  ..nativeSuperclassArguments = superArguments));
+      }
+      final parent = current.superclass;
+      if (parent == null) break;
+      arguments = parent._getValidatedTypeArguments(
+          superArguments.isEmpty ? null : superArguments);
+      current = parent;
+    }
+    return InterpretedInstance(this, typeArguments: typeArguments);
+  }
+
   // Helper to create instance and run field initializers
   InterpretedInstance createAndInitializeInstance(
       InterpreterVisitor visitor, List<RuntimeType>? typeArguments) {
@@ -446,8 +502,7 @@ class InterpretedClass implements Callable, RuntimeType {
     final effectiveTypeArgs = _getValidatedTypeArguments(typeArguments);
 
     // 1. Create the instance with a link to the class
-    final instance = InterpretedInstance(this,
-        typeArguments: effectiveTypeArgs); // Pass only the class
+    final instance = _createInstance(visitor, effectiveTypeArgs);
 
     // Use the environment where the class was defined as the outer scope
     // for evaluating initializers. We need to traverse the hierarchy.
@@ -544,7 +599,7 @@ class InterpretedClass implements Callable, RuntimeType {
                     // Set (or overwrite) the field on the instance
                     instance._fields[fieldName] = value;
                     Logger.debug(
-                        "[Instance Init] Initialized mixin field '${klassInHierarchy.name}.$fieldName' from mixin '${mixin.name}' with value: $value");
+                        "[Instance Init] Initialized mixin field '${klassInHierarchy.name}.$fieldName' (${value?.runtimeType})");
                   } else {
                     // Ensure field exists even if not initialized (Dart default is null)
                     // Only set null if field wasn't already set by class or previous mixin
@@ -570,7 +625,7 @@ class InterpretedClass implements Callable, RuntimeType {
 
     // Instance fields from class hierarchy AND mixins should now be initialized.
     Logger.debug(
-        "[Instance Init] Finished instance initialization for '$name'. Fields: ${instance._fields}");
+        "[Instance Init] Finished instance initialization for '$name'. Fields: ${instance._fields.keys}");
 
     return instance;
   }
@@ -664,7 +719,7 @@ class InterpretedClass implements Callable, RuntimeType {
 
   /// Returns a map of all abstract members (methods, getters, setters)
   /// inherited from superclasses.
-  /// The key is the member name, the value is the abstract InterpretedFunction.
+  /// The key contains both member kind and name to distinguish accessors.
   Map<String, InterpretedFunction> getAbstractInheritedMembers() {
     final abstractMembers = <String, InterpretedFunction>{};
     InterpretedClass? current = superclass;
@@ -673,17 +728,17 @@ class InterpretedClass implements Callable, RuntimeType {
       // less specific ones from further up the chain (though Dart disallows this scenario statically).
       current.methods.forEach((name, func) {
         if (func.isAbstract) {
-          abstractMembers.putIfAbsent(name, () => func);
+          abstractMembers.putIfAbsent('method $name', () => func);
         }
       });
       current.getters.forEach((name, func) {
         if (func.isAbstract) {
-          abstractMembers.putIfAbsent(name, () => func);
+          abstractMembers.putIfAbsent('getter $name', () => func);
         }
       });
       current.setters.forEach((name, func) {
         if (func.isAbstract) {
-          abstractMembers.putIfAbsent(name, () => func);
+          abstractMembers.putIfAbsent('setter $name', () => func);
         }
       });
       current = current.superclass;
@@ -691,96 +746,17 @@ class InterpretedClass implements Callable, RuntimeType {
     return abstractMembers;
   }
 
-  /// Returns a map of all concrete instance members (methods, getters, setters)
-  /// defined directly in this class.
-  /// The key is the member name, the value is the concrete InterpretedFunction.
-  Map<String, InterpretedFunction> getConcreteMembers() {
-    final concreteMembers = <String, InterpretedFunction>{};
-    methods.forEach((name, func) {
-      if (!func.isAbstract) {
-        concreteMembers[name] = func;
-      }
-    });
-    getters.forEach((name, func) {
-      if (!func.isAbstract) {
-        concreteMembers[name] = func;
-      }
-    });
-    setters.forEach((name, func) {
-      if (!func.isAbstract) {
-        concreteMembers[name] = func;
-      }
-    });
-    return concreteMembers;
-  }
-
   /// Returns a map representing all members required by the interfaces implemented
   /// by this class and its superclasses, including those from super-interfaces.
-  /// Key: member name, Value: String indicating type ('method', 'getter', 'setter')
+  /// Key: member kind and name; value: 'method', 'getter', or 'setter'.
   Map<String, String> getAllInterfaceMembers() {
-    final requiredMembers = <String, String>{};
-    final Set<InterpretedClass> visited = {}; // To avoid cycles/redundancy
-    final List<InterpretedClass> queue = [];
-
-    // Start with directly implemented interfaces
-    queue.addAll(interfaces);
-    // Also consider interfaces/abstract members from superclasses
-    var currentSuper = superclass;
-    while (currentSuper != null) {
-      queue.add(
-          currentSuper); // Add superclass to check its interfaces/abstract members
-      currentSuper = currentSuper.superclass;
-    }
-
-    while (queue.isNotEmpty) {
-      final currentClass = queue.removeAt(0);
-
-      if (!visited.add(currentClass)) {
-        continue; // Already processed this class/interface
-      }
-
-      // Add members defined directly in this interface/class
-      // We only care about the *signature* required, not the implementation.
-      // Note: Static members are NOT part of the interface contract.
-      currentClass.methods.forEach((name, func) {
-        // Abstract methods from superclasses also count as required signatures
-        requiredMembers.putIfAbsent(
-            name, () => func.isAbstract ? 'method' : 'method');
-      });
-      currentClass.getters.forEach((name, func) {
-        requiredMembers.putIfAbsent(
-            name, () => func.isAbstract ? 'getter' : 'getter');
-      });
-      currentClass.setters.forEach((name, func) {
-        requiredMembers.putIfAbsent(
-            name, () => func.isAbstract ? 'setter' : 'setter');
-      });
-
-      // Add interfaces implemented by this class to the queue
-      queue.addAll(currentClass.interfaces);
-      // Also add its superclass to the queue (if not already visited)
-      if (currentClass.superclass != null &&
-          !visited.contains(currentClass.superclass)) {
-        // No, superclass was added initially. We traverse the interface graph here.
-        // We need to get members from the superclass chain separately potentially.
-        // Let's reconsider. The check needs *all* members required by interfaces
-        // AND *all* abstract members from superclasses.
-      }
-    }
-
-    // Re-think: The above mixes inherited abstract members and interface members.
-    // Let's separate concerns.
-    // 1. Get all members required ONLY by interfaces.
-    // 2. Get all abstract members inherited via `extends` (already done).
-    // 3. The class needs to satisfy BOTH.
-
     final requiredInterfaceMembers = <String, String>{};
     final Set<InterpretedClass> visitedInterfaces = {};
     final List<InterpretedClass> interfaceQueue = [];
     interfaceQueue.addAll(interfaces);
+    var currentSuper = superclass;
 
     // Add interfaces from superclasses as well
-    currentSuper = superclass;
     while (currentSuper != null) {
       interfaceQueue.addAll(currentSuper.interfaces);
       currentSuper = currentSuper.superclass;
@@ -794,14 +770,26 @@ class InterpretedClass implements Callable, RuntimeType {
 
       // Add members from the current interface
       currentInterface.methods.forEach((name, func) {
-        requiredInterfaceMembers.putIfAbsent(name, () => 'method');
+        requiredInterfaceMembers.putIfAbsent('method $name', () => 'method');
       });
       currentInterface.getters.forEach((name, func) {
-        requiredInterfaceMembers.putIfAbsent(name, () => 'getter');
+        requiredInterfaceMembers.putIfAbsent('getter $name', () => 'getter');
       });
       currentInterface.setters.forEach((name, func) {
-        requiredInterfaceMembers.putIfAbsent(name, () => 'setter');
+        requiredInterfaceMembers.putIfAbsent('setter $name', () => 'setter');
       });
+      for (final field in currentInterface.fieldDeclarations) {
+        if (field.isStatic) continue;
+        for (final variable in field.fields.variables) {
+          final name = variable.name.lexeme;
+          requiredInterfaceMembers.putIfAbsent('getter $name', () => 'getter');
+          if (field.fields.keyword?.lexeme != 'final' &&
+              field.fields.keyword?.lexeme != 'const') {
+            requiredInterfaceMembers.putIfAbsent(
+                'setter $name', () => 'setter');
+          }
+        }
+      }
 
       // Add its super-interfaces to the queue
       interfaceQueue.addAll(currentInterface.interfaces);
@@ -815,32 +803,41 @@ class InterpretedClass implements Callable, RuntimeType {
     return requiredInterfaceMembers;
   }
 
-  /// Returns a map of all concrete instance members (methods, getters, setters)
-  /// available on this class, including those inherited via the `extends` chain.
-  /// Key: member name, Value: the concrete InterpretedFunction.
-  Map<String, InterpretedFunction> getAllConcreteMembers() {
-    final concreteMembers = <String, InterpretedFunction>{};
+  /// Tests the required member kind, including implicit field accessors.
+  bool hasConcreteMember(String name, String kind) {
     InterpretedClass? current = this;
     while (current != null) {
-      // Add concrete members from the current class, avoiding overwrites from subclasses
-      current.methods.forEach((name, func) {
-        if (!func.isAbstract) {
-          concreteMembers.putIfAbsent(name, () => func);
+      final function = switch (kind) {
+        'getter' => current.getters[name],
+        'setter' => current.setters[name],
+        _ => current.methods[name],
+      };
+      if (function != null) return !function.isAbstract;
+      if (kind != 'method') {
+        for (final field in current.fieldDeclarations) {
+          if (field.isStatic) continue;
+          if (field.fields.variables.any((v) => v.name.lexeme == name)) {
+            return kind == 'getter' ||
+                (field.fields.keyword?.lexeme != 'final' &&
+                    field.fields.keyword?.lexeme != 'const');
+          }
         }
-      });
-      current.getters.forEach((name, func) {
-        if (!func.isAbstract) {
-          concreteMembers.putIfAbsent(name, () => func);
-        }
-      });
-      current.setters.forEach((name, func) {
-        if (!func.isAbstract) {
-          concreteMembers.putIfAbsent(name, () => func);
-        }
-      });
+      }
+      for (final mixin in current.mixins.reversed) {
+        if (mixin.hasConcreteMember(name, kind)) return true;
+      }
+      final native = current.bridgedSuperclass;
+      if (native != null) {
+        final adapter = switch (kind) {
+          'getter' => native.findInstanceGetterAdapter(name),
+          'setter' => native.findInstanceSetterAdapter(name),
+          _ => native.findInstanceMethodAdapter(name),
+        };
+        if (adapter != null) return true;
+      }
       current = current.superclass;
     }
-    return concreteMembers;
+    return false;
   }
 
   /// Checks if this class is a subtype of the [other] class.
@@ -898,6 +895,9 @@ class InterpretedInstance implements RuntimeValue {
 
   // Store generic type arguments for this instance (e.g., for List<String>, this would be [StringType])
   final List<RuntimeType>? typeArguments;
+
+  /// Reified constructor arguments of the native collection superclass.
+  List<RuntimeType>? nativeSuperclassArguments;
 
   InterpretedInstance(this.klass, {this.typeArguments});
 
@@ -1122,7 +1122,7 @@ class InterpretedInstance implements RuntimeValue {
         return fieldValue.value;
       }
       Logger.debug(
-          "[Instance.get] Found field '$name' with value: $fieldValue");
+          "[Instance.get] Found field '$name' (${fieldValue?.runtimeType})");
       return fieldValue;
     }
 
@@ -1171,8 +1171,13 @@ class InterpretedInstance implements RuntimeValue {
       // Check bridged superclass at this level before moving up
       if (currentClass.bridgedSuperclass != null &&
           bridgedSuperObject != null) {
-        final bridgedSuper = currentClass.bridgedSuperclass!;
-        final nativeTarget = bridgedSuperObject!;
+        final bridgedSuper = this is List
+            ? klass.classDefinitionEnvironment.get('List') as BridgedClass
+            : this is Map
+                ? klass.classDefinitionEnvironment.get('Map') as BridgedClass
+                : currentClass.bridgedSuperclass!;
+        final nativeTarget =
+            this is List || this is Map ? this : bridgedSuperObject!;
 
         // Try getter first
         final getterAdapter = bridgedSuper.findInstanceGetterAdapter(name);
@@ -1301,7 +1306,7 @@ class InterpretedInstance implements RuntimeValue {
   @override
   void set(String name, Object? value, [InterpreterVisitor? visitor]) {
     Logger.debug(
-        "[Instance.set] called for '${klass.name}.$name' with value: $value on instance $hashCode");
+        "[Instance.set] called for '${klass.name}.$name' (${value?.runtimeType}) on instance $hashCode");
     // Look for a setter in the current class and superclasses
     InterpretedClass? currentClass = klass;
     while (currentClass != null) {
@@ -1855,7 +1860,12 @@ class BridgedSuperMethodCallable implements Callable {
       List<RuntimeType>? typeArguments]) {
     try {
       // Call the adapter, passing the stored native super object as the target
-      return adapter(visitor, superObject, positionalArguments, namedArguments);
+      return retainCollectionOperationResult(
+          adapter(visitor, superObject, positionalArguments, namedArguments),
+          superObject,
+          methodName,
+          visitor.environment,
+          positionalArguments);
     } on ArgumentError catch (e) {
       throw RuntimeError(
           "Invalid arguments for bridged superclass method '$bridgedClassName.$methodName': ${e.message}");
@@ -1897,7 +1907,12 @@ class BridgedMixinMethodCallable implements Callable {
       // or handle the call differently since the adapter expects a native object
       // but we have an interpreted instance. For now, we'll pass the instance directly
       // and let the adapter handle the conversion.
-      return adapter(visitor, instance, positionalArguments, namedArguments);
+      return retainCollectionOperationResult(
+          adapter(visitor, instance, positionalArguments, namedArguments),
+          instance,
+          methodName,
+          visitor.environment,
+          positionalArguments);
     } catch (e, s) {
       Logger.error(
           "[BridgedMixinMethodCallable] Native exception during call to '$bridgedMixinName.$methodName': $e\n$s");

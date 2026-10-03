@@ -9,6 +9,7 @@ import 'package:d4rt/src/invocation_deadline.dart';
 import 'package:d4rt/src/module_loader.dart';
 import 'package:d4rt/src/stdlib/core/list.dart';
 import 'package:d4rt/src/type_annotation_utils.dart';
+import 'package:d4rt/src/native_collection_types.dart';
 
 final class _ExpressionContinuation {
   final List<Object?> completedValues = [];
@@ -92,20 +93,26 @@ final class _SwitchExpressionContinuation {
 /// Main visitor that walks the AST and interprets the code.
 /// Uses a two-pass approach (DeclarationVisitor first).
 class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
-  // Interpreted literals use Object?-typed backing collections. Never inspect
-  // host collections to infer their reified type arguments.
-  static final Expando<bool> _interpretedCollections =
-      Expando<bool>('d4rt.interpretedCollection');
-
   /// Whether a collection has interpreter-owned backing rather than a native
   /// host representation with reified type arguments.
   static bool isInterpretedCollection(Object value) =>
-      _interpretedCollections[value] == true;
+      (value is List || value is Map || value is Set) &&
+      isInterpreterOwnedCollection(value);
   Environment environment;
   final Environment globalEnvironment;
   final ModuleLoader moduleLoader; // Field for ModuleLoader
   final Uri? currentLibrary;
   InterpretedFunction? currentFunction; // Track the function being executed
+  static final Object _collectionVisitorKey = Object();
+
+  /// The executing visitor for native collection virtual calls in this zone.
+  static InterpreterVisitor? get currentCollectionVisitor =>
+      Zone.current[_collectionVisitorKey] as InterpreterVisitor?;
+
+  /// Shares invocation limits with native collection calls, including async
+  /// continuations, without retaining another invocation's visitor.
+  T runCollectionInvocation<T>(T Function() body) =>
+      runZoned(body, zoneValues: {_collectionVisitorKey: this});
   AsyncExecutionState? currentAsyncState;
   List<Object?>?
       currentSyncGeneratorYields; // Collect yields in sync* generators
@@ -361,7 +368,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       // Interpreter-owned literals retain generic metadata; host collections
       // always report their actual native reified type.
       final nativeValue = value is BridgedInstance ? value.nativeObject : value;
-      if (nativeValue is List && _interpretedCollections[nativeValue] == true) {
+      if (nativeValue is List && isInterpreterOwnedCollection(nativeValue)) {
         final annotated = environment.getAnnotatedRuntimeType(nativeValue);
         if (annotated != null) return annotated;
       }
@@ -543,6 +550,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     final typeNode = node.type;
     if (typeNode is NamedType) {
       final typeName = typeNode.name.lexeme;
+      if (typeName == 'List' || typeName == 'Map' || typeName == 'Set') {
+        final expected = _resolveTypeAnnotation(typeNode);
+        if (_valueMatchesType(value, expected, typeAnnotation: typeNode)) {
+          return value;
+        }
+        throw RuntimeError(
+            "Cast failed with 'as' : the value does not match the target type (${typeNode.toSource()})");
+      }
       switch (typeName) {
         case 'int':
           if (value is int) return value;
@@ -679,7 +694,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
       if (name == 'initialValue') {
         Logger.debug(
-            "[visitSimpleIdentifier] Returning '$name' = $value (from lexical/bridge)");
+            "[visitSimpleIdentifier] Returning '$name' (${value?.runtimeType})");
       }
       return value;
     } on RuntimeError catch (getErr) {
@@ -752,8 +767,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         if (getterAdapter != null) {
           Logger.debug(
               "[visitSimpleIdentifier] Found BRIDGED GETTER '$name' via implicit 'this'. Calling adapter...");
-          final getterResult =
-              getterAdapter(this, bridgedInstance.nativeObject);
+          final getterResult = retainCollectionOperationResult(
+              getterAdapter(this, bridgedInstance.nativeObject),
+              bridgedInstance.nativeObject,
+              name,
+              environment);
           if (name == 'initialValue') {
             Logger.debug(
                 "[visitSimpleIdentifier] Returning '$name' = $getterResult (from BridgedInstance getter this)");
@@ -1269,7 +1287,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final getterAdapter =
           bridgedInstance.bridgedClass.findInstanceGetterAdapter(memberName);
       if (getterAdapter != null) {
-        return getterAdapter(this, bridgedInstance.nativeObject);
+        return retainCollectionOperationResult(
+            getterAdapter(this, bridgedInstance.nativeObject),
+            bridgedInstance.nativeObject,
+            memberName,
+            environment);
       }
       final methodAdapter =
           bridgedInstance.bridgedClass.findInstanceMethodAdapter(memberName);
@@ -1842,6 +1864,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       return null;
     }
 
+    if (targetValue is BoundSuper || targetValue is BoundBridgedSuper) {
+      return _readIndexForCompoundAssignment(targetValue, indexValue);
+    }
+    if (targetValue is InterpretedInstance &&
+        targetValue.findOperator('[]') != null) {
+      return targetValue
+          .findOperator('[]')!
+          .bind(targetValue)
+          .call(this, [indexValue], {});
+    }
     if (targetValue is Map) {
       return targetValue[indexValue];
     }
@@ -2833,6 +2865,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
 
         // Now, perform the assignment with finalValueToAssign
+        if (targetValue is BoundSuper || targetValue is BoundBridgedSuper) {
+          _writeSuperIndex(targetValue, indexValue, finalValueToAssign);
+          return finalValueToAssign;
+        }
+        if (targetValue is InterpretedInstance &&
+            targetValue.findOperator('[]=') != null) {
+          targetValue
+              .findOperator('[]=')!
+              .bind(targetValue)
+              .call(this, [indexValue, finalValueToAssign], {});
+          return finalValueToAssign;
+        }
         if (targetValue is Map) {
           targetValue[indexValue] = finalValueToAssign;
           return finalValueToAssign;
@@ -3269,8 +3313,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
           try {
             // Call the adapter with the native object
-            return adapter(
-                this, bridgedInstance.nativeObject, positionalArgs, namedArgs);
+            return retainCollectionOperationResult(
+                adapter(this, bridgedInstance.nativeObject, positionalArgs,
+                    namedArgs),
+                bridgedInstance.nativeObject,
+                methodName,
+                environment,
+                positionalArgs);
           } on ReturnException catch (e) {
             // Native calls shouldn't throw ReturnException directly, but handle defensively
             return e.value;
@@ -3580,8 +3629,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
           // Call the adapter with the native object as target
           try {
-            return methodAdapter(
-                this, nativeSuperObject, positionalArgs, namedArgs);
+            return retainCollectionOperationResult(
+                methodAdapter(
+                    this, nativeSuperObject, positionalArgs, namedArgs),
+                nativeSuperObject,
+                methodName,
+                environment,
+                positionalArgs);
           } catch (e, s) {
             Logger.error(
                 "Native exception during super call to bridged method '${bridgedSuper.name}.$methodName': $e\n$s");
@@ -3673,7 +3727,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final typeArgsNode = node.typeArguments;
       if (typeArgsNode != null) {
         evaluatedTypeArguments = typeArgsNode.arguments
-            .map((typeNode) => _resolveTypeAnnotation(typeNode))
+            .map((typeNode) => calleeValue is InterpretedClass
+                ? resolveNativeCollectionType(typeNode, environment)
+                : _resolveTypeAnnotation(typeNode))
             .toList();
         Logger.debug(
             "[MethodInvocation] Evaluated type arguments: $evaluatedTypeArguments");
@@ -3708,8 +3764,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             evaluationResult as (List<Object?>, Map<String, Object?>);
 
         try {
-          final nativeObject =
-              constructorAdapter(this, positionalArgs, namedArgs);
+          final nativeObject = constructBridged(
+              bridgedClass,
+              '',
+              positionalArgs,
+              namedArgs,
+              node.typeArguments?.arguments
+                  .map((type) => resolveNativeCollectionType(type, environment))
+                  .toList());
           if (nativeObject == null) {
             throw RuntimeError(
                 "Default bridged constructor adapter for '${bridgedClass.name}' returned null.");
@@ -4233,8 +4295,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           bridgedInstance.bridgedClass.findInstanceGetterAdapter(propertyName);
       if (getterAdapter != null) {
         Logger.debug("[PropertyAccess]   Found instance getter adapter.");
-        return getterAdapter(
-            this, bridgedInstance.nativeObject); // Call instance getter adapter
+        return retainCollectionOperationResult(
+            getterAdapter(this, bridgedInstance.nativeObject),
+            bridgedInstance.nativeObject,
+            propertyName,
+            environment);
       }
 
       final methodAdapter =
@@ -4319,7 +4384,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           bridgedSuper.findInstanceGetterAdapter(propertyName);
       if (getterAdapter != null) {
         try {
-          return getterAdapter(this, nativeSuperObject);
+          return retainCollectionOperationResult(
+              getterAdapter(this, nativeSuperObject),
+              nativeSuperObject,
+              propertyName,
+              environment);
         } catch (e, s) {
           Logger.error(
               "Native exception during super access to bridged getter '${bridgedSuper.name}.$propertyName': $e\n$s");
@@ -5136,7 +5205,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               initValue = result;
               _annotateCollectionRuntimeType(initValue, declaredType);
               Logger.debug(
-                  "[VariableDeclList] Sync init for '$variableName'. Defined as $initValue.");
+                  "[VariableDeclList] Sync init for '$variableName' (${initValue?.runtimeType}).");
               environment.define(variableName, initValue);
             }
           } else {
@@ -5325,7 +5394,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           listRuntimeType = AppliedRuntimeType(
               listType,
               explicitTypeArguments
-                  .map((typeNode) => _resolveTypeAnnotation(typeNode))
+                  .map((typeNode) =>
+                      resolveNativeCollectionType(typeNode, environment))
                   .toList());
         }
       } else {
@@ -5340,12 +5410,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       if (node.constKeyword != null) {
         final constList = List.unmodifiable(list);
         environment.annotateRuntimeType(constList, listRuntimeType);
-        _interpretedCollections[constList] = true;
+        markInterpreterOwnedCollection(constList);
         return constList;
       }
 
       environment.annotateRuntimeType(list, listRuntimeType);
-      _interpretedCollections[list] = true;
+      markInterpreterOwnedCollection(list);
 
       return list;
     } catch (_) {
@@ -5520,7 +5590,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final getter =
           bridgedInstance.bridgedClass.findInstanceGetterAdapter(propertyName);
       if (getter != null) {
-        return getter(this, bridgedInstance.nativeObject);
+        return retainCollectionOperationResult(
+            getter(this, bridgedInstance.nativeObject),
+            bridgedInstance.nativeObject,
+            propertyName,
+            environment);
       }
       // If no getter, maybe it's a method to be used in assignment? Unlikely.
       throw RuntimeError(
@@ -5591,7 +5665,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             throw RuntimeError(
                 "No getter '$propertyName' for compound assignment in cascade.");
           }
-          currentValue = getter(this, bridgedInstance.nativeObject);
+          currentValue = retainCollectionOperationResult(
+              getter(this, bridgedInstance.nativeObject),
+              bridgedInstance.nativeObject,
+              propertyName,
+              environment);
         } else {
           throw RuntimeError(
               "Cannot get property '$propertyName' for compound assignment on ${targetValue.runtimeType} in cascade.");
@@ -5721,7 +5799,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             throw RuntimeError(
                 "No getter '$propertyName' for compound assignment in cascade.");
           }
-          currentValue = getter(this, bridgedInstance.nativeObject);
+          currentValue = retainCollectionOperationResult(
+              getter(this, bridgedInstance.nativeObject),
+              bridgedInstance.nativeObject,
+              propertyName,
+              environment);
         } else {
           throw RuntimeError(
               "Cannot get property '$propertyName' for compound assignment on ${targetValue.runtimeType} in cascade.");
@@ -6400,7 +6482,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         Logger.debug(
             "[visitReturnStatement]   Value Runtime Type: $valueRuntimeTypeDetails");
         Logger.debug(
-            "[visitReturnStatement]   Return Value: $returnValue (Type: ${returnValue?.runtimeType})");
+            "[visitReturnStatement]   Return Value Type: ${returnValue?.runtimeType}");
         Logger.debug(
             "[visitReturnStatement]   Is Declared Type Nullable: $isNullable");
 
@@ -6423,8 +6505,26 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             }
 
             if (!shouldSkipTypeCheck) {
-              final isValidReturn =
-                  _isValueCompatibleWithRuntimeType(returnValue, declaredType);
+              final collectionName = declaredType is AppliedRuntimeType
+                  ? declaredType.baseType.name
+                  : declaredType.name;
+              TypeAnnotation? returnAnnotation = eDecl.returnType;
+              if (returnAnnotation is NamedType &&
+                  returnAnnotation.name.lexeme == 'Future' &&
+                  eDecl.functionExpression.body.isAsynchronous) {
+                returnAnnotation =
+                    returnAnnotation.typeArguments?.arguments.first;
+              }
+              final nativeCollection = returnValue != null &&
+                  !isInterpretedCollection(returnValue) &&
+                  (collectionName == 'List' ||
+                      collectionName == 'Map' ||
+                      collectionName == 'Set');
+              final isValidReturn = nativeCollection
+                  ? _valueMatchesType(returnValue, declaredType,
+                      typeAnnotation: returnAnnotation)
+                  : _isValueCompatibleWithRuntimeType(
+                      returnValue, declaredType);
 
               // Special handling for primitive type relationships
               // In Dart: int and double are subtypes of num
@@ -6890,10 +6990,19 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
           // Get current value via [] operator or direct access
           Object? currentValue;
-          if (targetValue is List) {
+          if (targetValue is BoundSuper || targetValue is BoundBridgedSuper) {
+            currentValue =
+                _readIndexForCompoundAssignment(targetValue, indexValue);
+          } else if (targetValue is List &&
+              !(targetValue is InterpretedInstance &&
+                  (targetValue as InterpretedInstance).findOperator('[]') !=
+                      null)) {
             final index = indexValue as int;
             currentValue = targetValue[index];
-          } else if (targetValue is Map) {
+          } else if (targetValue is Map &&
+              !(targetValue is InterpretedInstance &&
+                  (targetValue as InterpretedInstance).findOperator('[]') !=
+                      null)) {
             currentValue = targetValue[indexValue];
           } else if (targetValue is InterpretedInstance) {
             // Use class operator [] if available
@@ -6949,10 +7058,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
 
           // Set new value via []= operator or direct access
-          if (targetValue is List) {
+          if (targetValue is BoundSuper || targetValue is BoundBridgedSuper) {
+            _writeSuperIndex(targetValue, indexValue, newValue);
+          } else if (targetValue is List &&
+              !(targetValue is InterpretedInstance &&
+                  (targetValue as InterpretedInstance).findOperator('[]=') !=
+                      null)) {
             final index = indexValue as int;
             targetValue[index] = newValue;
-          } else if (targetValue is Map) {
+          } else if (targetValue is Map &&
+              !(targetValue is InterpretedInstance &&
+                  (targetValue as InterpretedInstance).findOperator('[]=') !=
+                      null)) {
             targetValue[indexValue] = newValue;
           } else if (targetValue is InterpretedInstance) {
             // Use class operator []= if available
@@ -7308,10 +7425,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
       // Get current value via [] operator or direct access
       Object? currentValue;
-      if (targetValue is List) {
+      if (targetValue is BoundSuper || targetValue is BoundBridgedSuper) {
+        currentValue = _readIndexForCompoundAssignment(targetValue, indexValue);
+      } else if (targetValue is List &&
+          !(targetValue is InterpretedInstance &&
+              (targetValue as InterpretedInstance).findOperator('[]') !=
+                  null)) {
         final index = indexValue as int;
         currentValue = targetValue[index];
-      } else if (targetValue is Map) {
+      } else if (targetValue is Map &&
+          !(targetValue is InterpretedInstance &&
+              (targetValue as InterpretedInstance).findOperator('[]') !=
+                  null)) {
         currentValue = targetValue[indexValue];
       } else if (targetValue is InterpretedInstance) {
         // Use class operator [] if available
@@ -7368,10 +7493,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
 
       // Set new value via []= operator or direct access
-      if (targetValue is List) {
+      if (targetValue is BoundSuper || targetValue is BoundBridgedSuper) {
+        _writeSuperIndex(targetValue, indexValue, newValue);
+      } else if (targetValue is List &&
+          !(targetValue is InterpretedInstance &&
+              (targetValue as InterpretedInstance).findOperator('[]=') !=
+                  null)) {
         final index = indexValue as int;
         targetValue[index] = newValue;
-      } else if (targetValue is Map) {
+      } else if (targetValue is Map &&
+          !(targetValue is InterpretedInstance &&
+              (targetValue as InterpretedInstance).findOperator('[]=') !=
+                  null)) {
         targetValue[indexValue] = newValue;
       } else if (targetValue is InterpretedInstance) {
         // Use class operator []= if available
@@ -7542,6 +7675,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     // Superclass lookup
     // InterpretedClass? superclass; // Keep this commented or remove
     if (node.extendsClause != null) {
+      klass.superclassType = node.extendsClause!.superclass;
       final superclassName = node.extendsClause!.superclass.name.lexeme;
       Logger.debug(
           "[Visitor.visitClassDeclaration]   Trying to get superclass '$superclassName' from env: ${environment.hashCode}");
@@ -7845,68 +7979,26 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     // Check for unimplemented abstract members
     if (!klass.isAbstract) {
       final inheritedAbstract = klass.getAbstractInheritedMembers();
-      final concreteMembers = klass.getConcreteMembers();
-      for (final abstractName in inheritedAbstract.keys) {
-        // Check if this class defines a concrete implementation
-        bool hasConcreteImpl = concreteMembers.containsKey(abstractName);
-
-        // If not, check if any mixin provides a concrete implementation
-        if (!hasConcreteImpl) {
-          for (final mixin in klass.mixins) {
-            if (mixin.getters.containsKey(abstractName) &&
-                !mixin.getters[abstractName]!.isAbstract) {
-              hasConcreteImpl = true;
-              break;
-            }
-            if (mixin.methods.containsKey(abstractName) &&
-                !mixin.methods[abstractName]!.isAbstract) {
-              hasConcreteImpl = true;
-              break;
-            }
-            if (mixin.setters.containsKey(abstractName) &&
-                !mixin.setters[abstractName]!.isAbstract) {
-              hasConcreteImpl = true;
-              break;
-            }
-          }
-        }
-
-        // If still not found, check the instance fields for field-based implementations
-        // Fields provide getter implementations for property access
-        if (!hasConcreteImpl) {
-          // Check if any field matches the abstract getter/property
-          for (final field in klass.fieldDeclarations) {
-            for (final variable in field.fields.variables) {
-              if (variable.name.lexeme == abstractName) {
-                // Found a field that matches this abstract name
-                hasConcreteImpl = true;
-                break;
-              }
-            }
-            if (hasConcreteImpl) break;
-          }
-        }
-
-        if (!hasConcreteImpl) {
-          final abstractMember = inheritedAbstract[abstractName]!;
-          String memberType = "method";
-          if (abstractMember.isGetter) memberType = "getter";
-          if (abstractMember.isSetter) memberType = "setter";
+      for (final entry in inheritedAbstract.entries) {
+        final member = entry.value;
+        final kind = member.isGetter
+            ? 'getter'
+            : member.isSetter
+                ? 'setter'
+                : 'method';
+        final name = entry.key.substring(kind.length + 1);
+        if (!klass.hasConcreteMember(name, kind)) {
           throw RuntimeError(
-              "Missing concrete implementation for inherited abstract $memberType '$abstractName' in class '${klass.name}'.");
+              "Missing concrete implementation for inherited abstract $kind '$name' in class '${klass.name}'.");
         }
       }
-    }
-
-    // Check for unimplemented interface members
-    if (!klass.isAbstract) {
       final requiredInterfaceMembers = klass.getAllInterfaceMembers();
-      final availableConcreteMembers = klass.getAllConcreteMembers();
-      for (final requiredName in requiredInterfaceMembers.keys) {
-        if (!availableConcreteMembers.containsKey(requiredName)) {
-          final memberType = requiredInterfaceMembers[requiredName]!;
+      for (final entry in requiredInterfaceMembers.entries) {
+        final kind = entry.value;
+        final name = entry.key.substring(kind.length + 1);
+        if (!klass.hasConcreteMember(name, kind)) {
           throw RuntimeError(
-              "Missing concrete implementation for interface $memberType '$requiredName' in class '${klass.name}'.");
+              "Missing concrete implementation for interface $kind '$name' in class '${klass.name}'.");
         }
       }
     }
@@ -8339,7 +8431,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final getter =
           instance.bridgedClass.findInstanceGetterAdapter(variableName);
       if (getter != null) {
-        return getter(this, instance.nativeObject);
+        return retainCollectionOperationResult(
+            getter(this, instance.nativeObject),
+            instance.nativeObject,
+            variableName,
+            environment);
       }
     }
     throw RuntimeError(
@@ -8398,7 +8494,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           "Cannot read bridged super property '$propertyName': no getter found.",
         );
       }
-      return getter(this, nativeTarget);
+      return retainCollectionOperationResult(
+          getter(this, nativeTarget), nativeTarget, propertyName, environment);
     }
     if (target is BridgedEnum) {
       final getter = target.staticGetters[propertyName];
@@ -8445,7 +8542,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           'no getter found.',
         );
       }
-      return getter(this, instance.nativeObject);
+      return retainCollectionOperationResult(
+          getter(this, instance.nativeObject),
+          instance.nativeObject,
+          propertyName,
+          environment);
     }
 
     throw RuntimeError(
@@ -8453,7 +8554,44 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     );
   }
 
+  void _writeSuperIndex(Object? target, Object? index, Object? value) {
+    final InterpretedInstance instance;
+    if (target is BoundSuper) {
+      instance = target.instance;
+      final operator = target.startLookupClass.findOperator('[]=');
+      if (operator != null) {
+        operator.bind(instance).call(this, [index, value], {});
+        return;
+      }
+    } else {
+      instance = (target as BoundBridgedSuper).instance;
+    }
+    final native = instance.bridgedSuperObject;
+    if (native is Map) {
+      native[index] = value;
+    } else if (native is List && index is int) {
+      native[index] = value;
+    } else {
+      throw RuntimeError('Superclass does not support index assignment.');
+    }
+  }
+
   Object? _readIndexForCompoundAssignment(Object? target, Object? index) {
+    if (target is BoundSuper) {
+      final operator = target.startLookupClass.findOperator('[]');
+      if (operator != null) {
+        return operator.bind(target.instance).call(this, [index], {});
+      }
+      return _readIndexForCompoundAssignment(
+          target.instance.bridgedSuperObject, index);
+    }
+    if (target is BoundBridgedSuper) {
+      return _readIndexForCompoundAssignment(
+          target.instance.bridgedSuperObject, index);
+    }
+    if (target is InterpretedInstance && target.findOperator('[]') != null) {
+      return target.findOperator('[]')!.bind(target).call(this, [index], {});
+    }
     if (target is Map) {
       return target[index];
     }
@@ -9116,7 +9254,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     // Otherwise, return the value (either from the try, or from the catch that handled the exception)
     // Note: if a catch made a return, it was already propagated by the 'rethrow' above.
-    Logger.debug("[TryStatement] Exiting normally, returning: $returnValue");
+    Logger.debug(
+        "[TryStatement] Exiting normally (${returnValue?.runtimeType})");
     return returnValue;
   }
 
@@ -9408,7 +9547,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         collectionRuntimeType = AppliedRuntimeType(
             baseType,
             node.typeArguments!.arguments
-                .map((typeNode) => _resolveTypeAnnotation(typeNode))
+                .map((typeNode) =>
+                    resolveNativeCollectionType(typeNode, environment))
                 .toList());
       }
     } else if (isMap && collection is Map) {
@@ -9440,18 +9580,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       if (isMap) {
         final constMap = Map.unmodifiable(collection as Map<Object?, Object?>);
         environment.annotateRuntimeType(constMap, collectionRuntimeType);
-        _interpretedCollections[constMap] = true;
+        markInterpreterOwnedCollection(constMap);
         return constMap;
       } else {
         final constSet = Set.unmodifiable(collection as Set<Object?>);
         environment.annotateRuntimeType(constSet, collectionRuntimeType);
-        _interpretedCollections[constSet] = true;
+        markInterpreterOwnedCollection(constSet);
         return constSet;
       }
     }
 
     environment.annotateRuntimeType(collection, collectionRuntimeType);
-    _interpretedCollections[collection] = true;
+    markInterpreterOwnedCollection(collection);
 
     return collection;
   }
@@ -9642,7 +9782,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         final typeArgsNode = node.constructorName.type.typeArguments;
         if (typeArgsNode != null) {
           evaluatedTypeArguments = typeArgsNode.arguments
-              .map((typeNode) => _resolveTypeAnnotation(typeNode))
+              .map((typeNode) =>
+                  resolveNativeCollectionType(typeNode, environment))
               .toList();
         }
 
@@ -9691,7 +9832,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                     );
                     environment.annotateRuntimeType(
                         list, AppliedRuntimeType(bridgedClass, [type]));
-                    _interpretedCollections[list] = true;
+                    markInterpreterOwnedCollection(list);
                     return list;
                   }()
                 : staticMethodAdapter(this, positionalArgs, namedArgs);
@@ -9723,13 +9864,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final typeArgsNode = node.constructorName.type.typeArguments;
       if (typeArgsNode != null) {
         evaluatedTypeArguments = typeArgsNode.arguments
-            .map((typeNode) => _resolveTypeAnnotation(typeNode))
+            .map((typeNode) =>
+                resolveNativeCollectionType(typeNode, environment))
             .toList();
       }
 
       try {
-        final nativeObject =
-            constructorAdapter(this, positionalArgs, namedArgs);
+        final nativeObject = constructBridged(
+            bridgedClass,
+            constructorLookupName,
+            positionalArgs,
+            namedArgs,
+            evaluatedTypeArguments);
 
         if (nativeObject == null) {
           throw RuntimeError(
@@ -9752,6 +9898,22 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       throw RuntimeError(
           "Identifier '$constructorName' resolved to ${typeValue?.runtimeType}, which is not a class type that can be instantiated.");
     }
+  }
+
+  /// Constructs native collection views with reified, lazy type contracts.
+  /// All other native constructors retain their registered adapter behavior.
+  Object? constructBridged(BridgedClass klass, String name, List<Object?> args,
+      Map<String, Object?> named,
+      [List<RuntimeType>? types]) {
+    if (name.isEmpty &&
+        types != null &&
+        types.isNotEmpty &&
+        (klass.name == 'UnmodifiableListView' ||
+            klass.name == 'UnmodifiableMapView' ||
+            klass.name == 'MapView')) {
+      return nativeCollectionView(klass.name, args.single!, types, this);
+    }
+    return klass.findConstructorAdapter(name)!(this, args, named);
   }
 
   Object _bridgeConstructorResult(
@@ -11621,7 +11783,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     // 6. Call the constructor adapter.
     Object? nativeSuperObject;
     try {
-      nativeSuperObject = constructorAdapter(this, positionalArgs, namedArgs);
+      nativeSuperObject = constructBridged(bridgedSuper, constructorName,
+          positionalArgs, namedArgs, thisInstance.nativeSuperclassArguments);
       if (nativeSuperObject == null) {
         throw RuntimeError(
             "Bridged super constructor adapter for '${bridgedSuper.name}.$constructorName' returned null.");
@@ -11724,31 +11887,29 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   bool _matchesNativeCollectionArgument(
       Object value, String collection, int index, NamedType argument) {
-    final nullable = argument.question != null;
-    return switch (argument.name.lexeme) {
-      'dynamic' => _nativeCollectionIs<dynamic>(value, collection, index),
-      'Object' => nullable
-          ? _nativeCollectionIs<Object?>(value, collection, index)
-          : _nativeCollectionIs<Object>(value, collection, index),
-      'Null' => _nativeCollectionIs<Null>(value, collection, index),
-      'Never' => _nativeCollectionIs<Never>(value, collection, index),
-      'int' => nullable
-          ? _nativeCollectionIs<int?>(value, collection, index)
-          : _nativeCollectionIs<int>(value, collection, index),
-      'double' => nullable
-          ? _nativeCollectionIs<double?>(value, collection, index)
-          : _nativeCollectionIs<double>(value, collection, index),
-      'num' => nullable
-          ? _nativeCollectionIs<num?>(value, collection, index)
-          : _nativeCollectionIs<num>(value, collection, index),
-      'String' => nullable
-          ? _nativeCollectionIs<String?>(value, collection, index)
-          : _nativeCollectionIs<String>(value, collection, index),
-      'bool' => nullable
-          ? _nativeCollectionIs<bool?>(value, collection, index)
-          : _nativeCollectionIs<bool>(value, collection, index),
-      _ => false,
-    };
+    final expected = resolveNativeCollectionType(argument, environment);
+    return reifyNativeCollectionType(
+        expected, <T>() => _nativeCollectionIs<T>(value, collection, index),
+        unreified: () {
+      // Retained declarations belong to views, not arbitrary host reification.
+      final annotated = value is InterpretedInstance
+          ? value.nativeSuperclassArguments
+          : (environment.getAnnotatedRuntimeType(value) is AppliedRuntimeType
+              ? (environment.getAnnotatedRuntimeType(value)
+                      as AppliedRuntimeType)
+                  .typeArguments
+              : null);
+      if (annotated != null && index < annotated.length) {
+        return nativeCollectionArgumentMatches(annotated[index], expected);
+      }
+      // Keep the existing non-core/nested compatibility path at explicit type
+      // checks. Construction and bridge crossing never inspect host contents.
+      final elements = value is Map
+          ? (index == 0 ? value.keys : value.values)
+          : value as Iterable;
+      return elements
+          .every((element) => _checkValueMatchesType(element, argument));
+    });
   }
 
   /// Checks host collection arguments using Dart's reified interface checks.
@@ -11783,11 +11944,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           arguments.any((argument) => argument is! NamedType)) {
         return false;
       }
-      // A literal created by the interpreter has an Object?-typed backing
-      // collection. Its retained annotation takes precedence over contents;
-      // when nested inference was unavailable, inspect only that owned backing
-      // collection. Host collections never enter this path.
-      if (_interpretedCollections[nativeValue] == true) {
+      // Interpreter literals and callback-derived collections can have erased
+      // backing types. Retained declarations take precedence; otherwise keep
+      // their existing element compatibility, including untyped empty results.
+      // Unmodified host collections never enter this path.
+      if (isInterpreterOwnedCollection(nativeValue)) {
         final annotated = environment.getAnnotatedRuntimeType(nativeValue);
         if (annotated != null &&
             !annotated.isSubtypeOf(expectedType, value: nativeValue)) {
@@ -11795,9 +11956,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
         if (nativeValue is List) {
           return nativeValue.isEmpty
-              ? annotated != null ||
-                  _matchesNativeCollectionArgument(
-                      nativeValue, 'List', 0, arguments.first as NamedType)
+              ? true
               : nativeValue.every((element) => _valueMatchesType(
                     element,
                     expectedType.typeArguments.first,
@@ -11806,11 +11965,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
         if (nativeValue is Map) {
           return nativeValue.isEmpty
-              ? annotated != null ||
-                  (_matchesNativeCollectionArgument(
-                          nativeValue, 'Map', 0, arguments[0] as NamedType) &&
-                      _matchesNativeCollectionArgument(
-                          nativeValue, 'Map', 1, arguments[1] as NamedType))
+              ? true
               : nativeValue.entries.every((entry) =>
                   _valueMatchesType(
                     entry.key,
@@ -11825,9 +11980,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
         if (nativeValue is Set) {
           return nativeValue.isEmpty
-              ? annotated != null ||
-                  _matchesNativeCollectionArgument(
-                      nativeValue, 'Set', 0, arguments.first as NamedType)
+              ? true
               : nativeValue.every((element) => _valueMatchesType(
                     element,
                     expectedType.typeArguments.first,

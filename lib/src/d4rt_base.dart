@@ -759,7 +759,7 @@ class D4rt {
       }
 
       Logger.debug(
-          "[execute] Calling '$name' with positionalArgs: $interpreterArgs, namedArgs: $interpreterNamedArgs");
+          "[execute] Calling '$name' with ${interpreterArgs.length} positional and ${interpreterNamedArgs.length} named arguments");
       functionResult =
           functionCallable.call(visitor, interpreterArgs, interpreterNamedArgs);
       Logger.debug(" [execute] Finished Pass 2: Interpretation");
@@ -1134,12 +1134,17 @@ class D4rt {
         }, "Error invoking interpreted Method or getter '$name' on '${klass.name}'");
       }
 
-      final bridgedSuperclass =
-          klass.findBridgedSuperclassDefiningInstanceMethod(name) ??
-              klass.findBridgedSuperclassDefiningInstanceGetter(name) ??
-              klass.findBridgedSuperclassDefiningInstanceSetter(name) ??
-              klass.bridgedSuperclass;
-      final nativeSuperObject = instance.bridgedSuperObject;
+      final bridgedSuperclass = instance is List
+          ? globalEnv.get('List') as BridgedClass
+          : instance is Map
+              ? globalEnv.get('Map') as BridgedClass
+              : klass.findBridgedSuperclassDefiningInstanceMethod(name) ??
+                  klass.findBridgedSuperclassDefiningInstanceGetter(name) ??
+                  klass.findBridgedSuperclassDefiningInstanceSetter(name) ??
+                  klass.bridgedSuperclass;
+      final nativeSuperObject = instance is List || instance is Map
+          ? instance
+          : instance.bridgedSuperObject;
 
       if (bridgedSuperclass != null) {
         final interpreterPositionalArgs = positionalArgs

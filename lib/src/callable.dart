@@ -4,6 +4,7 @@ import 'package:analyzer/dart/ast/token.dart';
 import 'package:d4rt/d4rt.dart';
 import 'package:d4rt/src/catch_clause_matcher.dart';
 import 'package:d4rt/src/type_annotation_utils.dart';
+import 'package:d4rt/src/native_collection_types.dart';
 
 /// Represents an invocation for noSuchMethod support in interpreted code
 class InterpretedInvocation {
@@ -716,7 +717,7 @@ class InterpretedFunction implements Callable {
         if (isSuperParameter && argumentProvided) {
           superParameterValues[paramName] = valueToDefine;
           Logger.debug(
-              "[_prepareEnv] Stored super parameter '$paramName' = $valueToDefine for forwarding");
+              "[_prepareEnv] Stored super parameter '$paramName' (${valueToDefine?.runtimeType}) for forwarding");
         }
 
         // Define variable in execution scope OR Initialize field
@@ -727,7 +728,7 @@ class InterpretedFunction implements Callable {
           // Directly call set on the RuntimeValue (works for both Instance and EnumValue)
           // We don't need the visitor here, as field init parameters don't call setters.
           Logger.debug(
-              "[_prepareEnv] Attempting to set this.$paramName = $valueToDefine for instance ${thisValue.hashCode}");
+              "[_prepareEnv] Setting this.$paramName (${valueToDefine?.runtimeType}) for instance ${thisValue.hashCode}");
           thisValue.set(paramName, valueToDefine);
         } else if (!isSuperParameter) {
           // It's a regular parameter (not super). Define it in the execution environment.
@@ -850,8 +851,14 @@ class InterpretedFunction implements Callable {
                 try {
                   // Adapter needs the *visitor* and args. It does NOT operate on 'thisValue' directly.
                   // The adapter is responsible for finding/creating the native object.
-                  final nativeSuperObject = constructorAdapter(
-                      visitor, superPositionalArgs, superNamedArgs);
+                  final nativeSuperObject = visitor.constructBridged(
+                      bridgedSuperClass,
+                      superConstructorName,
+                      superPositionalArgs,
+                      superNamedArgs,
+                      thisValue is InterpretedInstance
+                          ? thisValue.nativeSuperclassArguments
+                          : null);
 
                   if (nativeSuperObject == null) {
                     throw RuntimeError(
@@ -864,7 +871,7 @@ class InterpretedFunction implements Callable {
                     thisValue.bridgedSuperObject =
                         nativeSuperObject; // Use the public field
                     Logger.debug(
-                        "[SuperCall] Stored native object from bridged super constructor '$superConstructorName' ($nativeSuperObject)");
+                        "[SuperCall] Stored native object from bridged super constructor '$superConstructorName' (${nativeSuperObject.runtimeType})");
                   } else {
                     // This case (e.g., calling super() from an enum constructor?) seems unlikely/invalid.
                     throw StateError(
@@ -1024,11 +1031,11 @@ class InterpretedFunction implements Callable {
                   if (actualParentParam.isPositional) {
                     superPositionalArgs.add(value);
                     Logger.debug(
-                        "[Implicit super()] Added super parameter '$paramName' = $value as positional arg");
+                        "[Implicit super()] Added super parameter '$paramName' (${value?.runtimeType}) as positional arg");
                   } else if (actualParentParam.isNamed) {
                     superNamedArgs[paramName] = value;
                     Logger.debug(
-                        "[Implicit super()] Added super parameter '$paramName' = $value as named arg");
+                        "[Implicit super()] Added super parameter '$paramName' (${value?.runtimeType}) as named arg");
                   }
                 }
               }
@@ -1055,8 +1062,14 @@ class InterpretedFunction implements Callable {
           }
 
           try {
-            final nativeSuperObject =
-                constructorAdapter(visitor, const [], const {});
+            final nativeSuperObject = visitor.constructBridged(
+                bridgedSuperClass,
+                '',
+                const [],
+                const {},
+                thisValue is InterpretedInstance
+                    ? thisValue.nativeSuperclassArguments
+                    : null);
             if (nativeSuperObject == null) {
               throw RuntimeError("Bridged super constructor '' returned null.");
             }
@@ -1067,7 +1080,7 @@ class InterpretedFunction implements Callable {
 
             thisValue.bridgedSuperObject = nativeSuperObject;
             Logger.debug(
-                "[Implicit super()] Stored native object from bridged superclass '${bridgedSuperClass.name}' ($nativeSuperObject)");
+                "[Implicit super()] Stored native object from bridged superclass '${bridgedSuperClass.name}' (${nativeSuperObject.runtimeType})");
           } on RuntimeError catch (e) {
             throw RuntimeError(
                 "Error during bridged super constructor '': ${e.message}");
@@ -1251,6 +1264,15 @@ class InterpretedFunction implements Callable {
   Object? call(InterpreterVisitor visitor, List<Object?> positionalArguments,
       [Map<String, Object?> namedArguments = const {},
       List<RuntimeType>? typeArguments]) {
+    if (identical(InterpreterVisitor.currentCollectionVisitor, visitor)) {
+      return _call(visitor, positionalArguments, namedArguments, typeArguments);
+    }
+    return visitor.runCollectionInvocation(() =>
+        _call(visitor, positionalArguments, namedArguments, typeArguments));
+  }
+
+  Object? _call(InterpreterVisitor visitor, List<Object?> positionalArguments,
+      Map<String, Object?> namedArguments, List<RuntimeType>? typeArguments) {
     Logger.debug(
         "[InterpretedFunction.call] Called '${_name ?? 'anonymous'}' with ${positionalArguments.length} positional, ${namedArguments.length} named arguments.");
 
@@ -3043,8 +3065,11 @@ class InterpretedFunction implements Callable {
             final getterAdapter = bridgedInstance!.bridgedClass
                 .findInstanceGetterAdapter(propertyName);
             if (getterAdapter != null) {
-              final getterResult =
-                  getterAdapter(visitor, bridgedInstance.nativeObject);
+              final getterResult = retainCollectionOperationResult(
+                  getterAdapter(visitor, bridgedInstance.nativeObject),
+                  bridgedInstance.nativeObject,
+                  propertyName,
+                  visitor.environment);
 
               futureResult = getterResult;
             }
@@ -3201,8 +3226,11 @@ class InterpretedFunction implements Callable {
               final getterAdapter = bridgedInstance!.bridgedClass
                   .findInstanceGetterAdapter(propertyName);
               if (getterAdapter != null) {
-                final getterResult =
-                    getterAdapter(visitor, bridgedInstance.nativeObject);
+                final getterResult = retainCollectionOperationResult(
+                    getterAdapter(visitor, bridgedInstance.nativeObject),
+                    bridgedInstance.nativeObject,
+                    propertyName,
+                    visitor.environment);
 
                 resolvedRhs = getterResult;
               }
@@ -3271,7 +3299,7 @@ class InterpretedFunction implements Callable {
             resultValue = visitor.computeCompoundValue(
                 lhsValue, resolvedRhs, operatorType);
             Logger.debug(
-                " [_determineNextNodeAfterAwait] Computed compound value: $resultValue");
+                " [_determineNextNodeAfterAwait] Computed compound value (${resultValue?.runtimeType})");
           } catch (e, s) {
             Logger.error("Computing compound value after await: $e\n$s");
             if (!state.completer.isCompleted) {
@@ -3286,7 +3314,7 @@ class InterpretedFunction implements Callable {
             try {
               currentEnv.assign(varName, resultValue);
               Logger.debug(
-                  "[_determineNextNodeAfterAwait] Assigned $varName = $resultValue (Case 2 - Compound Assign)");
+                  "[_determineNextNodeAfterAwait] Assigned $varName (${resultValue?.runtimeType}) (Case 2 - Compound Assign)");
             } catch (e) {
               Logger.error("Assigning compound await result: $e");
             }
@@ -3400,7 +3428,7 @@ class InterpretedFunction implements Callable {
           try {
             currentEnv.assign(varName, resultValue);
             Logger.debug(
-                " [_determineNextNodeAfterAwait] Assigned $varName = $resultValue (Compound Assign)");
+                " [_determineNextNodeAfterAwait] Assigned $varName (${resultValue?.runtimeType}) (Compound Assign)");
           } catch (e) {
             Logger.error("Assigning compound await result: $e");
           }
@@ -4071,7 +4099,7 @@ class InterpretedFunction implements Callable {
         final value = arg.argumentExpression
             .accept<Object?>(visitor); // Evaluate the expression part
         Logger.debug(
-            " [_evalArgs] Evaluated NAMED arg expression '$name' = $value (${value?.runtimeType})");
+            " [_evalArgs] Evaluated NAMED arg expression '$name' (${value?.runtimeType})");
         if (value is AsyncSuspensionRequest) {
           throw UnimplementedError(
               "'await' is not yet supported within $invocationType call arguments.");
@@ -4088,7 +4116,7 @@ class InterpretedFunction implements Callable {
         }
         positionalArgs.add(argValue);
         Logger.debug(
-            " [_evalArgs] Evaluated POSITIONAL arg = $argValue (${argValue?.runtimeType})");
+            " [_evalArgs] Evaluated POSITIONAL arg (${argValue?.runtimeType})");
       }
     }
     return (positionalArgs, namedArgs);
@@ -4466,8 +4494,13 @@ class BridgedMethodCallable implements Callable {
       List<RuntimeType>? typeArguments]) {
     try {
       // Call the adapter with the native object of the instance and the arguments
-      return _adapter(
-          visitor, _instance.nativeObject, positionalArguments, namedArguments);
+      return retainCollectionOperationResult(
+          _adapter(visitor, _instance.nativeObject, positionalArguments,
+              namedArguments),
+          _instance.nativeObject,
+          _methodName,
+          visitor.environment,
+          positionalArguments);
     } on ArgumentError catch (e) {
       // Convert native ArgumentError to RuntimeError
       throw RuntimeError(

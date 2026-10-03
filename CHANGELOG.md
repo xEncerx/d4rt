@@ -1,3 +1,8 @@
+## 0.3.5
+- Recognize implicit instance-field getters when validating abstract and interface implementations, including inherited fields, while distinguishing getters, setters, and methods.
+- Expose interpreted `UnmodifiableListView`, `UnmodifiableMapView`, and `MapView` subclasses through native collection interfaces without traversing or copying collection graphs. Preserve interpreted identity, field-backed and explicit virtual overrides, native callback dispatch, actual superclass fallback, live backing aliases, and unmodifiable behavior.
+- Construct lazy typed direct and subclass views for supported core generic arguments with sound source/nullability checks, including `Null` and `Never`. Preserve nested, non-core, and interpreter-defined generic view operations and casts through retained declared metadata without claiming arbitrary native Dart reification.
+
 ## 0.3.4
 - Resume nested awaits inside arguments and map entries at their exact expressions, preserving evaluation order, completed values, and async error handling without repeating earlier effects.
 

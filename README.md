@@ -70,6 +70,33 @@ void main() {
 ```
 ## Advanced Features
 
+### Collection subclasses at native boundaries
+
+Interpreted subclasses of `UnmodifiableListView`, `UnmodifiableMapView`, and
+`MapView` retain their interpreted identity, fields, and overrides while also
+implementing the native `List` or `Map` interface. They remain usable when nested
+inside results or passed to registered native functions. View construction and
+native argument/result bridging do not traverse or copy the collection graph;
+backing-source changes remain visible and unmodifiable views reject mutation.
+Native consumers remain responsible for validation, cycle detection, and limits.
+
+Explicit view and superclass arguments are reified lazily for supported core
+types (`String`, `int`, `double`, `num`, `bool`, `Object`, their nullable variants,
+`dynamic`, `Null`, and `Never`). These source contracts are checked without
+inspecting contents. Nested, non-core, and interpreter-defined arguments remain
+usable through the interpreter with retained declared metadata and an erased
+native interface; that interface does not claim arbitrary native Dart reification.
+Explicit non-core host type checks retain the interpreter's existing compatibility
+semantics. Native virtual calls honor interpreted overrides, while inherited map
+operations retain the actual native superclass's backing-map semantics.
+Field-backed collection getters read the same interpreted state as interpreted
+property access, including inherited fields and lazy initialization of late fields.
+Collections produced by interpreted transformations retain interpreter ownership
+through lazy iterable operations and materialization. Their erased backing types
+do not cause new typed-return failures, while untouched host collections still use
+native reified checks.
+
+
 ### Function Argument Passing
 
 Pass positional and named arguments directly to functions:

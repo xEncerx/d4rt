@@ -339,7 +339,7 @@ class Environment {
 
   Object? assign(String name, Object? value) {
     Logger.debug(
-        "[Env.assign] Attempting to assign '$name' = $value in env: $hashCode");
+        "[Env.assign] Attempting to assign '$name' (${value?.runtimeType}) in env: $hashCode");
     if (_values.containsKey(name)) {
       Logger.debug(" [Env.assign] Assigned '$name' locally in env: $hashCode");
       _values[name] = value;

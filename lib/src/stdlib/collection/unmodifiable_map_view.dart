@@ -15,6 +15,20 @@ class UnmodifiableMapViewCollection {
           },
         },
         methods: {
+          '[]=': (visitor, target, args, named) {
+            (target as Map)[args[0]] = args[1];
+            return null;
+          },
+          'clear': (visitor, target, args, named) {
+            (target as Map).clear();
+            return null;
+          },
+          'remove': (visitor, target, args, named) =>
+              (target as Map).remove(args[0]),
+          'addAll': (visitor, target, args, named) {
+            (target as Map).addAll(args[0] as Map);
+            return null;
+          },
           '[]': (visitor, target, positionalArgs, namedArgs) {
             return (target as UnmodifiableMapView)[positionalArgs[0]];
           },
