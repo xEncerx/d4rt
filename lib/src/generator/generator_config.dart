@@ -43,6 +43,11 @@ class GeneratorConfig {
   /// Type mappings for complex types.
   final Map<String, String> typeMappings;
 
+  /// Exact compiled owner tuples for native enum factories, keyed by enum name.
+  /// Bounds and safe explicit constant tuples are included automatically.
+  /// Names must be core types or declarations present in collected source.
+  final Map<String, List<List<String>>> enumFactoryTypeArguments;
+
   /// Custom imports to add to generated files.
   final List<String> additionalImports;
 
@@ -66,6 +71,7 @@ class GeneratorConfig {
     this.includeOperators = true,
     this.bridgeAnnotation,
     this.typeMappings = const {},
+    this.enumFactoryTypeArguments = const {},
     this.additionalImports = const [],
     this.outputNaming = OutputNaming.suffixed,
     this.codeStyle = const CodeStyle(),
@@ -96,6 +102,15 @@ class GeneratorConfig {
       typeMappings: (json['typeMappings'] as Map<String, dynamic>?)
               ?.map((k, v) => MapEntry(k, v as String)) ??
           const {},
+      enumFactoryTypeArguments:
+          (json['enumFactoryTypeArguments'] as Map<String, dynamic>?)?.map(
+                  (name, tuples) => MapEntry(
+                      name,
+                      (tuples as List<dynamic>)
+                          .map((tuple) =>
+                              (tuple as List<dynamic>).cast<String>().toList())
+                          .toList())) ??
+              const {},
       additionalImports: (json['additionalImports'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toList() ??
@@ -126,6 +141,7 @@ class GeneratorConfig {
         'includeOperators': includeOperators,
         'bridgeAnnotation': bridgeAnnotation,
         'typeMappings': typeMappings,
+        'enumFactoryTypeArguments': enumFactoryTypeArguments,
         'additionalImports': additionalImports,
         'outputNaming': outputNaming.name,
         'codeStyle': codeStyle.toJson(),
@@ -144,6 +160,7 @@ class GeneratorConfig {
     bool? includeOperators,
     String? bridgeAnnotation,
     Map<String, String>? typeMappings,
+    Map<String, List<List<String>>>? enumFactoryTypeArguments,
     List<String>? additionalImports,
     OutputNaming? outputNaming,
     CodeStyle? codeStyle,
@@ -162,6 +179,8 @@ class GeneratorConfig {
       includeOperators: includeOperators ?? this.includeOperators,
       bridgeAnnotation: bridgeAnnotation ?? this.bridgeAnnotation,
       typeMappings: typeMappings ?? this.typeMappings,
+      enumFactoryTypeArguments:
+          enumFactoryTypeArguments ?? this.enumFactoryTypeArguments,
       additionalImports: additionalImports ?? this.additionalImports,
       outputNaming: outputNaming ?? this.outputNaming,
       codeStyle: codeStyle ?? this.codeStyle,
@@ -275,6 +294,7 @@ class ConfigBuilder {
   bool _includeOperators = true;
   String? _bridgeAnnotation;
   final Map<String, String> _typeMappings = {};
+  final Map<String, List<List<String>>> _enumFactoryTypeArguments = {};
   final List<String> _additionalImports = [];
   OutputNaming _outputNaming = OutputNaming.suffixed;
   CodeStyle _codeStyle = const CodeStyle();
@@ -358,6 +378,14 @@ class ConfigBuilder {
     return this;
   }
 
+  /// Adds one exact compiled native enum factory tuple; never expands products.
+  ConfigBuilder enumFactoryTuple(String enumName, List<String> arguments) {
+    _enumFactoryTypeArguments
+        .putIfAbsent(enumName, () => [])
+        .add(List.unmodifiable(arguments));
+    return this;
+  }
+
   /// Adds an additional import.
   ConfigBuilder addImport(String import) {
     _additionalImports.add(import);
@@ -398,6 +426,9 @@ class ConfigBuilder {
       includeOperators: _includeOperators,
       bridgeAnnotation: _bridgeAnnotation,
       typeMappings: Map.unmodifiable(_typeMappings),
+      enumFactoryTypeArguments: Map.unmodifiable(_enumFactoryTypeArguments.map(
+          (name, tuples) =>
+              MapEntry(name, List<List<String>>.unmodifiable(tuples)))),
       additionalImports: List.unmodifiable(_additionalImports),
       outputNaming: _outputNaming,
       codeStyle: _codeStyle,

@@ -1,3 +1,5 @@
+import 'package:d4rt/src/bridge/enum_type_metadata.dart';
+
 /// Common interface for types defined at runtime (interpreted or bridged).
 abstract class RuntimeType {
   /// The name of the type.
@@ -47,37 +49,22 @@ class AppliedRuntimeType implements RuntimeType {
   AppliedRuntimeType(this.baseType, List<RuntimeType> typeArguments)
       : typeArguments = List.unmodifiable(typeArguments);
 
+  late final int _typeHash = enumTypesHash(this);
+
+  @override
+  bool operator ==(Object other) =>
+      other is AppliedRuntimeType && enumTypesEquivalent(this, other);
+
+  @override
+  int get hashCode => _typeHash;
+
   @override
   String get name =>
       '${baseType.name}<${typeArguments.map((type) => type.name).join(', ')}>';
 
   @override
-  bool isSubtypeOf(RuntimeType other, {Object? value}) {
-    if (other is AppliedRuntimeType) {
-      final baseMatches = identical(baseType, other.baseType) ||
-          baseType.name == other.baseType.name ||
-          baseType.isSubtypeOf(other.baseType, value: value);
-      if (!baseMatches || typeArguments.length != other.typeArguments.length) {
-        return false;
-      }
-
-      for (int index = 0; index < typeArguments.length; index++) {
-        if (other.typeArguments[index].name == 'dynamic' ||
-            other.typeArguments[index].name == 'Object') {
-          continue;
-        }
-
-        if (!typeArguments[index]
-            .isSubtypeOf(other.typeArguments[index], value: value)) {
-          return false;
-        }
-      }
-
-      return true;
-    }
-
-    return baseType.isSubtypeOf(other, value: value);
-  }
+  bool isSubtypeOf(RuntimeType other, {Object? value}) =>
+      enumTypeArgumentSatisfies(this, other);
 
   @override
   String toString() => name;

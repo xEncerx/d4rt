@@ -10,8 +10,7 @@ library;
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
-
-import 'generator_config.dart';
+import 'package:d4rt/src/generator/generator_config.dart';
 
 // =============================================================================
 // COLLECTED METADATA
@@ -192,6 +191,18 @@ class EnumMetadata {
   /// Source location.
   final SourceLocation? location;
 
+  /// Generic enum parameters and their bounds.
+  final List<TypeParameterMetadata> typeParameters;
+
+  /// Direct generic interface and mixin type names.
+  final List<String> supertypes;
+
+  /// Available transitive generic hierarchy declarations.
+  final Map<String, List<String>> supertypeDeclarations;
+
+  /// Factory constructor declarations, distinct from ordinary static methods.
+  final List<ConstructorMetadata> factories;
+
   const EnumMetadata({
     required this.name,
     this.documentation,
@@ -201,6 +212,10 @@ class EnumMetadata {
     this.setters = const [],
     this.annotations = const [],
     this.location,
+    this.typeParameters = const [],
+    this.supertypes = const [],
+    this.supertypeDeclarations = const {},
+    this.factories = const [],
   });
 }
 
@@ -215,10 +230,14 @@ class EnumValueMetadata {
   /// Constructor arguments (for enhanced enums).
   final List<String> arguments;
 
+  /// Explicit source type arguments, or null when native inference owns them.
+  final List<String>? typeArguments;
+
   const EnumValueMetadata({
     required this.name,
     this.documentation,
     this.arguments = const [],
+    this.typeArguments,
   });
 }
 
@@ -563,6 +582,9 @@ class TypeMetadata {
   /// Generic type arguments.
   final List<TypeMetadata> typeArguments;
 
+  /// Structural callback signature retained directly from its source AST.
+  final FunctionTypeMetadata? function;
+
   /// Import URI for this type (if external).
   final String? importUri;
 
@@ -571,6 +593,7 @@ class TypeMetadata {
     String? fullName,
     this.isNullable = false,
     this.typeArguments = const [],
+    this.function,
     this.importUri,
   }) : fullName = fullName ?? name;
 
@@ -589,8 +612,28 @@ class TypeMetadata {
         fullName: '$fullName?',
         isNullable: true,
         typeArguments: typeArguments,
+        function: function,
         importUri: importUri,
       );
+}
+
+/// A callback's return type and ordered formal parameters, without source reparsing.
+class FunctionTypeMetadata {
+  /// Return type template, including enum owner parameter references.
+  final TypeMetadata returnType;
+
+  /// Formal shapes and nested types in their declaration order.
+  final List<ParameterMetadata> parameters;
+
+  /// Number of the callback's own generic parameters.
+  final int typeParameterCount;
+
+  /// Retains actual callback metadata rather than only its display string.
+  FunctionTypeMetadata(
+      {required this.returnType,
+      required List<ParameterMetadata> parameters,
+      this.typeParameterCount = 0})
+      : parameters = List.unmodifiable(parameters);
 }
 
 /// Metadata for a type parameter.
@@ -876,6 +919,7 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
     final methods = <MethodMetadata>[];
     final getters = <GetterMetadata>[];
     final setters = <SetterMetadata>[];
+    final factories = <ConstructorMetadata>[];
 
     for (final constant in node.body.constants) {
       values.add(EnumValueMetadata(
@@ -885,6 +929,9 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
                 .map((a) => a.toSource())
                 .toList() ??
             [],
+        typeArguments: constant.arguments?.typeArguments?.arguments
+            .map((type) => type.toSource())
+            .toList(),
       ));
     }
 
@@ -897,6 +944,24 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
         } else {
           methods.add(_extractMethodMetadata(member));
         }
+      } else if (member is FieldDeclaration) {
+        for (final variable in member.fields.variables) {
+          getters.add(GetterMetadata(
+              name: variable.name.lexeme,
+              returnType: _extractType(member.fields.type),
+              isStatic: member.isStatic));
+          if (member.isStatic &&
+              !member.fields.isFinal &&
+              !member.fields.isConst) {
+            setters.add(SetterMetadata(
+                name: variable.name.lexeme,
+                parameterType: _extractType(member.fields.type),
+                isStatic: true));
+          }
+        }
+      } else if (member is ConstructorDeclaration &&
+          member.factoryKeyword != null) {
+        factories.add(_extractConstructorMetadata(member));
       }
     }
 
@@ -907,9 +972,63 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
       methods: methods,
       getters: getters,
       setters: setters,
+      factories: factories,
       annotations: _extractAnnotations(node.metadata),
       location: _extractLocation(node),
+      typeParameters: _extractTypeParameters(node.namePart.typeParameters),
+      supertypes: [
+        ...?node.withClause?.mixinTypes.map((type) => type.toSource()),
+        ...?node.implementsClause?.interfaces.map((type) => type.toSource()),
+      ],
+      supertypeDeclarations: _enumTypeHierarchy(node),
     );
+  }
+
+  Map<String, List<String>> _enumTypeHierarchy(EnumDeclaration node) {
+    final declarations = <String, List<String>>{};
+    final root = node.root;
+    if (root is! CompilationUnit) return declarations;
+    for (final declaration in root.declarations) {
+      if (declaration is ClassDeclaration) {
+        final parameters = declaration.namePart.typeParameters?.typeParameters;
+        final name = declaration.namePart.typeName.lexeme +
+            (parameters == null
+                ? ''
+                : '<${parameters.map((p) => p.name.lexeme).join(', ')}>');
+        declarations[name] = [
+          if (declaration.extendsClause != null)
+            declaration.extendsClause!.superclass.toSource(),
+          ...?declaration.implementsClause?.interfaces
+              .map((type) => type.toSource()),
+          ...?declaration.withClause?.mixinTypes.map((type) => type.toSource()),
+        ];
+      } else if (declaration is MixinDeclaration) {
+        final parameters = declaration.typeParameters?.typeParameters;
+        final name = declaration.name.lexeme +
+            (parameters == null
+                ? ''
+                : '<${parameters.map((p) => p.name.lexeme).join(', ')}>');
+        declarations[name] = [
+          ...?declaration.implementsClause?.interfaces
+              .map((type) => type.toSource()),
+          ...?declaration.onClause?.superclassConstraints
+              .map((type) => type.toSource()),
+        ];
+      } else if (declaration is EnumDeclaration) {
+        final parameters = declaration.namePart.typeParameters?.typeParameters;
+        final name = declaration.namePart.typeName.lexeme +
+            (parameters == null
+                ? ''
+                : '<${parameters.map((p) => p.name.lexeme).join(', ')}>');
+        declarations[name] = [
+          'Enum',
+          ...?declaration.implementsClause?.interfaces
+              .map((type) => type.toSource()),
+          ...?declaration.withClause?.mixinTypes.map((type) => type.toSource()),
+        ];
+      }
+    }
+    return declarations;
   }
 
   FunctionMetadata _extractFunctionMetadata(FunctionDeclaration node) {
@@ -1022,7 +1141,18 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
 
       name = p.name?.lexeme ?? '';
       if (p is RegularFormalParameter && p.functionTypedSuffix != null) {
-        type = TypeMetadata(name: 'Function');
+        final suffix = p.functionTypedSuffix!;
+        type = TypeMetadata(
+            name: 'Function',
+            fullName:
+                '${p.type?.toSource() ?? 'dynamic'} Function${suffix.toSource()}',
+            isNullable: suffix.question != null,
+            function: FunctionTypeMetadata(
+              returnType: _extractType(p.type),
+              parameters: _extractParameters(suffix.formalParameters),
+              typeParameterCount:
+                  suffix.typeParameters?.typeParameters.length ?? 0,
+            ));
       } else {
         type = _extractType(p.type);
         if (type.name == 'dynamic') {
@@ -1075,7 +1205,15 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
         typeArguments: typeArgs,
       );
     } else if (type is GenericFunctionType) {
-      return TypeMetadata(name: 'Function', fullName: type.toSource());
+      return TypeMetadata(
+          name: 'Function',
+          fullName: type.toSource(),
+          isNullable: type.question != null,
+          function: FunctionTypeMetadata(
+            returnType: _extractType(type.returnType),
+            parameters: _extractParameters(type.parameters),
+            typeParameterCount: type.typeParameters?.typeParameters.length ?? 0,
+          ));
     }
 
     return TypeMetadata.dynamic_;

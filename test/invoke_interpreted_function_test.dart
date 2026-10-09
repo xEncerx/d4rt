@@ -1,5 +1,7 @@
-import 'package:test/test.dart';
+import 'dart:async';
+
 import 'package:d4rt/d4rt.dart';
+import 'package:test/test.dart';
 
 void main() {
   group('invokeInterpretedFunction tests', () {
@@ -87,6 +89,79 @@ void main() {
       final iterable = d4rt.invokeInterpretedFunction(gen, [0, 3]);
       final list = iterable.toList();
       expect(list, equals([0, 1, 2]));
+    });
+
+    test('explicit generator host consumption shares a terminal step budget',
+        () {
+      var effects = 0;
+      d4rt.registertopLevelFunction('touch', (visitor, args, named, types) {
+        effects++;
+        return 1;
+      });
+      final iterable = d4rt.execute(
+          source:
+              'Iterable<int> work() sync* {var n=0;while(n<1000){n++;}touch();yield n;}',
+          name: 'work',
+          maxSteps: 100) as Iterable;
+      expect(() => iterable.toList(), throwsA(isA<ExecutionLimitException>()));
+      expect(() => iterable.toList(), throwsA(isA<ExecutionLimitException>()));
+      expect(effects, 0,
+          reason: 'host retries cannot renew the explicit budget');
+    });
+
+    test('active generator consumption supersedes expired explicit entry',
+        () async {
+      var effects = 0;
+      d4rt.registertopLevelFunction('touch', (visitor, args, named, types) {
+        effects++;
+        return 1;
+      });
+      final iterable = d4rt.execute(
+          source: 'Iterable<int> work() sync* {touch();yield 7;}',
+          name: 'work',
+          timeout: const Duration(milliseconds: 50)) as Iterable;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(
+          () => iterable.toList(), throwsA(isA<ExecutionTimeoutException>()));
+      expect(effects, 0);
+      d4rt.registertopLevelFunction(
+          'retained', (visitor, args, named, types) => iterable);
+      expect(
+          d4rt.execute(
+              source: 'main()=>retained().toList();',
+              timeout: const Duration(seconds: 1)),
+          [7]);
+      expect(effects, 1);
+    });
+
+    test('explicit Callable generator entry permits bounded host consumption',
+        () {
+      d4rt.registertopLevelFunction(
+          'explicit',
+          (visitor, args, named, types) =>
+              Zone.root.run(() => (args.single as Callable).call(visitor, [])));
+      final iterable = d4rt.execute(
+              source:
+                  'Iterable<int> work() sync* {yield 1;yield 2;}main()=>explicit(work);')
+          as Iterable;
+      expect(iterable.toList(), [1, 2]);
+    });
+
+    test('explicit async generator deadline terminates host continuation',
+        () async {
+      var effects = 0;
+      d4rt.registertopLevelFunction('touch', (visitor, args, named, types) {
+        effects++;
+        return 1;
+      });
+      final stream = d4rt.execute(
+          source:
+              'Stream<int> work() async* {yield 1;await Future.delayed(Duration(milliseconds:80));touch();yield 2;}',
+          name: 'work',
+          timeout: const Duration(milliseconds: 50)) as Stream;
+      await expectLater(stream.toList().timeout(const Duration(seconds: 2)),
+          throwsA(isA<ExecutionTimeoutException>()));
+      expect(effects, 0);
     });
 
     test('Function that receives a function', () {

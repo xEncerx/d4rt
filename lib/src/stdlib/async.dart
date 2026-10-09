@@ -23,7 +23,7 @@ class AsyncStdlib {
     environment.defineBridge(ZoneAsync.definition);
 
     // Register scheduleMicrotask
-    environment.define(
+    environment.defineFunction(
         'scheduleMicrotask',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.isEmpty || arguments[0] is! InterpretedFunction) {
@@ -36,7 +36,7 @@ class AsyncStdlib {
         }, arity: 1, name: 'scheduleMicrotask'));
 
     // Register unawaited
-    environment.define(
+    environment.defineFunction(
         'unawaited',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.isEmpty || arguments[0] is! Future) {
@@ -47,7 +47,7 @@ class AsyncStdlib {
         }, arity: 1, name: 'unawaited'));
 
     // Register runZoned
-    environment.define(
+    environment.defineFunction(
         'runZoned',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.isEmpty || arguments[0] is! InterpretedFunction) {
@@ -63,7 +63,7 @@ class AsyncStdlib {
         }, arity: 1, name: 'runZoned'));
 
     // Register runZonedGuarded
-    environment.define(
+    environment.defineFunction(
         'runZonedGuarded',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.length < 2 ||

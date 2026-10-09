@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+
 import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
@@ -7,9 +8,68 @@ import 'package:d4rt/d4rt.dart';
 import 'package:d4rt/src/catch_clause_matcher.dart';
 import 'package:d4rt/src/invocation_deadline.dart';
 import 'package:d4rt/src/module_loader.dart';
-import 'package:d4rt/src/stdlib/core/list.dart';
-import 'package:d4rt/src/type_annotation_utils.dart';
 import 'package:d4rt/src/native_collection_types.dart';
+import 'package:d4rt/src/stdlib/core.dart';
+import 'package:d4rt/src/type_annotation_utils.dart';
+
+part 'enum_declaration_interpreter.dart';
+
+/// A constructor tear-off delegates allocation to the normal owning path.
+final class _ClassConstructorReference implements Callable {
+  final RuntimeType owner;
+  final String constructorName;
+  static final _references = Expando<Map<String, _ClassConstructorReference>>();
+  factory _ClassConstructorReference(RuntimeType owner, String member) {
+    final name = member == 'new' ? '' : member;
+    final references = _references[owner] ??= {};
+    return references.putIfAbsent(
+        name, () => _ClassConstructorReference._(owner, name));
+  }
+  _ClassConstructorReference._(this.owner, this.constructorName);
+
+  @override
+  int get arity => owner is InterpretedClass
+      ? (owner as InterpretedClass).constructors[constructorName]!.arity
+      : 0;
+
+  late final RuntimeType _signature = () {
+    if (owner is! InterpretedClass) return FunctionRuntimeType.untyped();
+    final shape = (owner as InterpretedClass)
+        .constructors[constructorName]!
+        .callableRuntimeType as FunctionRuntimeType;
+    return FunctionRuntimeType(
+        returnType: owner,
+        positionalParameterTypes: shape.positionalParameterTypes,
+        requiredPositionalParameterCount:
+            shape.requiredPositionalParameterCount,
+        namedParameterTypes: shape.namedParameterTypes,
+        requiredNamedParameters: shape.requiredNamedParameters);
+  }();
+
+  @override
+  RuntimeType get callableRuntimeType => _signature;
+
+  @override
+  Object? call(InterpreterVisitor visitor, List<Object?> positional,
+      [Map<String, Object?> named = const {}, List<RuntimeType>? types]) {
+    visitor.checkDeadline();
+    try {
+      if (owner is InterpretedClass) {
+        return (owner as InterpretedClass).invokeConstructor(
+            visitor, constructorName, positional, named, types);
+      }
+      final nativeOwner = owner as BridgedClass;
+      final result = visitor.constructBridged(
+          nativeOwner, constructorName, positional, named, types);
+      if (result == null) {
+        throw RuntimeError('Native constructor returned null.');
+      }
+      return visitor._bridgeConstructorResult(nativeOwner, result, types);
+    } finally {
+      visitor.checkDeadline();
+    }
+  }
+}
 
 final class _ExpressionContinuation {
   final List<Object?> completedValues = [];
@@ -93,6 +153,37 @@ final class _SwitchExpressionContinuation {
 /// Main visitor that walks the AST and interprets the code.
 /// Uses a two-pass approach (DeclarationVisitor first).
 class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
+  bool _enumConstantContext = false;
+
+  /// Validates a constant expression or constructor initializer in enum context.
+  void validateEnumConstant(AstNode node, {Set<String> parameters = const {}}) {
+    node.accept(_EnumMutationValidator());
+    node.accept(_EnumConstantValidator(this, parameters: parameters));
+  }
+
+  /// Evaluates an enum constant expression in its lexical declaration scope.
+  Object? evaluateEnumConstant(Expression expression, Environment scope) =>
+      _evaluateConstantExpression(expression, scope, validate: true);
+
+  Object? _evaluateConstantExpression(Expression expression, Environment scope,
+      {required bool validate}) {
+    final previous = environment;
+    final previousContext = _enumConstantContext;
+    environment = scope;
+    _enumConstantContext = true;
+    try {
+      if (validate) {
+        validateEnumConstant(expression);
+      } else {
+        expression.accept(_EnumMutationValidator());
+      }
+      return expression.accept<Object?>(this);
+    } finally {
+      environment = previous;
+      _enumConstantContext = previousContext;
+    }
+  }
+
   /// Whether a collection has interpreter-owned backing rather than a native
   /// host representation with reified type arguments.
   static bool isInterpretedCollection(Object value) =>
@@ -103,6 +194,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   final ModuleLoader moduleLoader; // Field for ModuleLoader
   final Uri? currentLibrary;
   InterpretedFunction? currentFunction; // Track the function being executed
+  final Set<String> _localDeclarationNames;
   static final Object _collectionVisitorKey = Object();
 
   /// The executing visitor for native collection virtual calls in this zone.
@@ -113,6 +205,35 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   /// continuations, without retaining another invocation's visitor.
   T runCollectionInvocation<T>(T Function() body) =>
       runZoned(body, zoneValues: {_collectionVisitorKey: this});
+
+  /// Invokes a retained native callback under the current execution's authority.
+  ///
+  /// A host call outside an active interpreter invocation has no execution
+  /// budget and is rejected rather than reusing the callback's creation visitor.
+  static Object? invokeCallback(Callable callback, List<Object?> positional,
+      [Map<String, Object?> named = const {}]) {
+    final visitor = requireCurrentInvocation();
+    try {
+      return callback.call(visitor, positional, named);
+    } finally {
+      visitor.checkDeadline();
+    }
+  }
+
+  /// Resolves execution authority for a deferred start or resume.
+  ///
+  /// Lexical closures and generator state do not grant invocation authority.
+  /// Explicit host entries establish it with [runCollectionInvocation].
+  static InterpreterVisitor requireCurrentInvocation() {
+    final visitor = currentCollectionVisitor;
+    if (visitor == null) {
+      throw RuntimeError(
+          'Deferred interpreted execution requires an active invocation.');
+    }
+    visitor.checkDeadline();
+    return visitor;
+  }
+
   AsyncExecutionState? currentAsyncState;
   List<Object?>?
       currentSyncGeneratorYields; // Collect yields in sync* generators
@@ -152,7 +273,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   })  : currentLibrary = initiallibrary,
         deadline =
             deadline ?? (timeout == null ? null : InvocationDeadline(timeout)),
-        environment = globalEnvironment {
+        environment = globalEnvironment,
+        _localDeclarationNames = globalEnvironment.values.keys.toSet() {
     if (initiallibrary != null) {
       Logger.debug(
           "[InterpreterVisitor] Initial source URI set to: $initiallibrary");
@@ -312,6 +434,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   /// Returns the value if found, null otherwise
   /// For InterpretedInstance, checks for custom getters first
   Object? _tryGetUniversalObjectProperty(Object? value, String propertyName) {
+    if (value is InterpretedEnumValue && propertyName == 'runtimeType') {
+      return value.get(propertyName, this);
+    }
+    if (value is BridgedEnumValue && propertyName == 'runtimeType') {
+      return value.get(propertyName, this);
+    }
     if (propertyName == 'hashCode') {
       // For InterpretedInstance, check if there's a custom hashCode getter
       if (value is InterpretedInstance) {
@@ -382,6 +510,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   String valueToString(Object? value) {
     if (value == null) {
       return 'null';
+    }
+    if (value is InterpretedEnumValue || value is BridgedEnumValue) {
+      final method = value is InterpretedEnumValue
+          ? value.get('toString', this)
+          : (value as BridgedEnumValue).get('toString', this);
+      return (method as Callable).call(this, [], {}).toString();
     }
 
     // For InterpretedInstance, try to call its toString() method
@@ -482,10 +616,19 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         // Evaluate initializer for potential side effects, but don't define
         variable.initializer?.accept<Object?>(this);
       } else {
-        Object? value;
-        if (variable.initializer != null) {
-          value = variable.initializer!.accept<Object?>(this);
+        Object? initialize() {
+          final previousContext = _enumConstantContext;
+          if (node.variables.isConst) _enumConstantContext = true;
+          try {
+            return variable.initializer?.accept<Object?>(this);
+          } finally {
+            _enumConstantContext = previousContext;
+          }
         }
+
+        final value = node.variables.isConst
+            ? environment.initializeConstant(variable.name.lexeme, initialize)
+            : initialize();
         _annotateCollectionRuntimeType(value, declaredType);
         environment.define(variable.name.lexeme, value);
       }
@@ -550,6 +693,23 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     final typeNode = node.type;
     if (typeNode is NamedType) {
       final typeName = typeNode.name.lexeme;
+      final resolvedTarget = _resolveTypeAnnotation(typeNode);
+      final targetBase = resolvedTarget is AppliedRuntimeType
+          ? resolvedTarget.baseType
+          : resolvedTarget;
+      if (value is InterpretedEnumValue ||
+          value is BridgedEnumValue ||
+          value is Enum ||
+          targetBase is InterpretedEnum ||
+          targetBase is BridgedEnum ||
+          typeName == 'Enum' ||
+          (value == null && typeNode.question != null)) {
+        if (_valueMatchesType(value, resolvedTarget,
+            typeAnnotation: typeNode)) {
+          return value;
+        }
+        throw RuntimeError('Invalid enum cast to ${typeNode.toSource()}.');
+      }
       if (typeName == 'List' || typeName == 'Map' || typeName == 'Set') {
         final expected = _resolveTypeAnnotation(typeNode);
         if (_valueMatchesType(value, expected, typeAnnotation: typeNode)) {
@@ -641,9 +801,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   @override
   Object? visitSimpleIdentifier(SimpleIdentifier node) {
     final name = node.name;
+    if (_enumConstantContext && environment.constantInitializer(name) != null) {
+      return environment.resolveConstant(name, evaluateEnumConstant);
+    }
 
     Logger.debug(
         "[visitSimpleIdentifier] Looking for '$name'. Visitor env: ${environment.hashCode}");
+    final definingScope = environment.findDefiningEnvironment(name);
+    if (definingScope is EnumMemberEnvironment) {
+      return definingScope.get(name);
+    }
 
     // Lexical search & Bridges
     try {
@@ -1025,11 +1192,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   }
 
   Object? _visitPrefixedIdentifier(PrefixedIdentifier node) {
-    final prefixValue = _evaluateContinuedExpression(node, node.prefix);
+    if (_enumConstantContext &&
+        environment.constantInitializer(node.toSource()) != null) {
+      return environment.resolveConstant(node.toSource(), evaluateEnumConstant);
+    }
+    var prefixValue = _evaluateContinuedExpression(node, node.prefix);
     if (prefixValue is AsyncSuspensionRequest) {
       // Propagate the suspension so that the state machine resumes this node after resolution
       return prefixValue;
     }
+    prefixValue = _enumReceiver(prefixValue);
     final memberName = node.identifier.name;
 
     // Try universal Object properties first (hashCode, runtimeType)
@@ -1066,6 +1238,17 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     }
 
     if (prefixValue is InterpretedClass) {
+      if (_enumConstantContext &&
+          prefixValue.staticConstantEnvironment
+                  .constantInitializer(memberName) !=
+              null) {
+        return prefixValue.staticConstantEnvironment
+            .resolveConstant(memberName, evaluateEnumConstant);
+      }
+      final constructor = memberName == 'new' ? '' : memberName;
+      if (prefixValue.constructors.containsKey(constructor)) {
+        return _ClassConstructorReference(prefixValue, memberName);
+      }
       // Static access
       try {
         return prefixValue.getStaticField(memberName);
@@ -1085,77 +1268,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
       }
     } else if (prefixValue is InterpretedEnum) {
-      if (memberName == 'values') {
-        Logger.debug(
-            "[PrefixedIdentifier] Accessing static getter 'values' on enum '${prefixValue.name}'.");
-        return prefixValue.valuesList;
-      }
-
-      // Check enum values first
-      final value = prefixValue.values[memberName];
-      if (value != null) {
-        Logger.debug(
-            "[PrefixedIdentifier] Accessing enum value '$memberName' on enum '${prefixValue.name}'.");
-        return value;
-      }
-
-      // Check static fields
-      if (prefixValue.staticFields.containsKey(memberName)) {
-        Logger.debug(
-            "[PrefixedIdentifier] Accessing static field '$memberName' on enum '${prefixValue.name}'.");
-        return prefixValue.staticFields[memberName];
-      }
-
-      // Check static getters
-      final staticGetter = prefixValue.staticGetters[memberName];
-      if (staticGetter != null) {
-        Logger.debug(
-            "[PrefixedIdentifier] Calling static getter '$memberName' on enum '${prefixValue.name}'.");
-        return staticGetter.call(this, [], {});
-      }
-
-      // Check static methods
-      final staticMethod = prefixValue.staticMethods[memberName];
-      if (staticMethod != null) {
-        Logger.debug(
-            "[PrefixedIdentifier] Accessing static method '$memberName' on enum '${prefixValue.name}'.");
-        return staticMethod;
-      }
-
-      // Check mixins for static members (reverse order)
-      for (final mixin in prefixValue.mixins.reversed) {
-        // Check static fields
-        try {
-          final mixinStaticField = mixin.getStaticField(memberName);
-          Logger.debug(
-              "[PrefixedIdentifier] Found static field '$memberName' from mixin '${mixin.name}' for enum '${prefixValue.name}'");
-          return mixinStaticField;
-        } on RuntimeError {
-          // Continue to next check
-        }
-
-        // Check static getters
-        final mixinStaticGetter = mixin.findStaticGetter(memberName);
-        if (mixinStaticGetter != null) {
-          Logger.debug(
-              "[PrefixedIdentifier] Found static getter '$memberName' from mixin '${mixin.name}' for enum '${prefixValue.name}'");
-          return mixinStaticGetter.call(this, [], {});
-        }
-
-        // Check static methods
-        final mixinStaticMethod = mixin.findStaticMethod(memberName);
-        if (mixinStaticMethod != null) {
-          Logger.debug(
-              "[PrefixedIdentifier] Found static method '$memberName' from mixin '${mixin.name}' for enum '${prefixValue.name}'");
-          return mixinStaticMethod;
-        }
-      }
-
-      // Not found
-      throw RuntimeError(
-          "Undefined static member '$memberName' on enum '${prefixValue.name}'. Available enum values: ${prefixValue.valueNames.join(', ')}");
+      return prefixValue.getStaticMember(memberName, this);
     } else if (prefixValue is BridgedClass) {
       final bridgedClass = prefixValue;
+      final constructor = memberName == 'new' ? '' : memberName;
+      if (bridgedClass.constructors.containsKey(constructor)) {
+        return _ClassConstructorReference(bridgedClass, memberName);
+      }
       Logger.debug(
           "[PrefixedIdentifier] Static access on BridgedClass: ${bridgedClass.name}.$memberName");
       final staticGetter = bridgedClass.findStaticGetterAdapter(memberName);
@@ -1248,40 +1367,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             "${e.message} (accessing property via PrefixedIdentifier '$memberName')");
       }
     } else if (prefixValue is InterpretedEnumValue) {
-      if (memberName == 'index') {
-        Logger.debug(
-            "[PrefixedIdentifier] Accessing getter 'index' on enum value '$prefixValue'.");
-        return prefixValue.index;
-      } else if (memberName == 'toString') {
-        Logger.debug(
-            "[PrefixedIdentifier] Accessing method 'toString' on enum value '$prefixValue'. Returning callable.");
-        // Return directly the string for simplicity in prefixed access?
-        // No, return a callable function to be consistent with methods.
-        return NativeFunction((_, args, __, ___) {
-          if (args.isNotEmpty) {
-            throw RuntimeError("toString() takes no arguments.");
-          }
-          return prefixValue.toString();
-        }, arity: 0, name: 'toString');
-      } else if (memberName == 'name') {
-        Logger.debug(
-            "[PrefixedIdentifier] Explicitly accessing 'name' on enum value '$prefixValue'. Returning value.");
-        return prefixValue.name; // Access directly the 'name' property
-      } else {
-        Logger.debug(
-            "[PrefixedIdentifier] Accessing member '$memberName' on enum value '$prefixValue'. Calling get()...");
-        try {
-          // Pass 'this' (the visitor) to allow getter execution if needed.
-          return prefixValue.get(memberName, this);
-        } on ReturnException catch (e) {
-          // If get() executes a getter that throws ReturnException
-          return e.value;
-        } catch (e) {
-          // Propagate other errors from get()
-          throw RuntimeError(
-              "Error getting member '$memberName' from enum value '$prefixValue': $e");
-        }
-      }
+      return prefixValue.get(memberName, this);
     } else if (toBridgedInstance(prefixValue).$2) {
       final bridgedInstance = toBridgedInstance(prefixValue).$1!;
       final getterAdapter =
@@ -1360,51 +1446,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
       }
     } else if (prefixValue is BridgedEnum) {
-      Logger.debug(
-          "[PrefixedIdentifier] Accessing value/member on BridgedEnum: ${prefixValue.name}.$memberName");
-
-      // Handle static 'values' getter for bridged enums
-      if (memberName == 'values') {
-        Logger.debug(
-            "[PrefixedIdentifier] Accessing static getter 'values' on bridged enum '${prefixValue.name}'.");
-        return prefixValue.enumValues;
-      }
-
-      // 1. Try to get enum value
-      final enumValue = prefixValue.getValue(memberName);
-      if (enumValue != null) {
-        return enumValue; // Return the BridgedEnumValue
-      }
-
-      // 2. Try static getter
-      final staticGetter = prefixValue.staticGetters[memberName];
-      if (staticGetter != null) {
-        try {
-          return staticGetter(this);
-        } catch (e, s) {
-          Logger.error(
-              "Native error during bridged enum static getter '$memberName': $e\n$s");
-          throw RuntimeError(
-              "Native error during bridged enum static getter '$memberName': $e");
-        }
-      }
-
-      // 3. Static methods as tear-offs
-      final staticMethod = prefixValue.staticMethods[memberName];
-      if (staticMethod != null) {
-        return BridgedEnumStaticMethodCallable(
-            prefixValue, staticMethod, memberName);
-      }
-
-      throw RuntimeError(
-          "Undefined member '$memberName' on bridged enum '${prefixValue.name}'.");
+      return prefixValue.getStaticMember(memberName, this);
     } else if (prefixValue is BridgedEnumValue) {
       final bridgedEnumValue = prefixValue;
       Logger.debug(
           "[PrefixedIdentifier] Accessing property '$memberName' on BridgedEnumValue (within InterpretedEnumValue block): $bridgedEnumValue");
       try {
         // Use the get() method of BridgedEnumValue
-        return bridgedEnumValue.get(memberName);
+        return bridgedEnumValue.get(memberName, this);
       } on ReturnException catch (e) {
         return e.value;
       } on RuntimeError {
@@ -2001,6 +2050,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       if (preparedTargetValue is AsyncSuspensionRequest) {
         return preparedTargetValue;
       }
+      preparedTargetValue = _enumReceiver(preparedTargetValue);
       if (operatorType != TokenType.EQ) {
         preparedCurrentValue = _evaluateContinuedValue(
           node,
@@ -2015,6 +2065,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       if (preparedTargetValue is AsyncSuspensionRequest) {
         return preparedTargetValue;
       }
+      preparedTargetValue = _enumReceiver(preparedTargetValue);
       if (operatorType != TokenType.EQ) {
         preparedCurrentValue = _evaluateContinuedValue(
           node,
@@ -2072,6 +2123,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
       Environment? definingEnv =
           environment.findDefiningEnvironment(variableName);
+      if (definingEnv is EnumMemberEnvironment) {
+        final value = operatorType == TokenType.EQ
+            ? rhsValue
+            : computeCompoundValue(
+                preparedCurrentValue, rhsValue, operatorType);
+        return definingEnv.assign(variableName, value);
+      }
 
       if (definingEnv != null) {
         // Check if the variable is a LateVariable
@@ -2304,6 +2362,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final targetValue = preparedTargetValue;
       final propertyName = lhs.propertyName.name;
       // rhsValue and operatorType already available from the top
+      if (targetValue is InterpretedEnum ||
+          targetValue is InterpretedEnumValue ||
+          targetValue is EnumSuper ||
+          targetValue is BridgedEnum ||
+          targetValue is BridgedEnumValue) {
+        final value = operatorType == TokenType.EQ
+            ? rhsValue
+            : computeCompoundValue(
+                preparedCurrentValue, rhsValue, operatorType);
+        _writeEnumMember(targetValue, propertyName, value);
+        return value;
+      }
 
       if (targetValue is BoundSuper) {
         // This handles cases like: super.value = expression; or super.value += expression;
@@ -2567,33 +2637,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 "Native error during compound super assignment to bridged property '$propertyName': $e");
           }
         }
-      } else if (targetValue is BridgedEnum) {
-        if (operatorType == TokenType.EQ) {
-          // Simple assignment: Enum.property = rhsValue
-          final staticSetter = targetValue.staticSetters[propertyName];
-          if (staticSetter != null) {
-            staticSetter(this, rhsValue);
-            return rhsValue;
-          } else {
-            throw RuntimeError(
-                "Bridged enum '${targetValue.name}' has no static setter named '$propertyName'.");
-          }
-        } else {
-          // Compound assignment: Enum.property op= rhsValue
-          Object? newValue = computeCompoundValue(
-            preparedCurrentValue,
-            rhsValue,
-            operatorType,
-          );
-          final staticSetter = targetValue.staticSetters[propertyName];
-          if (staticSetter != null) {
-            staticSetter(this, newValue);
-            return newValue;
-          } else {
-            throw RuntimeError(
-                "Bridged enum '${targetValue.name}' has no static setter named '$propertyName'.");
-          }
-        }
       } else if (targetValue is BridgedClass) {
         // Static assignment on bridged class via PropertyAccess
         if (operatorType == TokenType.EQ) {
@@ -2632,6 +2675,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final target = preparedTargetValue;
       final propertyName = lhs.identifier.name;
       // rhsValue and operatorType already available from the top
+      if (target is InterpretedEnum ||
+          target is InterpretedEnumValue ||
+          target is EnumSuper ||
+          target is BridgedEnum ||
+          target is BridgedEnumValue) {
+        final value = operatorType == TokenType.EQ
+            ? rhsValue
+            : computeCompoundValue(
+                preparedCurrentValue, rhsValue, operatorType);
+        _writeEnumMember(target, propertyName, value);
+        return value;
+      }
 
       if (target is InterpretedInstance) {
         if (operatorType == TokenType.EQ) {
@@ -2739,36 +2794,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
           Logger.debug(
               "[Assignment] Compound assigning to static bridged property '${bridgedClass.name}.$propertyName' via setter adapter.");
-          staticSetter(this, newValue);
-          return newValue; // Compound returns new value
-        }
-      } else if (target is BridgedEnum) {
-        if (operatorType == TokenType.EQ) {
-          // Simple assignment: BridgedEnum.property = rhsValue
-          final staticSetter = target.staticSetters[propertyName];
-          if (staticSetter == null) {
-            throw RuntimeError(
-                "Bridged enum '${target.name}' has no static setter named '$propertyName'.");
-          }
-          Logger.debug(
-              "[Assignment] Assigning to static bridged property '${target.name}.$propertyName' via setter adapter.");
-          staticSetter(this, rhsValue);
-          return rhsValue; // Simple Assignment returns RHS value
-        } else {
-          // Compound assignment: BridgedEnum.property op= rhsValue
-          Object? newValue = computeCompoundValue(
-            preparedCurrentValue,
-            rhsValue,
-            operatorType,
-          );
-          // 3. Set new static value
-          final staticSetter = target.staticSetters[propertyName];
-          if (staticSetter == null) {
-            throw RuntimeError(
-                "Cannot perform compound assignment on static '${target.name}.$propertyName': No static setter found after getter.");
-          }
-          Logger.debug(
-              "[Assignment] Compound assigning to static bridged property '${target.name}.$propertyName' via setter adapter.");
           staticSetter(this, newValue);
           return newValue; // Compound returns new value
         }
@@ -3054,6 +3079,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       if (targetValue is AsyncSuspensionRequest) {
         return targetValue;
       }
+      targetValue = _enumReceiver(targetValue);
       final methodName = node.methodName.name;
 
       // Null safety support: if the target is null and the call is null-aware, return null
@@ -3325,6 +3351,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             return e.value;
           } on UnsupportedError {
             rethrow;
+          } on ExecutionLimitException {
+            rethrow;
+          } on ExecutionTimeoutException {
+            rethrow;
           } catch (e, s) {
             Logger.log("Native Error Stack Trace: $s");
             throw RuntimeError(
@@ -3406,31 +3436,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
         }
       } else if (targetValue is InterpretedEnum) {
-        final staticMethod = targetValue.staticMethods[methodName];
-        if (staticMethod != null) {
-          calleeValue = staticMethod; // Static method, no binding needed
-        } else {
-          // Check mixins for static methods (reverse order)
-          bool found = false;
-          for (final mixin in targetValue.mixins.reversed) {
-            final mixinStaticMethod = mixin.findStaticMethod(methodName);
-            if (mixinStaticMethod != null) {
-              calleeValue = mixinStaticMethod;
-              found = true;
-              Logger.debug(
-                  "[MethodInvocation] Found static method '$methodName' from mixin '${mixin.name}' for enum '${targetValue.name}'");
-              break;
-            }
-          }
-
-          if (!found) {
-            // Before throwing, let's check if it's a built-in method call like 'values'
-            // This could potentially be handled by the stdlib call later, but maybe check here?
-            // For now, assume only user-defined static methods are intended.
-            throw RuntimeError(
-                "Enum '${targetValue.name}' has no static method named '$methodName'.");
-          }
-        }
+        calleeValue = targetValue.getStaticMember(methodName, this);
+      } else if (targetValue is EnumTypeReference) {
+        // A direct invocation evaluates arguments before native capability
+        // rejection. Property reads still bind a tear-off immediately.
+        calleeValue = targetValue;
+      } else if (targetValue is EnumSuper) {
+        calleeValue = targetValue.get(methodName, this);
       } else if (targetValue is InterpretedExtension) {
         // Static method call on extension
         final extension = targetValue;
@@ -3466,33 +3478,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               "Native error during bridged enum method call '$methodName' on $targetValue: $e");
         }
       } else if (targetValue is BridgedEnum) {
-        // Static method call on bridged enum
-        final bridgedEnum = targetValue;
-        final staticMethodAdapter = bridgedEnum.staticMethods[methodName];
-        if (staticMethodAdapter != null) {
-          final evaluationResult = _evaluateArgumentsAsync(node.argumentList);
-          if (evaluationResult is AsyncSuspensionRequest) {
-            return evaluationResult; // Propagate suspension
-          }
-          final (positionalArgs, namedArgs) =
-              evaluationResult as (List<Object?>, Map<String, Object?>);
-
-          try {
-            return staticMethodAdapter(this, positionalArgs, namedArgs);
-          } on ReturnException catch (e) {
-            return e.value;
-          } on RuntimeError {
-            rethrow;
-          } catch (e, s) {
-            Logger.error(
-                "[visitMethodInvocation] Native exception during static bridged enum method call '${bridgedEnum.name}.$methodName': $e\n$s");
-            throw RuntimeError(
-                "Native error during static bridged enum method call '$methodName' on ${bridgedEnum.name}: $e");
-          }
-        } else {
-          throw RuntimeError(
-              "Bridged enum '${bridgedEnum.name}' has no static method named '$methodName'.");
-        }
+        calleeValue = targetValue.getStaticMember(methodName, this);
       } else if (targetValue is BridgedClass) {
         // A class object stored in a variable is a Type receiver, not a
         // static access on the named class.
@@ -3714,20 +3700,24 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     }
 
     // Check if the resolved value is callable
-    if (calleeValue is Callable) {
+    if (calleeValue is Callable || calleeValue is EnumTypeReference) {
       final evaluationResult = _evaluateArgumentsAsync(node.argumentList);
       if (evaluationResult is AsyncSuspensionRequest) {
         return evaluationResult; // Propagate suspension
       }
       final (positionalArgs, namedArgs) =
           evaluationResult as (List<Object?>, Map<String, Object?>);
+      final callee = calleeValue is EnumTypeReference
+          ? calleeValue.getStaticMember(node.methodName.name, this)
+          : calleeValue;
+      if (callee is! Callable) throw RuntimeError('Not an enum factory.');
 
       // Evaluate Type Arguments for Method Invocation
       List<RuntimeType>? evaluatedTypeArguments;
       final typeArgsNode = node.typeArguments;
       if (typeArgsNode != null) {
         evaluatedTypeArguments = typeArgsNode.arguments
-            .map((typeNode) => calleeValue is InterpretedClass
+            .map((typeNode) => callee is InterpretedClass
                 ? resolveNativeCollectionType(typeNode, environment)
                 : _resolveTypeAnnotation(typeNode))
             .toList();
@@ -3740,7 +3730,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         // The call logic now works for functions, bound instance methods,
         // static methods, and constructors (which are handled by InterpretedClass.call)
         // Pass the evaluated type arguments
-        return calleeValue.call(
+        return callee.call(
             this, positionalArgs, namedArgs, evaluatedTypeArguments);
       } on ReturnException catch (e) {
         return e.value;
@@ -3968,13 +3958,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   }
 
   Object? _visitPropertyAccess(PropertyAccess node) {
-    final target = node.target == null
+    var target = node.target == null
         ? null
         : _evaluateContinuedExpression(node, node.target!);
     if (target is AsyncSuspensionRequest) {
       // Propagate suspension so the state machine resumes this node after resolution
       return target;
     }
+    target = _enumReceiver(target);
 
     // Determine if this is a conditional access by inspecting the source
     final isNullAware = node.toSource().contains('?.');
@@ -4105,59 +4096,22 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             "${e.message} (accessing property via PropertyAccess '$propertyName' on enum value '$target')");
       }
     } else if (target is InterpretedEnum) {
-      // Accessing static member on the enum itself
-      InterpretedFunction? staticGetter = target.staticGetters[propertyName];
-      if (staticGetter != null) {
-        // Call the static getter
-        return staticGetter.call(this, [], {});
-      }
-      Object? staticField = target.staticFields[propertyName];
-      if (target.staticFields.containsKey(propertyName)) {
-        // Return static field value (could be null)
-        return staticField;
-      }
-      InterpretedFunction? staticMethod = target.staticMethods[propertyName];
-      if (staticMethod != null) {
-        // Return the static method itself (tear-off)
-        return staticMethod;
-      }
-
-      // Check mixins for static members (reverse order)
-      for (final mixin in target.mixins.reversed) {
-        final mixinStaticGetter = mixin.findStaticGetter(propertyName);
-        if (mixinStaticGetter != null) {
-          Logger.debug(
-              "[PropertyAccess] Found static getter '$propertyName' from mixin '${mixin.name}' for enum '${target.name}'");
-          return mixinStaticGetter.call(this, [], {});
-        }
-
-        final mixinStaticMethod = mixin.findStaticMethod(propertyName);
-        if (mixinStaticMethod != null) {
-          Logger.debug(
-              "[PropertyAccess] Found static method '$propertyName' from mixin '${mixin.name}' for enum '${target.name}'");
-          return mixinStaticMethod;
-        }
-
-        // Check static fields - use try/catch since getStaticField throws if not found
-        try {
-          final mixinStaticField = mixin.getStaticField(propertyName);
-          Logger.debug(
-              "[PropertyAccess] Found static field '$propertyName' from mixin '${mixin.name}' for enum '${target.name}'");
-          return mixinStaticField;
-        } on RuntimeError {
-          // Continue to next mixin
-        }
-      }
-
-      // Check for built-in 'values'
-      if (propertyName == 'values') {
-        return target.valuesList;
-      }
-
-      // Not found
-      throw RuntimeError(
-          "Undefined static property '$propertyName' on enum '${target.name}'.");
+      return target.getStaticMember(propertyName, this);
+    } else if (target is EnumTypeReference) {
+      return target.getStaticMember(propertyName, this);
+    } else if (target is EnumSuper) {
+      return target.get(propertyName, this);
     } else if (target is InterpretedClass) {
+      if (_enumConstantContext &&
+          target.staticConstantEnvironment.constantInitializer(propertyName) !=
+              null) {
+        return target.staticConstantEnvironment
+            .resolveConstant(propertyName, evaluateEnumConstant);
+      }
+      final constructor = propertyName == 'new' ? '' : propertyName;
+      if (target.constructors.containsKey(constructor)) {
+        return _ClassConstructorReference(target, propertyName);
+      }
       // Static Access (no change)
       try {
         // Check static fields first (no inheritance for static fields in Dart)
@@ -4217,34 +4171,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       throw RuntimeError(
           "Undefined property '$propertyName' accessed via 'super' on instance of '${instance.klass.name}'.");
     } else if (target is BridgedEnum) {
-      Logger.debug(
-          "[PropertyAccess] Accessing value/member on BridgedEnum: ${target.name}.$propertyName");
-      // 1. Try to get enum value
-      final enumValue = target.getValue(propertyName);
-      if (enumValue != null) return enumValue;
-
-      // 2. Try static getter
-      final staticGetter = target.staticGetters[propertyName];
-      if (staticGetter != null) {
-        try {
-          return staticGetter(this);
-        } catch (e, s) {
-          Logger.error(
-              "Native error during bridged enum static getter '$propertyName': $e\n$s");
-          throw RuntimeError(
-              "Native error during bridged enum static getter '$propertyName': $e");
-        }
-      }
-
-      // 3. Static methods as tear-offs
-      final staticMethod = target.staticMethods[propertyName];
-      if (staticMethod != null) {
-        return BridgedEnumStaticMethodCallable(
-            target, staticMethod, propertyName);
-      }
-
-      throw RuntimeError(
-          "Undefined member '$propertyName' on bridged enum '${target.name}'.");
+      return target.getStaticMember(propertyName, this);
     } else if (target is BridgedEnumValue) {
       Logger.debug(
           "[PropertyAccess] Accessing property '$propertyName' on BridgedEnumValue: $target");
@@ -4262,6 +4189,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
     } else if (target is BridgedClass) {
       final bridgedClass = target;
+      final constructor = propertyName == 'new' ? '' : propertyName;
+      if (bridgedClass.constructors.containsKey(constructor)) {
+        return _ClassConstructorReference(bridgedClass, propertyName);
+      }
       Logger.debug(
           "[PropertyAccess] Static access on BridgedClass: ${bridgedClass.name}.$propertyName");
 
@@ -5174,7 +5105,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             // Late variable with lazy initializer
             final lateVar = LateVariable(variableName, () {
               // Create a closure that will evaluate the initializer when accessed
-              return variable.initializer!.accept<Object?>(this);
+              final value = variable.initializer!.accept<Object?>(this);
+              return value is EnumFactoryCallable
+                  ? value.bindContext(declaredType)
+                  : value;
             }, isFinal: isFinal);
             environment.define(variableName, lateVar);
             Logger.debug(
@@ -5202,7 +5136,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               // If there are multiple async inits, the LAST suspension request wins.
             } else {
               // Sync initializer: Use the computed value
-              initValue = result;
+              initValue = result is EnumFactoryCallable
+                  ? result.bindContext(declaredType)
+                  : result;
               _annotateCollectionRuntimeType(initValue, declaredType);
               Logger.debug(
                   "[VariableDeclList] Sync init for '$variableName' (${initValue?.runtimeType}).");
@@ -5407,7 +5343,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
 
       asyncState?.expressionContinuations.remove(node);
-      if (node.constKeyword != null) {
+      if (node.constKeyword != null || _enumConstantContext) {
         final constList = List.unmodifiable(list);
         environment.annotateRuntimeType(constList, listRuntimeType);
         markInterpreterOwnedCollection(constList);
@@ -6365,7 +6301,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
     } else {
       // Regular function - define normally
-      environment.define(functionName, function);
+      environment.defineFunction(functionName, function);
     }
 
     return null; // Declaration itself doesn't return a value
@@ -6620,6 +6556,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   Object? _visitPrefixExpression(PrefixExpression node) {
     final operatorType = node.operator.type;
     final operandNode = node.operand;
+    if (operatorType == TokenType.PLUS_PLUS ||
+        operatorType == TokenType.MINUS_MINUS) {
+      return _modifyIncrement(node, operandNode, operatorType, prefix: true);
+    }
     final operandValue = _evaluateContinuedExpression(node, operandNode);
     if (operandValue is AsyncSuspensionRequest) {
       return operandValue;
@@ -6771,333 +6711,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         throw RuntimeError(
             "Operand for unary '~' must be an int or have an operator defined, but was ${operandValue?.runtimeType}.");
 
-      case TokenType.PLUS_PLUS: // Prefix increment (++x)
-      case TokenType.MINUS_MINUS: // Prefix decrement (--x)
-        // Re-evaluate and unwrap operand specifically for ++/--
-        final operandValue = operandNode.accept<Object?>(this);
-        final bridgedInstance = toBridgedInstance(operandValue);
-        final assignOperand = bridgedInstance.$2
-            ? bridgedInstance.$1!.nativeObject
-            : operandValue;
-
-        // Check if AST node is assignable (SimpleIdentifier or PropertyAccess for now)
-        if (operandNode is SimpleIdentifier) {
-          final variableName = operandNode.name;
-          // We need the current value (already got it as assignOperand)
-          final currentValue = assignOperand;
-
-          if (currentValue is num) {
-            final newValue = operatorType == TokenType.PLUS_PLUS
-                ? currentValue + 1
-                : currentValue - 1;
-            // Assign the new value back to the variable
-            environment.assign(variableName, newValue);
-            // Return the *new* value
-            return newValue;
-          } else if (operandValue is InterpretedInstance) {
-            // Use custom + operator with literal 1
-            final operatorMethod = operandValue.findOperator('+');
-            if (operatorMethod != null) {
-              try {
-                // For ++x, we create appropriate operand and call x + operand
-                final operand = _createIncrementOperand(
-                    currentValue, operatorType == TokenType.PLUS_PLUS);
-                // Note: For --, we could either call x + (-1) or x - 1
-                // Let's use + with -1 for consistency
-                final newValue =
-                    operatorMethod.bind(operandValue).call(this, [operand], {});
-                // Assign the new value back to the variable
-                environment.assign(variableName, newValue);
-                // Return the *new* value
-                return newValue;
-              } on ReturnException catch (e) {
-                final newValue = e.value;
-                // Assign the new value back to the variable
-                environment.assign(variableName, newValue);
-                // Return the *new* value
-                return newValue;
-              } catch (e) {
-                throw RuntimeError(
-                    "Error executing custom operator '+' for prefix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-              }
-            } else {
-              throw RuntimeError(
-                  "Cannot increment/decrement object of type '${operandValue.klass.name}': No operator '+' found.");
-            }
-          } else {
-            // Requires finding operator +/-, then assigning back.
-            // Complex, skip for now.
-            // Error uses original value type
-            throw RuntimeError(
-                "Operand for prefix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}' must be a number, but was ${operandValue?.runtimeType}. Extension support TBD.");
-          }
-        } else if (operandNode is PropertyAccess) {
-          // Handle property access like obj.field++
-          final targetValue = operandNode.target?.accept<Object?>(this);
-          final propertyName = operandNode.propertyName.name;
-
-          if (targetValue is InterpretedInstance) {
-            // Get current value via getter or field
-            final currentValue = targetValue.get(propertyName, visitor: this);
-
-            // Calculate new value
-            Object? newValue;
-            if (currentValue is num) {
-              newValue = operatorType == TokenType.PLUS_PLUS
-                  ? currentValue + 1
-                  : currentValue - 1;
-            } else if (currentValue is InterpretedInstance) {
-              // Use custom + operator with literal 1
-              final operatorMethod = currentValue.findOperator('+');
-              if (operatorMethod != null) {
-                try {
-                  // For ++x, we create a literal 1 and call x + 1
-                  operatorType == TokenType.PLUS_PLUS ? 1 : -1;
-                  // Note: For --, we could either call x + (-1) or x - 1
-                  // Let's use + with -1 for consistency
-                  newValue = operatorMethod
-                      .bind(currentValue)
-                      .call(this, [operand], {});
-                } on ReturnException catch (e) {
-                  newValue = e.value;
-                } catch (e) {
-                  throw RuntimeError(
-                      "Error executing custom operator '+' for prefix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-                }
-              } else {
-                throw RuntimeError(
-                    "Cannot increment/decrement object of type '${currentValue.klass.name}': No operator '+' found.");
-              }
-            } else {
-              throw RuntimeError(
-                  "Cannot increment/decrement property '$propertyName' of type '${currentValue?.runtimeType}': Expected number or object with '+' operator.");
-            }
-
-            // Set new value via setter or field
-            final setter = targetValue.klass.findInstanceSetter(propertyName);
-            if (setter != null) {
-              setter.bind(targetValue).call(this, [newValue], {});
-            } else {
-              targetValue.set(propertyName, newValue, this);
-            }
-
-            // Return the *new* value for prefix operators
-            return newValue;
-          } else {
-            throw RuntimeError(
-                "Cannot increment/decrement property on non-instance object of type '${targetValue?.runtimeType}'.");
-          }
-        } else if (operandNode is PrefixedIdentifier) {
-          // Handle prefixed identifier like obj.field++ (parsed as PrefixedIdentifier)
-          final targetValue = operandNode.prefix.accept<Object?>(this);
-          final propertyName = operandNode.identifier.name;
-
-          if (targetValue is InterpretedInstance) {
-            // Get current value via getter or field
-            final currentValue = targetValue.get(propertyName, visitor: this);
-
-            // Calculate new value
-            Object? newValue;
-            if (currentValue is num) {
-              newValue = operatorType == TokenType.PLUS_PLUS
-                  ? currentValue + 1
-                  : currentValue - 1;
-            } else if (currentValue is InterpretedInstance) {
-              // Use custom + operator with literal 1
-              final operatorMethod = currentValue.findOperator('+');
-              if (operatorMethod != null) {
-                try {
-                  // For ++x, we create a literal 1 and call x + 1
-                  operatorType == TokenType.PLUS_PLUS ? 1 : -1;
-                  // Note: For --, we could either call x + (-1) or x - 1
-                  // Let's use + with -1 for consistency
-                  newValue = operatorMethod
-                      .bind(currentValue)
-                      .call(this, [operand], {});
-                } on ReturnException catch (e) {
-                  newValue = e.value;
-                } catch (e) {
-                  throw RuntimeError(
-                      "Error executing custom operator '+' for prefix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-                }
-              } else {
-                throw RuntimeError(
-                    "Cannot increment/decrement object of type '${currentValue.klass.name}': No operator '+' found.");
-              }
-            } else {
-              throw RuntimeError(
-                  "Cannot increment/decrement property '$propertyName' of type '${currentValue?.runtimeType}': Expected number or object with '+' operator.");
-            }
-
-            // Set new value via setter or field
-            final setter = targetValue.klass.findInstanceSetter(propertyName);
-            if (setter != null) {
-              setter.bind(targetValue).call(this, [newValue], {});
-            } else {
-              targetValue.set(propertyName, newValue, this);
-            }
-
-            // Return the *new* value for prefix operators
-            return newValue;
-          } else if (targetValue is InterpretedExtension) {
-            // Handle static field/getter increment/decrement on extension (prefix)
-            final extension = targetValue;
-
-            // Get current value via static getter or field
-            Object? currentValue;
-            final staticGetter = extension.findStaticGetter(propertyName);
-            if (staticGetter != null) {
-              currentValue = staticGetter.call(this, [], {});
-            } else if (extension.staticFields.containsKey(propertyName)) {
-              currentValue = extension.getStaticField(propertyName);
-            } else {
-              throw RuntimeError(
-                  "Extension '${extension.name}' has no static field or getter named '$propertyName'.");
-            }
-
-            // Calculate new value
-            Object? newValue;
-            if (currentValue is num) {
-              newValue = operatorType == TokenType.PLUS_PLUS
-                  ? currentValue + 1
-                  : currentValue - 1;
-            } else {
-              throw RuntimeError(
-                  "Cannot increment/decrement static property '$propertyName' of type '${currentValue?.runtimeType}': Expected number.");
-            }
-
-            // Set new value via static setter or field
-            final staticSetter = extension.findStaticSetter(propertyName);
-            if (staticSetter != null) {
-              staticSetter.call(this, [newValue], {});
-            } else if (extension.staticFields.containsKey(propertyName)) {
-              extension.setStaticField(propertyName, newValue);
-            } else {
-              throw RuntimeError(
-                  "Extension '${extension.name}' has no static setter or field named '$propertyName'.");
-            }
-
-            // Return the *new* value for prefix operators
-            return newValue;
-          } else {
-            throw RuntimeError(
-                "Cannot increment/decrement property on non-instance object of type '${targetValue?.runtimeType}'.");
-          }
-        } else if (operandNode is IndexExpression) {
-          // Handle index access like ++array[i]
-          final targetValue = operandNode.target?.accept<Object?>(this);
-          final indexValue = operandNode.index.accept<Object?>(this);
-
-          // Get current value via [] operator or direct access
-          Object? currentValue;
-          if (targetValue is BoundSuper || targetValue is BoundBridgedSuper) {
-            currentValue =
-                _readIndexForCompoundAssignment(targetValue, indexValue);
-          } else if (targetValue is List &&
-              !(targetValue is InterpretedInstance &&
-                  (targetValue as InterpretedInstance).findOperator('[]') !=
-                      null)) {
-            final index = indexValue as int;
-            currentValue = targetValue[index];
-          } else if (targetValue is Map &&
-              !(targetValue is InterpretedInstance &&
-                  (targetValue as InterpretedInstance).findOperator('[]') !=
-                      null)) {
-            currentValue = targetValue[indexValue];
-          } else if (targetValue is InterpretedInstance) {
-            // Use class operator [] if available
-            final operatorMethod = targetValue.findOperator('[]');
-            if (operatorMethod != null) {
-              try {
-                currentValue = operatorMethod
-                    .bind(targetValue)
-                    .call(this, [indexValue], {});
-              } on ReturnException catch (e) {
-                currentValue = e.value;
-              } catch (e) {
-                throw RuntimeError(
-                    "Error executing class operator '[]' for prefix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-              }
-            } else {
-              throw RuntimeError(
-                  "Cannot read index for prefix increment/decrement on ${targetValue.klass.name}: No operator '[]' found.");
-            }
-          } else {
-            throw RuntimeError(
-                "Cannot apply prefix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}' to index of type '${targetValue?.runtimeType}'.");
-          }
-
-          // Calculate new value
-          Object? newValue;
-          if (currentValue is num) {
-            newValue = operatorType == TokenType.PLUS_PLUS
-                ? currentValue + 1
-                : currentValue - 1;
-          } else if (currentValue is InterpretedInstance) {
-            // Use custom + operator with literal 1
-            final operatorMethod = currentValue.findOperator('+');
-            if (operatorMethod != null) {
-              try {
-                final operand = _createIncrementOperand(
-                    currentValue, operatorType == TokenType.PLUS_PLUS);
-                newValue =
-                    operatorMethod.bind(currentValue).call(this, [operand], {});
-              } on ReturnException catch (e) {
-                newValue = e.value;
-              } catch (e) {
-                throw RuntimeError(
-                    "Error executing custom operator '+' for prefix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-              }
-            } else {
-              throw RuntimeError(
-                  "Cannot increment/decrement object at index of type '${currentValue.klass.name}': No operator '+' found.");
-            }
-          } else {
-            throw RuntimeError(
-                "Cannot increment/decrement value at index of type '${currentValue?.runtimeType}': Expected number or object with '+' operator.");
-          }
-
-          // Set new value via []= operator or direct access
-          if (targetValue is BoundSuper || targetValue is BoundBridgedSuper) {
-            _writeSuperIndex(targetValue, indexValue, newValue);
-          } else if (targetValue is List &&
-              !(targetValue is InterpretedInstance &&
-                  (targetValue as InterpretedInstance).findOperator('[]=') !=
-                      null)) {
-            final index = indexValue as int;
-            targetValue[index] = newValue;
-          } else if (targetValue is Map &&
-              !(targetValue is InterpretedInstance &&
-                  (targetValue as InterpretedInstance).findOperator('[]=') !=
-                      null)) {
-            targetValue[indexValue] = newValue;
-          } else if (targetValue is InterpretedInstance) {
-            // Use class operator []= if available
-            final operatorMethod = targetValue.findOperator('[]=');
-            if (operatorMethod != null) {
-              try {
-                operatorMethod
-                    .bind(targetValue)
-                    .call(this, [indexValue, newValue], {});
-              } on ReturnException catch (_) {
-                // []= should not return a value, but assignment expression returns assigned value
-              } catch (e) {
-                throw RuntimeError(
-                    "Error executing class operator '[]=' for prefix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-              }
-            } else {
-              throw RuntimeError(
-                  "Cannot write index for prefix increment/decrement on ${targetValue.klass.name}: No operator '[]=' found.");
-            }
-          }
-
-          // Return the *new* value for prefix operators
-          return newValue;
-        } else {
-          Logger.debug("Operand type: ${operandNode.runtimeType}");
-          throw RuntimeError(
-              "Operand for prefix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}' must be an assignable variable, property, or index.");
-        }
       default:
         // Check for class operators first for any other unary operators
         final String operatorLexeme = node.operator.lexeme;
@@ -7143,394 +6756,140 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   }
 
   @override
-  Object? visitPostfixExpression(PostfixExpression node) {
-    final operatorType = node.operator.type;
-
-    // Support for the non-null assertion operator (!)
-    if (operatorType == TokenType.BANG) {
-      final operandValue = node.operand.accept<Object?>(this);
-      if (operandValue == null) {
-        throw RuntimeError(
-            "Null check operator used on a null value at ${node.toString()}");
-      }
-      return operandValue;
-    }
-
-    // Check if operand is assignable (SimpleIdentifier or PropertyAccess)
-    if (node.operand is SimpleIdentifier) {
-      final variableName = (node.operand as SimpleIdentifier).name;
-      Object? operandValue;
-      InterpretedInstance? thisInstance;
-      bool isInstanceField = false;
-
-      // Try lexical scope first, then implicit 'this'
-      try {
-        operandValue = environment.get(variableName); // Try lexical scope
-      } on RuntimeError {
-        // Not found lexically, try implicit 'this'
-        try {
-          final potentialThis = environment.get('this');
-          if (potentialThis is InterpretedInstance) {
-            thisInstance = potentialThis;
-            operandValue = thisInstance.get(variableName); // Get from instance
-            isInstanceField = true;
-          } else {
-            throw RuntimeError("Undefined variable: $variableName");
+  Object? visitPostfixExpression(PostfixExpression node) =>
+      _runWithExpressionContinuation(node, () {
+        if (node.operator.type == TokenType.BANG) {
+          final value = _evaluateContinuedExpression(node, node.operand);
+          if (value == null) {
+            throw RuntimeError('Null check operator used on null.');
           }
-        } on RuntimeError {
-          throw RuntimeError("Undefined variable: $variableName");
+          return value;
         }
-      }
-      final bridgedInstance = toBridgedInstance(operandValue);
-      final currentValue =
-          bridgedInstance.$2 ? bridgedInstance.$1!.nativeObject : operandValue;
+        return _modifyIncrement(node, node.operand, node.operator.type,
+            prefix: false);
+      });
 
-      if (currentValue is num) {
-        final newValue = operatorType == TokenType.PLUS_PLUS
-            ? currentValue + 1
-            : currentValue - 1;
-
-        // Assign back to correct target (lexical or instance)
-        if (isInstanceField && thisInstance != null) {
-          final setter = thisInstance.klass.findInstanceSetter(variableName);
-          if (setter != null) {
-            setter.bind(thisInstance).call(this, [newValue], {});
-          } else {
-            thisInstance.set(
-                variableName, newValue, this); // Assign to instance field
-          }
-        } else {
-          environment.assign(
-              variableName, newValue); // Assign to lexical variable
-        }
-
-        return operandValue; // Return the original value
-      } else if (operandValue is InterpretedInstance) {
-        // Use custom + operator with literal 1
-        final operatorMethod = operandValue.findOperator('+');
-        if (operatorMethod != null) {
-          try {
-            // For x++, we create a literal 1 and call x + 1
-            final operand = _createIncrementOperand(
-                currentValue, operatorType == TokenType.PLUS_PLUS);
-            Object? newValue =
-                operatorMethod.bind(operandValue).call(this, [operand], {});
-
-            // Assign back to correct target (lexical or instance)
-            if (isInstanceField && thisInstance != null) {
-              final setter =
-                  thisInstance.klass.findInstanceSetter(variableName);
-              if (setter != null) {
-                setter.bind(thisInstance).call(this, [newValue], {});
-              } else {
-                thisInstance.set(
-                    variableName, newValue, this); // Assign to instance field
-              }
-            } else {
-              environment.assign(
-                  variableName, newValue); // Assign to lexical variable
-            }
-
-            return operandValue; // Return the original value for postfix
-          } on ReturnException catch (e) {
-            final newValue = e.value;
-
-            // Assign back to correct target (lexical or instance)
-            if (isInstanceField && thisInstance != null) {
-              final setter =
-                  thisInstance.klass.findInstanceSetter(variableName);
-              if (setter != null) {
-                setter.bind(thisInstance).call(this, [newValue], {});
-              } else {
-                thisInstance.set(
-                    variableName, newValue, this); // Assign to instance field
-              }
-            } else {
-              environment.assign(
-                  variableName, newValue); // Assign to lexical variable
-            }
-
-            return operandValue; // Return the original value for postfix
-          } catch (e) {
-            throw RuntimeError(
-                "Error executing custom operator '+' for postfix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-          }
-        } else {
-          throw RuntimeError(
-              "Cannot increment/decrement object of type '${operandValue.klass.name}': No operator '+' found.");
-        }
-      } else {
-        throw RuntimeError(
-            "Operand for postfix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}' must be a number, but was ${operandValue?.runtimeType}.");
-      }
-    } else if (node.operand is PropertyAccess) {
-      // Handle property access like obj.field++
-      final propertyAccess = node.operand as PropertyAccess;
-      final targetValue = propertyAccess.target?.accept<Object?>(this);
-      final propertyName = propertyAccess.propertyName.name;
-
-      if (targetValue is InterpretedInstance) {
-        // Get current value via getter or field
-        final currentValue = targetValue.get(propertyName, visitor: this);
-        final originalValue = currentValue; // Save for return
-
-        // Calculate new value
-        Object? newValue;
-        if (currentValue is num) {
-          newValue = operatorType == TokenType.PLUS_PLUS
-              ? currentValue + 1
-              : currentValue - 1;
-        } else if (currentValue is InterpretedInstance) {
-          // Use custom + operator with literal 1
-          final operatorMethod = currentValue.findOperator('+');
-          if (operatorMethod != null) {
-            try {
-              // For x++, we create a literal 1 and call x + 1
-              final operand = _createIncrementOperand(
-                  currentValue, operatorType == TokenType.PLUS_PLUS);
-              newValue =
-                  operatorMethod.bind(currentValue).call(this, [operand], {});
-            } on ReturnException catch (e) {
-              newValue = e.value;
-            } catch (e) {
-              throw RuntimeError(
-                  "Error executing custom operator '+' for postfix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-            }
-          } else {
-            throw RuntimeError(
-                "Cannot increment/decrement object of type '${currentValue.klass.name}': No operator '+' found.");
-          }
-        } else {
-          throw RuntimeError(
-              "Cannot increment/decrement property '$propertyName' of type '${currentValue?.runtimeType}': Expected number or object with '+' operator.");
-        }
-
-        // Set new value via setter or field
-        final setter = targetValue.klass.findInstanceSetter(propertyName);
-        if (setter != null) {
-          setter.bind(targetValue).call(this, [newValue], {});
-        } else {
-          targetValue.set(propertyName, newValue, this);
-        }
-
-        // Return the *original* value for postfix operators
-        return originalValue;
-      } else {
-        throw RuntimeError(
-            "Cannot increment/decrement property on non-instance object of type '${targetValue?.runtimeType}'.");
-      }
-    } else if (node.operand is PrefixedIdentifier) {
-      // Handle prefixed identifier like obj.field++ (parsed as PrefixedIdentifier)
-      final prefixedIdentifier = node.operand as PrefixedIdentifier;
-      final targetValue = prefixedIdentifier.prefix.accept<Object?>(this);
-      final propertyName = prefixedIdentifier.identifier.name;
-
-      if (targetValue is InterpretedInstance) {
-        // Get current value via getter or field
-        final currentValue = targetValue.get(propertyName, visitor: this);
-        final originalValue = currentValue; // Save for return
-
-        // Calculate new value
-        Object? newValue;
-        if (currentValue is num) {
-          newValue = operatorType == TokenType.PLUS_PLUS
-              ? currentValue + 1
-              : currentValue - 1;
-        } else if (currentValue is InterpretedInstance) {
-          // Use custom + operator with literal 1
-          final operatorMethod = currentValue.findOperator('+');
-          if (operatorMethod != null) {
-            try {
-              // For x++, we create a literal 1 and call x + 1
-              final operand = _createIncrementOperand(
-                  currentValue, operatorType == TokenType.PLUS_PLUS);
-              newValue =
-                  operatorMethod.bind(currentValue).call(this, [operand], {});
-            } on ReturnException catch (e) {
-              newValue = e.value;
-            } catch (e) {
-              throw RuntimeError(
-                  "Error executing custom operator '+' for postfix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-            }
-          } else {
-            throw RuntimeError(
-                "Cannot increment/decrement object of type '${currentValue.klass.name}': No operator '+' found.");
-          }
-        } else {
-          throw RuntimeError(
-              "Cannot increment/decrement property '$propertyName' of type '${currentValue?.runtimeType}': Expected number or object with '+' operator.");
-        }
-
-        // Set new value via setter or field
-        final setter = targetValue.klass.findInstanceSetter(propertyName);
-        if (setter != null) {
-          setter.bind(targetValue).call(this, [newValue], {});
-        } else {
-          targetValue.set(propertyName, newValue, this);
-        }
-
-        // Return the *original* value for postfix operators
-        return originalValue;
-      } else if (targetValue is InterpretedExtension) {
-        // Handle static field/getter increment/decrement on extension
-        final extension = targetValue;
-
-        // Get current value via static getter or field
-        Object? currentValue;
-        final staticGetter = extension.findStaticGetter(propertyName);
-        if (staticGetter != null) {
-          currentValue = staticGetter.call(this, [], {});
-        } else if (extension.staticFields.containsKey(propertyName)) {
-          currentValue = extension.getStaticField(propertyName);
-        } else {
-          throw RuntimeError(
-              "Extension '${extension.name}' has no static field or getter named '$propertyName'.");
-        }
-
-        final originalValue = currentValue; // Save for return
-
-        // Calculate new value
-        Object? newValue;
-        if (currentValue is num) {
-          newValue = operatorType == TokenType.PLUS_PLUS
-              ? currentValue + 1
-              : currentValue - 1;
-        } else {
-          throw RuntimeError(
-              "Cannot increment/decrement static property '$propertyName' of type '${currentValue?.runtimeType}': Expected number.");
-        }
-
-        // Set new value via static setter or field
-        final staticSetter = extension.findStaticSetter(propertyName);
-        if (staticSetter != null) {
-          staticSetter.call(this, [newValue], {});
-        } else if (extension.staticFields.containsKey(propertyName)) {
-          extension.setStaticField(propertyName, newValue);
-        } else {
-          throw RuntimeError(
-              "Extension '${extension.name}' has no static setter or field named '$propertyName'.");
-        }
-
-        // Return the *original* value for postfix operators
-        return originalValue;
-      } else {
-        throw RuntimeError(
-            "Cannot increment/decrement property on non-instance object of type '${targetValue?.runtimeType}'.");
-      }
-    } else if (node.operand is IndexExpression) {
-      // Handle index access like array[i]++
-      final indexExpression = node.operand as IndexExpression;
-      final targetValue = indexExpression.target?.accept<Object?>(this);
-      final indexValue = indexExpression.index.accept<Object?>(this);
-
-      // Get current value via [] operator or direct access
-      Object? currentValue;
-      if (targetValue is BoundSuper || targetValue is BoundBridgedSuper) {
-        currentValue = _readIndexForCompoundAssignment(targetValue, indexValue);
-      } else if (targetValue is List &&
-          !(targetValue is InterpretedInstance &&
-              (targetValue as InterpretedInstance).findOperator('[]') !=
-                  null)) {
-        final index = indexValue as int;
-        currentValue = targetValue[index];
-      } else if (targetValue is Map &&
-          !(targetValue is InterpretedInstance &&
-              (targetValue as InterpretedInstance).findOperator('[]') !=
-                  null)) {
-        currentValue = targetValue[indexValue];
-      } else if (targetValue is InterpretedInstance) {
-        // Use class operator [] if available
-        final operatorMethod = targetValue.findOperator('[]');
-        if (operatorMethod != null) {
-          try {
-            currentValue =
-                operatorMethod.bind(targetValue).call(this, [indexValue], {});
-          } on ReturnException catch (e) {
-            currentValue = e.value;
-          } catch (e) {
-            throw RuntimeError(
-                "Error executing class operator '[]' for postfix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-          }
-        } else {
-          throw RuntimeError(
-              "Cannot read index for postfix increment/decrement on ${targetValue.klass.name}: No operator '[]' found.");
-        }
-      } else {
-        throw RuntimeError(
-            "Cannot apply postfix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}' to index of type '${targetValue?.runtimeType}'.");
-      }
-
-      final originalValue = currentValue; // Save for return
-
-      // Calculate new value
-      Object? newValue;
-      if (currentValue is num) {
-        newValue = operatorType == TokenType.PLUS_PLUS
-            ? currentValue + 1
-            : currentValue - 1;
-      } else if (currentValue is InterpretedInstance) {
-        // Use custom + operator with literal 1
-        final operatorMethod = currentValue.findOperator('+');
-        if (operatorMethod != null) {
-          try {
-            final operand = _createIncrementOperand(
-                currentValue, operatorType == TokenType.PLUS_PLUS);
-            newValue =
-                operatorMethod.bind(currentValue).call(this, [operand], {});
-          } on ReturnException catch (e) {
-            newValue = e.value;
-          } catch (e) {
-            throw RuntimeError(
-                "Error executing custom operator '+' for postfix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-          }
-        } else {
-          throw RuntimeError(
-              "Cannot increment/decrement object at index of type '${currentValue.klass.name}': No operator '+' found.");
-        }
-      } else {
-        throw RuntimeError(
-            "Cannot increment/decrement value at index of type '${currentValue?.runtimeType}': Expected number or object with '+' operator.");
-      }
-
-      // Set new value via []= operator or direct access
-      if (targetValue is BoundSuper || targetValue is BoundBridgedSuper) {
-        _writeSuperIndex(targetValue, indexValue, newValue);
-      } else if (targetValue is List &&
-          !(targetValue is InterpretedInstance &&
-              (targetValue as InterpretedInstance).findOperator('[]=') !=
-                  null)) {
-        final index = indexValue as int;
-        targetValue[index] = newValue;
-      } else if (targetValue is Map &&
-          !(targetValue is InterpretedInstance &&
-              (targetValue as InterpretedInstance).findOperator('[]=') !=
-                  null)) {
-        targetValue[indexValue] = newValue;
-      } else if (targetValue is InterpretedInstance) {
-        // Use class operator []= if available
-        final operatorMethod = targetValue.findOperator('[]=');
-        if (operatorMethod != null) {
-          try {
-            operatorMethod
-                .bind(targetValue)
-                .call(this, [indexValue, newValue], {});
-          } on ReturnException catch (_) {
-            // []= should not return a value, but assignment expression returns assigned value
-          } catch (e) {
-            throw RuntimeError(
-                "Error executing class operator '[]=' for postfix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}': $e");
-          }
-        } else {
-          throw RuntimeError(
-              "Cannot write index for postfix increment/decrement on ${targetValue.klass.name}: No operator '[]=' found.");
-        }
-      }
-
-      // Return the *original* value for postfix operators
-      return originalValue;
+  Object? _modifyIncrement(AstNode node, Expression operand, TokenType operator,
+      {required bool prefix}) {
+    Object? target;
+    Object? index;
+    String? member;
+    Object? current;
+    if (operand is SimpleIdentifier) {
+      current = _evaluateContinuedValue(
+          node, () => _readSimpleIdentifierForCompoundAssignment(operand.name));
+    } else if (operand is PrefixedIdentifier || operand is PropertyAccess) {
+      final Expression? expression = operand is PrefixedIdentifier
+          ? operand.prefix
+          : (operand as PropertyAccess).target;
+      member = operand is PrefixedIdentifier
+          ? operand.identifier.name
+          : (operand as PropertyAccess).propertyName.name;
+      target = expression == null
+          ? null
+          : _evaluateContinuedExpression(node, expression);
+      if (target is AsyncSuspensionRequest) return target;
+      target = _enumReceiver(target);
+      current = _evaluateContinuedValue(
+          node, () => _readPropertyForCompoundAssignment(target, member!));
+    } else if (operand is IndexExpression) {
+      target = operand.target == null
+          ? null
+          : _evaluateContinuedExpression(node, operand.target!);
+      if (target is AsyncSuspensionRequest) return target;
+      index = _evaluateContinuedExpression(node, operand.index);
+      if (index is AsyncSuspensionRequest) return index;
+      current = _evaluateContinuedValue(
+          node, () => _readIndexForCompoundAssignment(target, index));
     } else {
-      throw RuntimeError(
-          "Operand for postfix '${operatorType == TokenType.PLUS_PLUS ? '++' : '--'}' must be an assignable variable or property.");
+      throw RuntimeError('Increment requires an assignable operand.');
+    }
+    if (current is AsyncSuspensionRequest) return current;
+    final next = _incrementValue(current, operator == TokenType.PLUS_PLUS);
+    if (operand is SimpleIdentifier) {
+      final defining = environment.findDefiningEnvironment(operand.name);
+      if (defining is EnumMemberEnvironment) {
+        defining.assign(operand.name, next);
+      } else if (defining != null) {
+        final binding = defining.get(operand.name);
+        if (binding is LateVariable) {
+          binding.assign(next);
+        } else if (binding is PropertyAccessor && binding.setter != null) {
+          binding.setter!.call(this, [next], {});
+        } else {
+          environment.assign(operand.name, next);
+        }
+      } else {
+        _writeIncrementProperty(environment.get('this'), operand.name, next);
+      }
+    } else if (member != null) {
+      _writeIncrementProperty(target, member, next);
+    } else if (target is BoundSuper || target is BoundBridgedSuper) {
+      _writeSuperIndex(target, index, next);
+    } else if (target is InterpretedInstance &&
+        target.findOperator('[]=') != null) {
+      target.findOperator('[]=')!.bind(target).call(this, [index, next], {});
+    } else if (target is List) {
+      target[index as int] = next;
+    } else if (target is Map) {
+      target[index] = next;
+    } else {
+      throw RuntimeError('Cannot write incremented index.');
+    }
+    return prefix ? next : current;
+  }
+
+  Object? _incrementValue(Object? current, bool increment) {
+    if (current is InterpretedInstance) {
+      final subtraction = increment ? null : current.findOperator('-');
+      final method = subtraction ?? current.findOperator('+');
+      if (method != null) {
+        final amount = increment || subtraction != null ? 1 : -1;
+        final signature = method.callableRuntimeType as FunctionRuntimeType;
+        final expected = signature.positionalParameterTypes.first;
+        final operand =
+            expected is InterpretedClass && current.klass.isSubtypeOf(expected)
+                ? current.klass.call(this, [amount], {})
+                : amount;
+        return method.bind(current).call(this, [operand], {});
+      }
+    }
+    return computeCompoundValue(
+        current, 1, increment ? TokenType.PLUS_EQ : TokenType.MINUS_EQ);
+  }
+
+  void _writeIncrementProperty(Object? target, String member, Object? value) {
+    if (target is InterpretedEnum ||
+        target is InterpretedEnumValue ||
+        target is EnumSuper ||
+        target is BridgedEnum ||
+        target is BridgedEnumValue) {
+      _writeEnumMember(target, member, value);
+    } else if (target is InterpretedInstance) {
+      target.set(member, value, this);
+    } else if (target is InterpretedClass) {
+      final setter = target.findStaticSetter(member);
+      if (setter != null) {
+        setter.call(this, [value], {});
+      } else {
+        target.setStaticField(member, value);
+      }
+    } else if (target is InterpretedExtension) {
+      final setter = target.findStaticSetter(member);
+      if (setter != null) {
+        setter.call(this, [value], {});
+      } else {
+        target.setStaticField(member, value);
+      }
+    } else if (target is BridgedClass) {
+      final setter = target.findStaticSetterAdapter(member);
+      if (setter == null) throw RuntimeError('Missing static setter $member.');
+      setter(this, value);
+    } else {
+      final bridged = toBridgedInstance(target);
+      final setter = bridged.$1?.bridgedClass.findInstanceSetterAdapter(member);
+      if (setter == null) throw RuntimeError('Missing setter $member.');
+      setter(this, bridged.$1!.nativeObject, value);
     }
   }
 
@@ -7565,11 +6924,25 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitSuperExpression(SuperExpression node) {
-    if (currentFunction == null || currentFunction?.ownerType == null) {
-      // Use ownerType
+    Environment? scope = environment;
+    while (scope != null) {
+      if (scope is EnumMemberEnvironment &&
+          scope.receiver != null &&
+          scope.memberOwner != null) {
+        final mixins = scope.enumType.mixinTypes;
+        final owner = scope.memberOwner;
+        final limit = owner is InterpretedEnum
+            ? mixins.length
+            : mixins.indexWhere((type) => identical(
+                type is AppliedRuntimeType ? type.baseType : type, owner));
+        return EnumSuper(scope.receiver!, limit < 0 ? 0 : limit);
+      }
+      scope = scope.enclosing;
+    }
+    if (currentFunction?.ownerType == null) {
       throw RuntimeError("'super' can only be used within an instance method.");
     }
-    final ownerType = currentFunction!.ownerType!; // Use ownerType
+    final ownerType = currentFunction!.ownerType!;
     // Need to ensure ownerType is actually a class for super access
     if (ownerType is! InterpretedClass) {
       throw RuntimeError(
@@ -7652,6 +7025,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           "Placeholder for class '$className' not found or invalid during Pass 2.");
     }
     final klass = placeholder;
+    if (!klass.beginDeclarationPopulation()) return null;
     Logger.debug(
         "[Visitor.visitClassDeclaration] Retrieved placeholder for '$className' (hash: ${klass.hashCode})");
 
@@ -7740,7 +7114,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         Logger.debug(
             "[Visitor.visitClassDeclaration]   Trying to get interface '$interfaceName' from env: ${environment.hashCode}");
         try {
-          final potentialInterface = environment.get(interfaceName);
+          final potentialInterface = environment.get(interfaceType
+                      .importPrefix ==
+                  null
+              ? interfaceName
+              : '${interfaceType.importPrefix!.name.lexeme}.$interfaceName');
+          if (potentialInterface is InterpretedEnum ||
+              potentialInterface is BridgedEnum) {
+            throw RuntimeError(
+                'Only enums and abstract interfaces may implement Enum.');
+          }
           if (potentialInterface is InterpretedClass) {
             // Add checks for base and sealed modifiers
             if (potentialInterface.isBase) {
@@ -7825,6 +7208,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               "Identifier '$mixinName' resolved to ${mixin?.runtimeType}, which is not a class/mixin, for class '$className'.");
         }
       }
+    }
+    if (!klass.isAbstract &&
+        projectEnumType(klass, const NamedRuntimeType('Enum')) != null) {
+      throw RuntimeError(
+          'Only enums and abstract interfaces may implement Enum.');
     }
 
     // Populate members ON THE EXISTING klass object
@@ -7911,7 +7299,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     try {
       // Create a local environment for static field initialization
       // This avoids polluting the global environment
-      final staticFieldEnv = Environment(enclosing: staticInitEnv);
+      final staticFieldEnv = klass.staticConstantEnvironment;
       environment = staticFieldEnv;
 
       for (final fieldDecl in staticFieldDeclarations) {
@@ -7950,7 +7338,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             if (variable.initializer != null) {
               // When evaluating the initializer, the field should be available in the environment
               // from previous fields or from this expression
-              value = variable.initializer!.accept<Object?>(this);
+              value = fieldDecl.fields.isConst
+                  ? staticFieldEnv.resolveConstant(
+                      fieldName,
+                      (expression, scope) => _evaluateConstantExpression(
+                          expression, scope,
+                          validate: false))
+                  : variable.initializer!.accept<Object?>(this);
             }
             klass.staticFields[fieldName] = value;
             // Also update the local environment so subsequent fields can reference this one
@@ -8054,35 +7448,34 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           "Placeholder for mixin '$mixinName' not found or invalid during Pass 2.");
     }
     final mixinClass = placeholder;
+    if (!mixinClass.beginDeclarationPopulation()) return null;
     Logger.debug(
         "[Visitor.visitMixinDeclaration] Retrieved placeholder for mixin '$mixinName' (hash: ${mixinClass.hashCode})");
 
-    // Resolve 'on' clause constraints ON THE EXISTING mixinClass object
-    if (node.onClause != null) {
-      mixinClass.onClauseTypes.clear(); // Clear existing before populating
-      for (final typeNode in node.onClause!.superclassConstraints) {
-        final typeName = typeNode.name.lexeme;
-        try {
-          final potentialType = environment.get(typeName);
-          if (potentialType is InterpretedClass) {
-            // Add to the onClauseTypes list of the existing mixinClass object
-            mixinClass.onClauseTypes.add(potentialType);
-            Logger.debug(
-                "[Visitor.visitMixinDeclaration] Added 'on' constraint '$typeName' for '$mixinName'");
-          } else {
-            throw RuntimeError(
-                "Type '$typeName' in 'on' clause of mixin '$mixinName' is not a class (${potentialType?.runtimeType}).");
-          }
-        } on RuntimeError {
-          throw RuntimeError(
-              "Type '$typeName' in 'on' clause of mixin '$mixinName' not found. Ensure it's defined.");
-        }
-      }
+    final typeEnvironment = Environment(enclosing: environment);
+    for (final parameter in mixinClass.typeParameterNames) {
+      typeEnvironment.define(parameter, TypeParameter(parameter));
+    }
+    for (final parameter in node.typeParameters?.typeParameters ?? const []) {
+      mixinClass.typeParameterBounds[parameter.name.lexeme] =
+          parameter.bound == null
+              ? null
+              : resolveRuntimeTypeArgument(parameter.bound!, typeEnvironment);
+    }
+    for (final parameter in mixinClass.typeParameterNames) {
+      typeEnvironment.assign(
+          parameter,
+          TypeParameter(parameter,
+              bound: mixinClass.typeParameterBounds[parameter]));
+    }
+    for (final typeNode in mixinClass.onConstraintTypes) {
+      final type = resolveRuntimeTypeAnnotation(typeNode, typeEnvironment);
+      final base = type is AppliedRuntimeType ? type.baseType : type;
+      if (base is InterpretedClass) mixinClass.onClauseTypes.add(base);
     }
 
     // Populate members ON THE EXISTING mixinClass object
-    final declarationEnv =
-        environment; // Members use the mixin's declaration env
+    final declarationEnv = typeEnvironment;
     final originalVisitorEnv = environment;
 
     Logger.debug(
@@ -8095,7 +7488,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           final methodName = member.name.lexeme;
           // Methods capture the GLOBAL environment via the mixinClass
           final function =
-              InterpretedFunction.method(member, globalEnvironment, mixinClass);
+              InterpretedFunction.method(member, declarationEnv, mixinClass);
           if (member.isStatic) {
             // Static members belong to the mixin definition itself
             if (member.isGetter) {
@@ -8140,259 +7533,26 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   }
 
   @override
-  Object? visitEnumDeclaration(EnumDeclaration node) {
-    final enumName = node.namePart.typeName.lexeme;
-    Logger.debug(
-        "[Visitor.visitEnumDeclaration] START (Pass 2) for '$enumName'");
+  Object? visitEnumDeclaration(EnumDeclaration node) =>
+      _EnumDeclarationInterpreter(this).populate(node);
 
-    // Retrieve the enum placeholder object created in Pass 1
-    final enumObj = environment.get(enumName);
-    if (enumObj == null || enumObj is! InterpretedEnum) {
-      throw StateError(
-          "Enum placeholder object for '$enumName' not found or invalid during Pass 2.");
+  Object? _enumReceiver(Object? value) =>
+      value is Enum ? environment.getBridgedEnumValue(value) ?? value : value;
+
+  void _writeEnumMember(Object? target, String member, Object? value) {
+    if (target is InterpretedEnum) {
+      target.setStaticMember(member, value, this);
+    } else if (target is InterpretedEnumValue) {
+      target.set(member, value, this);
+    } else if (target is EnumSuper) {
+      target.set(member, value, this);
+    } else if (target is BridgedEnum) {
+      target.setStaticMember(member, value, this);
+    } else if (target is BridgedEnumValue) {
+      target.set(member, value, this);
+    } else {
+      throw RuntimeError('Not an enum member target.');
     }
-
-    // Process Mixin Application (similar to class mixin handling)
-    if (node.withClause != null) {
-      Logger.debug(
-          "[Visitor.visitEnumDeclaration] Processing 'with' clause for '$enumName'");
-      for (final mixinType in node.withClause!.mixinTypes) {
-        final mixinName = mixinType.name.lexeme;
-        Logger.debug(
-            "[Visitor.visitEnumDeclaration]   Trying to get mixin '$mixinName'");
-
-        Object? mixin;
-        try {
-          mixin = environment.get(mixinName);
-        } on RuntimeError {
-          throw RuntimeError(
-              "Mixin '$mixinName' not found during lookup for enum '$enumName'. Ensure it's defined (as a mixin or class mixin).");
-        }
-
-        if (mixin is InterpretedClass) {
-          if (!mixin.isMixin) {
-            throw RuntimeError(
-                "Class '$mixinName' cannot be used as a mixin because it's not declared with 'mixin' or 'class mixin'.");
-          }
-
-          // Add to the mixins list of the enum object
-          enumObj.mixins.add(mixin);
-          Logger.debug(
-              "[Visitor.visitEnumDeclaration] Applied interpreted mixin '$mixinName' to '$enumName'");
-        } else if (mixin is BridgedClass) {
-          // Support for bridged classes as mixins
-          if (!mixin.canBeUsedAsMixin) {
-            throw RuntimeError(
-                "Bridged class '$mixinName' cannot be used as a mixin. Set canBeUsedAsMixin=true when registering the bridge.");
-          }
-
-          // Add to the bridged mixins list
-          enumObj.bridgedMixins.add(mixin);
-          Logger.debug(
-              "[Visitor.visitEnumDeclaration] Applied bridged mixin '$mixinName' to '$enumName'");
-        } else {
-          throw RuntimeError(
-              "Identifier '$mixinName' resolved to ${mixin?.runtimeType}, which is not a class/mixin, for enum '$enumName'.");
-        }
-      }
-    }
-
-    // Process Members (Static and Instance)
-    // Members defined in the enum body (methods, getters, fields, constructors)
-    final originalVisitorEnv = environment; // Save original environment
-    try {
-      // Members are defined in the enum's declaration scope
-      environment = enumObj.declarationEnvironment;
-      for (final member in node.body.members) {
-        if (member is MethodDeclaration) {
-          final methodName = member.name.lexeme;
-          // Methods capture the enum's declaration environment implicitly
-          final function =
-              InterpretedFunction.method(member, environment, enumObj);
-
-          if (member.isStatic) {
-            if (member.isGetter) {
-              enumObj.staticGetters[methodName] = function;
-            } else if (member.isSetter) {
-              enumObj.staticSetters[methodName] = function;
-            } else {
-              enumObj.staticMethods[methodName] = function;
-            }
-            Logger.debug(
-                "[Visitor.visitEnumDeclaration]   Processed static method/getter/setter: $methodName");
-          } else {
-            if (!member.isComplete) {
-              throw RuntimeError(
-                  "Enums cannot have abstract members ('$enumName.$methodName').");
-            }
-            if (member.isGetter) {
-              enumObj.getters[methodName] = function;
-            } else if (member.isSetter) {
-              enumObj.setters[methodName] = function;
-            } else {
-              enumObj.methods[methodName] = function;
-            }
-            Logger.debug(
-                "[Visitor.visitEnumDeclaration]   Processed instance method/getter/setter: $methodName");
-          }
-        } else if (member is ConstructorDeclaration) {
-          if (member.factoryKeyword != null) {
-            throw UnimplementedError(
-                "Factory constructors in enums are not yet supported.");
-          }
-          if (member.redirectedConstructor != null) {
-            throw UnimplementedError(
-                "Redirecting constructors in enums are not yet supported.");
-          }
-          // Check if it's the default unnamed constructor or a named one
-          final constructorName = member.name?.lexeme ?? '';
-          // Constructors also capture the enum's declaration environment
-          final function =
-              InterpretedFunction.constructor(member, environment, enumObj);
-
-          enumObj.constructors[constructorName] = function;
-          Logger.debug(
-              "[Visitor.visitEnumDeclaration]   Processed constructor: ${constructorName.isEmpty ? enumName : '$enumName.$constructorName'}");
-        } else if (member is FieldDeclaration) {
-          // Store field declarations for instance initialization
-          // Only non-static fields are relevant for enum value instances
-          if (!member.isStatic) {
-            enumObj.fieldDeclarations.add(member);
-            for (final variable in member.fields.variables) {
-              Logger.debug(
-                  "[Visitor.visitEnumDeclaration]   Stored instance field declaration: ${variable.name.lexeme}");
-            }
-          } else {
-            // Evaluate static fields immediately
-            for (final variable in member.fields.variables) {
-              final fieldName = variable.name.lexeme;
-              Object? value;
-              if (variable.initializer != null) {
-                value = variable.initializer!.accept<Object?>(this);
-              }
-              enumObj.staticFields[fieldName] = value;
-              Logger.debug(
-                  "[Visitor.visitEnumDeclaration]   Evaluated static field: $fieldName = $value");
-            }
-          }
-        } else {
-          Logger.warn(
-              "[Visitor.visitEnumDeclaration]   Ignoring unknown member type: ${member.runtimeType}");
-        }
-      }
-    } finally {
-      environment = originalVisitorEnv; // Restore environment
-    }
-
-    // Instantiate Enum Values
-    Logger.debug(
-        "[Visitor.visitEnumDeclaration]   Instantiating enum values...");
-    for (int i = 0; i < node.body.constants.length; i++) {
-      final constantDecl = node.body.constants[i];
-      final valueName = constantDecl.name.lexeme;
-
-      if (enumObj.values.containsKey(valueName)) {
-        Logger.warn(
-            "[Visitor.visitEnumDeclaration] Enum value '$enumName.$valueName' already exists (should not happen).");
-        continue;
-      }
-
-      // Create the runtime value instance (without initialized fields yet)
-      final enumValueInstance = InterpretedEnumValue(enumObj, valueName, i);
-
-      // Initialize Instance Fields using Constructor
-      final constructorInvocation = constantDecl.arguments;
-      final constructorName =
-          constructorInvocation?.constructorSelector?.name.name ?? '';
-      final constructorFunc = enumObj.constructors[constructorName];
-
-      if (constructorFunc == null && constructorInvocation != null) {
-        throw RuntimeError(
-            "Enum '$enumName' does not have a constructor named '$constructorName' required by constant '$valueName'.");
-      }
-      if (constructorFunc == null &&
-          enumObj.constructors.isNotEmpty &&
-          enumObj.constructors.containsKey('')) {
-        throw RuntimeError(
-            "Enum '$enumName' has a default constructor but constant '$valueName' doesn't call it implicitly (requires explicit `()` if args are needed or constructor exists).");
-      }
-      // If there are NO constructors defined at all, and no args are passed, it's okay.
-      if (constructorFunc != null && constructorInvocation != null) {
-        Logger.debug(
-            "[Visitor.visitEnumDeclaration]     Calling constructor '${constructorName.isEmpty ? enumName : '$enumName.$constructorName'}' for value '$valueName'");
-        // Evaluate arguments for the constructor call
-        final (positionalArgs, namedArgs) =
-            _evaluateArguments(constructorInvocation.argumentList);
-
-        // Call the constructor function, binding `this` to the enumValueInstance.
-        // The constructor's call method needs to handle field initialization.
-        try {
-          // Use the _prepareExecutionEnvironment helper? Or call directly?
-          // Need to ensure constructor initializers (: this.field = arg) run.
-          // Let's assume constructorFunc.call handles this when isInitializer is true.
-          final boundConstructor = constructorFunc.bind(enumValueInstance);
-          boundConstructor.call(this, positionalArgs, namedArgs);
-          Logger.debug(
-              "[Visitor.visitEnumDeclaration]     Constructor call finished for '$valueName'. Fields: $enumValueInstance"); // Log instance directly for now
-        } on RuntimeError catch (e) {
-          throw RuntimeError(
-              "Error executing constructor for enum value '$enumName.$valueName': ${e.message}");
-        } catch (e) {
-          throw RuntimeError(
-              "Unexpected error executing constructor for enum value '$enumName.$valueName': $e");
-        }
-      } else if (constructorFunc == null &&
-          constructorInvocation == null &&
-          enumObj.constructors.isNotEmpty) {
-        // Has constructors, but none called and no default exists implicitly.
-        throw RuntimeError(
-            "Enum constant '$enumName.$valueName' must call a constructor if the enum defines any.");
-      } else {
-        Logger.debug(
-            "[Visitor.visitEnumDeclaration]     No constructor called for '$valueName' (enum has no explicit constructors or constant has no args).");
-        // Initialize fields from declarations if no constructor called?
-        // This might mirror class field initialization before constructor body.
-        final fieldInitEnv =
-            Environment(enclosing: enumObj.declarationEnvironment);
-        fieldInitEnv.define('this', enumValueInstance);
-        final originalVisitorEnvForFields = environment;
-        try {
-          environment = fieldInitEnv;
-          for (final fieldDecl in enumObj.fieldDeclarations) {
-            for (final variable in fieldDecl.fields.variables) {
-              if (variable.initializer != null) {
-                final fieldName = variable.name.lexeme;
-                final value = variable.initializer!.accept<Object?>(this);
-                enumValueInstance.setField(fieldName, value);
-                Logger.debug(
-                    "[Visitor.visitEnumDeclaration]     Initialized instance field '$fieldName'=$value for '$valueName' (default init).");
-              }
-            }
-          }
-        } finally {
-          environment = originalVisitorEnvForFields;
-        }
-      }
-
-      // Store the fully initialized instance in the enum object's map
-      enumObj.values[valueName] = enumValueInstance;
-      Logger.debug(
-          "[Visitor.visitEnumDeclaration]   Created and initialized instance for '$enumName.$valueName' with index $i");
-    }
-
-    // Pre-cache the values list
-    try {
-      enumObj.valuesList; // Access the getter to trigger cache creation
-      Logger.debug(
-          "[Visitor.visitEnumDeclaration]   Cached 'values' list for '$enumName'.");
-    } catch (e) {
-      // Log error if caching fails (shouldn't happen ideally)
-      Logger.error(
-          "[Visitor.visitEnumDeclaration] Failed to cache 'values' for '$enumName': $e");
-    }
-
-    Logger.debug("[Visitor.visitEnumDeclaration] END (Pass 2) for '$enumName'");
-    return null; // Declaration doesn't return a value
   }
 
   Object? _readSimpleIdentifierForCompoundAssignment(String variableName) {
@@ -8447,6 +7607,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     Object? target,
     String propertyName,
   ) {
+    target = _enumReceiver(target);
+    if (target is BridgedEnum) {
+      return target.getStaticMember(propertyName, this);
+    }
+    if (target is BridgedEnumValue) return target.get(propertyName, this);
+    if (target is InterpretedEnum) {
+      return target.getStaticMember(propertyName, this);
+    }
+    if (target is InterpretedEnumValue) return target.get(propertyName, this);
+    if (target is EnumSuper) return target.get(propertyName, this);
     if (target is BoundSuper) {
       InterpretedClass? currentClass = target.startLookupClass;
       while (currentClass != null) {
@@ -8496,16 +7666,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
       return retainCollectionOperationResult(
           getter(this, nativeTarget), nativeTarget, propertyName, environment);
-    }
-    if (target is BridgedEnum) {
-      final getter = target.staticGetters[propertyName];
-      if (getter == null) {
-        throw RuntimeError(
-          "Cannot read bridged enum property '${target.name}.$propertyName': "
-          'no getter found.',
-        );
-      }
-      return getter(this);
     }
     if (target is BridgedClass) {
       final getter = target.findStaticGetterAdapter(propertyName);
@@ -8895,6 +8055,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   /// Check if a value matches a type annotation
   bool _checkValueMatchesType(Object? value, TypeAnnotation typeNode) {
+    if (value is RuntimeType) {
+      return _isValueCompatibleWithRuntimeType(
+          value, resolveRuntimeTypeArgument(typeNode, environment));
+    }
     if (typeNode is! NamedType) {
       // For now, only handle NamedType
       return true;
@@ -8960,6 +8124,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   bool _isValueCompatibleWithRuntimeType(
       Object? value, RuntimeType expectedType) {
+    if (value is RuntimeType) {
+      return enumTypeArgumentSatisfies(
+          environment.getRuntimeType(value)!, expectedType);
+    }
     if (expectedType.name == 'dynamic') {
       return true;
     }
@@ -9325,10 +8493,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       return expressionValue;
     }
     final typeNode = node.type;
+    if (expressionValue is RuntimeType) {
+      final matches = _isValueCompatibleWithRuntimeType(
+          expressionValue, resolveRuntimeTypeArgument(typeNode, environment));
+      return node.notOperator == null ? matches : !matches;
+    }
     bool result = false;
 
     if (typeNode is NamedType) {
       final typeName = typeNode.name.lexeme;
+      if (expressionValue == null && typeNode.question != null) {
+        return node.notOperator == null;
+      }
 
       // Handle built-in types first
       switch (typeName) {
@@ -9576,7 +8752,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     asyncState?.expressionContinuations.remove(node);
 
     // If this is a const collection, return an unmodifiable version
-    if (node.constKeyword != null) {
+    if (node.constKeyword != null || _enumConstantContext) {
       if (isMap) {
         final constMap = Map.unmodifiable(collection as Map<Object?, Object?>);
         environment.annotateRuntimeType(constMap, collectionRuntimeType);
@@ -9605,16 +8781,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         return null;
       }
 
-      if (runtimeType is AppliedRuntimeType &&
+      if (!_enumConstantContext &&
+          runtimeType is AppliedRuntimeType &&
           (runtimeType.baseType.name == 'List' ||
               runtimeType.baseType.name == 'Map' ||
               runtimeType.baseType.name == 'Set')) {
         return null;
       }
 
-      if (runtimeType.name == 'List' ||
-          runtimeType.name == 'Map' ||
-          runtimeType.name == 'Set') {
+      if (!_enumConstantContext &&
+          (runtimeType.name == 'List' ||
+              runtimeType.name == 'Map' ||
+              runtimeType.name == 'Set')) {
         return null;
       }
 
@@ -9645,7 +8823,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       return null;
     }
 
-    return inferredType;
+    return inferredType ??
+        (_enumConstantContext && values.isEmpty
+            ? const NamedRuntimeType('Never')
+            : null);
   }
 
   void _annotateCollectionRuntimeType(
@@ -9724,25 +8905,20 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     String constructorName;
     String? namedConstructorPart;
 
-    // Check if this is a NamedType with an importPrefix (qualified name like bool.fromEnvironment)
     if (constructorNameNode.importPrefix != null) {
-      // This is a case like `bool.fromEnvironment` where:
-      // - importPrefix.name = "bool"
-      // - name2 (or name) = "fromEnvironment"
-      // We treat this as: className="bool", namedConstructor="fromEnvironment"
-      constructorName = constructorNameNode.importPrefix!.name.lexeme;
-      namedConstructorPart = constructorNameNode.name.lexeme;
-
-      Logger.debug(
-          "[InstanceCreation] Qualified type detected: '$constructorName.$namedConstructorPart'");
+      final prefix = constructorNameNode.importPrefix!.name.lexeme;
+      final qualified = '$prefix.${constructorNameNode.name.lexeme}';
+      try {
+        environment.get(qualified);
+        constructorName = qualified;
+        namedConstructorPart = node.constructorName.name?.name;
+      } on RuntimeError {
+        constructorName = prefix;
+        namedConstructorPart = constructorNameNode.name.lexeme;
+      }
     } else {
-      // Normal case: simple type name
       constructorName = constructorNameNode.name.lexeme;
-      namedConstructorPart = node.constructorName.name
-          ?.name; // Name of the named constructor (or null)
-
-      Logger.debug(
-          "[InstanceCreation] Creating instance of '$constructorName'${namedConstructorPart != null ? '.$namedConstructorPart' : ''}");
+      namedConstructorPart = node.constructorName.name?.name;
     }
 
     // Resolve the type
@@ -9752,6 +8928,46 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     } on RuntimeError {
       throw RuntimeError(
           "Type '$constructorName' not found for instantiation.");
+    }
+    if (typeValue is InterpretedEnum) {
+      if (node.keyword?.lexeme == 'const') {
+        throw RuntimeError('Enum factories cannot be const.');
+      }
+      final arguments = _evaluateArgumentsAsync(node.argumentList);
+      if (arguments is AsyncSuspensionRequest) return arguments;
+      final (positional, named) =
+          arguments as (List<Object?>, Map<String, Object?>);
+      return typeValue.invokeFactory(
+          this,
+          namedConstructorPart ?? '',
+          positional,
+          named,
+          constructorNameNode.typeArguments?.arguments
+              .map((type) => resolveRuntimeTypeArgument(type, environment))
+              .toList());
+    }
+    if (typeValue is BridgedEnum) {
+      if (node.keyword?.lexeme == 'const') {
+        throw RuntimeError('Enum factories cannot be const.');
+      }
+      final arguments = _evaluateArgumentsAsync(node.argumentList);
+      if (arguments is AsyncSuspensionRequest) return arguments;
+      final (positional, named) =
+          arguments as (List<Object?>, Map<String, Object?>);
+      final factory =
+          typeValue.getStaticMember(namedConstructorPart ?? 'new', this);
+      if (factory is! Callable) {
+        throw RuntimeError('Not a native enum factory.');
+      }
+      final types = constructorNameNode.typeArguments?.arguments
+          .map((type) => resolveRuntimeTypeArgument(type, environment))
+          .toList();
+      if (types != null &&
+          !typeValue.factories.containsKey(namedConstructorPart ?? '')) {
+        throw RuntimeError(
+            'Instantiated native enum types expose factories only.');
+      }
+      return factory.call(this, positional, named, types);
     }
 
     // Check the resolved type
@@ -10272,10 +9488,21 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitFunctionReference(FunctionReference node) {
-    // The actual logic is in visiting the underlying function expression
-    // (Identifier, PropertyAccess, ConstructorReference, etc.)
-    // which should return the Callable/Function object itself.
-    return node.function.accept<Object?>(this);
+    final function = node.function.accept<Object?>(this);
+    if (function is InterpretedEnum || function is BridgedEnum) {
+      final types = node.typeArguments?.arguments
+          .map((type) => resolveRuntimeTypeArgument(type, environment))
+          .toList();
+      return function is InterpretedEnum
+          ? function.instantiate(types)
+          : (function as BridgedEnum).instantiate(types);
+    }
+    if (function is EnumFactoryCallable && node.typeArguments != null) {
+      return function.bindTypeArguments(node.typeArguments!.arguments
+          .map((type) => resolveRuntimeTypeArgument(type, environment))
+          .toList());
+    }
+    return function;
   }
 
   @override
@@ -11030,6 +10257,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       Logger.debug('[_matchAndBind] Record pattern matched successfully.');
       // Success: function completes normally
     } else if (pattern is ObjectPattern) {
+      value = _enumReceiver(value);
       // Handles: ClassName(field1: pattern1, field2: pattern2)
       Logger.debug(
           '[_matchAndBind] Matching object pattern ${pattern.type.name.lexeme} against value ${value?.runtimeType}');
@@ -11040,8 +10268,19 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       // Check if the value is of the expected type
       bool typeMatches = false;
 
-      // Handle InterpretedInstance objects
-      if (value is InterpretedInstance) {
+      final expectedType = _resolveTypeAnnotation(pattern.type);
+      final expectedBase = expectedType is AppliedRuntimeType
+          ? expectedType.baseType
+          : expectedType;
+      if (value is InterpretedEnumValue ||
+          value is BridgedEnumValue ||
+          value is Enum ||
+          expectedBase is InterpretedEnum ||
+          expectedBase is BridgedEnum ||
+          expectedBase.name == 'Enum') {
+        typeMatches = _valueMatchesType(value, expectedType,
+            typeAnnotation: pattern.type);
+      } else if (value is InterpretedInstance) {
         // Check if the instance's class name matches the expected type
         if (value.klass.name == expectedTypeName) {
           typeMatches = true;
@@ -11120,6 +10359,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
         // Extract the field value from the object
         Object? fieldValue;
+        if (value is InterpretedEnumValue || value is BridgedEnumValue) {
+          fieldValue = value is InterpretedEnumValue
+              ? value.get(fieldNameStr, this)
+              : (value as BridgedEnumValue).get(fieldNameStr, this);
+          _matchAndBind(fieldPattern, fieldValue, environment);
+          continue;
+        }
 
         if (value is InterpretedInstance) {
           // For InterpretedInstance, use the tryGetField method to access fields
@@ -11853,26 +11099,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
     }
 
-    if (prefixName != null) {
-      Logger.debug(
-          "[visitImportDirective] Importation du module '${resolvedUri.toString()}' avec le préfixe '$prefixName'. Show: $showNames, Hide: $hideNames");
-
-      Environment envForPrefix;
-      if (showNames != null || hideNames != null) {
-        // Apply show/hide to the exported environment of the loaded module BEFORE defining it for the prefix
-        envForPrefix = loadedModule.exportedEnvironment
-            .shallowCopyFiltered(showNames: showNames, hideNames: hideNames);
-      } else {
-        envForPrefix = loadedModule.exportedEnvironment;
-      }
-      environment.definePrefixedImport(prefixName, envForPrefix);
-    } else {
-      Logger.debug(
-          "[visitImportDirective] Direct import of module '${resolvedUri.toString()}' into the current environment. Show: $showNames, Hide: $hideNames");
-      // Apply show/hide directly during import into the current environment
-      environment.importEnvironment(loadedModule.exportedEnvironment,
-          show: showNames, hide: hideNames);
-    }
+    moduleLoader.applyImportedEnvironment(
+      environment,
+      loadedModule,
+      ownerUri: currentLibrary ?? resolvedUri,
+      resolvedImportUri: resolvedUri,
+      showNames: showNames,
+      hideNames: hideNames,
+      prefix: prefixName,
+      localNames: _localDeclarationNames,
+    );
     return null; // Import directives do not produce a value.
   }
 
@@ -11919,6 +11155,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     RuntimeType expectedType, {
     TypeAnnotation? typeAnnotation,
   }) {
+    if (expectedType is NullableEnumArgument) {
+      return value == null ||
+          _valueMatchesType(value, expectedType.type,
+              typeAnnotation: typeAnnotation);
+    }
     if (value == null) {
       return typeAnnotation is NamedType &&
           (typeAnnotation.question != null ||
@@ -11926,6 +11167,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               typeAnnotation.name.lexeme == 'Null');
     }
 
+    final enumValue =
+        value is Enum ? environment.getBridgedEnumValue(value) : value;
+    if (enumValue is InterpretedEnumValue || enumValue is BridgedEnumValue) {
+      return (enumValue as RuntimeValue)
+          .valueType
+          .isSubtypeOf(expectedType, value: enumValue);
+    }
     final nativeValue = value is BridgedInstance ? value.nativeObject : value;
     if (expectedType is AppliedRuntimeType &&
         (expectedType.baseType.name == 'List' ||
@@ -12026,30 +11274,5 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     }
 
     return false;
-  }
-
-  /// Helper method to create the appropriate operand for ++ and -- operators.
-  /// For numeric types, returns 1 or -1 directly.
-  /// For custom classes, attempts to create an instance with value 1 or -1.
-  Object? _createIncrementOperand(Object? targetValue, bool isIncrement) {
-    if (targetValue is! InterpretedInstance) {
-      // For primitive types (num, int, double), return the literal value
-      return isIncrement ? 1 : -1;
-    }
-
-    // For custom class instances, try to create an instance of the same class
-    // with the value 1 or -1. This handles cases like CustomNumber(1).
-    try {
-      final klass = targetValue.klass;
-      final operandValue = isIncrement ? 1 : -1;
-
-      // Try to create an instance with the operand value
-      final newInstance = klass.call(this, [operandValue], {});
-      return newInstance;
-    } catch (e) {
-      // If we can't create an instance, fall back to the literal value
-      // This allows the operator to handle the error appropriately
-      return isIncrement ? 1 : -1;
-    }
   }
 } // End of InterpreterVisitor class

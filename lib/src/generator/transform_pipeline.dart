@@ -6,8 +6,12 @@
 /// - Enrichment (adding bridge-specific information)
 library;
 
-import 'generator_config.dart';
-import 'metadata_collector.dart';
+import 'package:d4rt/src/bridge/enum_signature.dart';
+import 'package:d4rt/src/bridge/enum_type_metadata.dart';
+import 'package:d4rt/src/bridge/enum_type_relations.dart';
+import 'package:d4rt/src/generator/generator_config.dart';
+import 'package:d4rt/src/generator/metadata_collector.dart';
+import 'package:d4rt/src/runtime_interfaces.dart';
 
 // =============================================================================
 // TRANSFORM RESULT
@@ -253,6 +257,34 @@ class BridgeableParameter {
   });
 }
 
+/// A factory retaining source formals and correlated compiled implementations.
+class BridgeableEnumFactory {
+  /// The constructor name, empty for the unnamed factory.
+  final String name;
+
+  /// Normalized formal templates shared by inference, validation and emission.
+  final List<EnumFormalParameter> formals;
+
+  /// Exact tuples paired with their compiled argument conversions.
+  final List<BridgeableEnumFactorySpecialization> specializations;
+
+  /// Creates a factory without reducing it to an ordinary static method.
+  const BridgeableEnumFactory(this.name, this.formals, this.specializations);
+}
+
+/// A compile-known exact native tuple and its converted call arguments.
+class BridgeableEnumFactorySpecialization {
+  /// Owner type arguments, retaining their correlation.
+  final List<String> typeArguments;
+
+  /// Conversions compiled with this tuple.
+  final List<BridgeableParameter> parameters;
+
+  /// Creates a finite specialization.
+  const BridgeableEnumFactorySpecialization(
+      this.typeArguments, this.parameters);
+}
+
 /// A bridgeable enum.
 class BridgeableEnum {
   /// Enum name.
@@ -263,6 +295,9 @@ class BridgeableEnum {
 
   /// Bridgeable getters.
   final List<BridgeableGetter> getters;
+
+  /// Declared native enum instance setters.
+  final List<BridgeableSetter> setters;
 
   /// Bridgeable methods.
   final List<BridgeableMethod> methods;
@@ -282,16 +317,37 @@ class BridgeableEnum {
   /// Documentation.
   final String? documentation;
 
+  /// Native enum generic parameters and bounds.
+  final List<String> typeParameters;
+
+  /// Declared native enum type bounds.
+  final Map<String, String> typeBounds;
+
+  /// Native enum direct generic supertypes.
+  final List<String> supertypes;
+
+  /// Generic hierarchy edges retained for native enum typing.
+  final Map<String, List<String>> supertypeDeclarations;
+
+  /// Actual factory constructors with retained signatures and exact tuples.
+  final List<BridgeableEnumFactory> factories;
+
   const BridgeableEnum({
     required this.name,
     required this.values,
     this.getters = const [],
     this.methods = const [],
+    this.setters = const [],
     this.staticGetters = const [],
     this.staticMethods = const [],
     this.staticSetters = const [],
     this.libraryUri,
     this.documentation,
+    this.typeParameters = const [],
+    this.typeBounds = const {},
+    this.supertypes = const [],
+    this.supertypeDeclarations = const {},
+    this.factories = const [],
   });
 }
 
@@ -344,11 +400,43 @@ class TransformPipeline {
   /// Current type parameter bounds being processed.
   final Map<String, String> _currentBounds = {};
 
+  final Map<String, int> _nativeTypeArities = {};
+
   TransformPipeline({required this.config});
 
   /// Transforms collected metadata into bridgeable structures.
   TransformResult transform(CollectedMetadata metadata) {
     _warnings.clear();
+    _nativeTypeArities
+      ..clear()
+      ..addAll(const {
+        'dynamic': 0,
+        'Object': 0,
+        'Null': 0,
+        'Never': 0,
+        'num': 0,
+        'int': 0,
+        'double': 0,
+        'bool': 0,
+        'String': 0,
+        'Enum': 0,
+        'List': 1,
+        'Set': 1,
+        'Iterable': 1,
+        'Map': 2,
+        'Comparable': 1,
+        'Future': 1,
+        'Stream': 1
+      })
+      ..addEntries(metadata.classes
+          .map((type) => MapEntry(type.name, type.typeParameters.length)))
+      ..addEntries(metadata.enums
+          .map((type) => MapEntry(type.name, type.typeParameters.length)));
+    for (final name in config.enumFactoryTypeArguments.keys) {
+      if (!metadata.enums.any((type) => type.name == name)) {
+        throw ArgumentError('Unknown enum factory configuration: $name');
+      }
+    }
 
     final classes = metadata.classes
         .map(_transformClass)
@@ -879,8 +967,12 @@ class TransformPipeline {
   int _positionalIndex = 0;
 
   /// Wraps a Callable expression in a native Dart function closure.
-  /// For example: (arg) => (expr).call(visitor, [arg]) as ReturnType
-  String _wrapFunctionType(String callableExpr, String functionType) {
+  /// For example: (arg) => InterpreterVisitor.invokeCallback(expr, [arg]).
+  String _wrapFunctionType(String callableExpr, String functionType,
+      {FunctionRuntimeType? signature}) {
+    if (signature != null) {
+      return _wrapFunctionSignature(callableExpr, signature);
+    }
     // Normalize common Flutter types
     var normalizedType = functionType;
     if (normalizedType.startsWith('VoidCallback')) {
@@ -905,7 +997,7 @@ class TransformPipeline {
 
     // Default to dynamic Function if it's just "Function"
     if (normalizedType == 'Function') {
-      return '(...args) => $callableExpr.call(visitor, args)';
+      return '(...args) => InterpreterVisitor.invokeCallback($callableExpr, args)';
     }
 
     // Extract return type (everything before "Function")
@@ -913,18 +1005,13 @@ class TransformPipeline {
     if (functionIndex == -1) {
       // If we still don't have "Function", it might be a custom typedef we don't know
       // Fallback to generic wrapper
-      return '(arg) => $callableExpr.call(visitor, [arg])';
+      return '(arg) => InterpreterVisitor.invokeCallback($callableExpr, [arg])';
     }
 
     final returnType = normalizedType.substring(0, functionIndex).trim();
     final isAsync = returnType.startsWith('Future');
     final asyncKw = isAsync ? 'async ' : '';
     final awaitKw = isAsync ? 'await ' : '';
-
-    // For void Function() - no return, no args
-    if (normalizedType.endsWith('Function()')) {
-      return '() $asyncKw=> $awaitKw $callableExpr.call(visitor, [])';
-    }
 
     // For Function with parameters (e.g., "bool Function(int)", "T Function(int, String)")
     final openParen = normalizedType.indexOf('(');
@@ -941,8 +1028,8 @@ class TransformPipeline {
       final callExpr = (returnType != 'void' &&
               returnType != 'dynamic' &&
               returnType.isNotEmpty)
-          ? '($awaitKw $callableExpr.call(visitor, [%args%]) as $returnType)'
-          : '$awaitKw $callableExpr.call(visitor, [%args%])';
+          ? '($awaitKw InterpreterVisitor.invokeCallback($callableExpr, [%args%]) as $returnType)'
+          : '$awaitKw InterpreterVisitor.invokeCallback($callableExpr, [%args%])';
 
       if (paramList.isEmpty) {
         return "() $asyncKw=> ${callExpr.replaceAll('%args%', '')}";
@@ -959,7 +1046,101 @@ class TransformPipeline {
     }
 
     // Default fallback
-    return '(arg) $asyncKw=> $awaitKw $callableExpr.call(visitor, [arg])';
+    return '(arg) $asyncKw=> $awaitKw InterpreterVisitor.invokeCallback($callableExpr, [arg])';
+  }
+
+  String _wrapFunctionSignature(
+      String callable, FunctionRuntimeType signature) {
+    if (signature.isUntyped) {
+      throw ArgumentError(
+          'A native enum callback requires a declared signature.');
+    }
+    if (signature.typeParameterCount != 0) {
+      throw ArgumentError(
+          'An independently generic native callback is not an enum specialization.');
+    }
+    final formals = <String>[];
+    final positional = <String>[];
+    final optional = <String>[];
+    for (var index = 0;
+        index < signature.positionalParameterTypes.length;
+        index++) {
+      final name = 'arg$index';
+      if (index < signature.requiredPositionalParameterCount) {
+        formals.add('${signature.positionalParameterTypes[index].name} $name');
+        positional.add(name);
+      } else {
+        optional.add('Object? $name = enumCallbackArgumentAbsent');
+        positional
+            .add('if (!identical($name, enumCallbackArgumentAbsent)) $name');
+      }
+    }
+    if (optional.isNotEmpty) formals.add('[${optional.join(', ')}]');
+    final namedFormals = <String>[];
+    final named = <String>[];
+    for (final entry in signature.namedParameterTypes.entries) {
+      if (signature.requiredNamedParameters.contains(entry.key)) {
+        namedFormals.add('required ${entry.value.name} ${entry.key}');
+        named.add("'${entry.key}': ${entry.key}");
+      } else {
+        namedFormals.add('Object? ${entry.key} = enumCallbackArgumentAbsent');
+        named.add(
+            "if (!identical(${entry.key}, enumCallbackArgumentAbsent)) '${entry.key}': ${entry.key}");
+      }
+    }
+    if (namedFormals.isNotEmpty) formals.add('{${namedFormals.join(', ')}}');
+    var returnType = signature.returnType;
+    final async = returnType is AppliedRuntimeType &&
+        isEnumCoreType(returnType.baseType, 'Future');
+    if (async) {
+      returnType = returnType.typeArguments.single;
+    }
+    final call =
+        '${async ? 'await ' : ''}InterpreterVisitor.invokeCallback($callable, '
+        '[${positional.join(', ')}], {${named.join(', ')}})';
+    final result = isEnumCoreType(returnType, 'void') ||
+            isEnumCoreType(returnType, 'dynamic')
+        ? call
+        : '($call as ${returnType.name})';
+    return '(${formals.join(', ')}) ${async ? 'async ' : ''}=> $result';
+  }
+
+  RuntimeType _enumFormalType(TypeMetadata type, EnumTypeMetadata metadata) {
+    final function = type.function;
+    final RuntimeType result;
+    if (function != null) {
+      result = FunctionRuntimeType(
+        returnType: _enumFormalType(function.returnType, metadata),
+        positionalParameterTypes: [
+          for (final parameter in function.parameters)
+            if (!parameter.isNamed) _enumFormalType(parameter.type, metadata),
+        ],
+        requiredPositionalParameterCount: function.parameters
+            .where((parameter) => !parameter.isNamed && parameter.isRequired)
+            .length,
+        namedParameterTypes: {
+          for (final parameter in function.parameters)
+            if (parameter.isNamed)
+              parameter.name: _enumFormalType(parameter.type, metadata),
+        },
+        requiredNamedParameters: {
+          for (final parameter in function.parameters)
+            if (parameter.isNamed && parameter.isRequired) parameter.name,
+        },
+        typeParameterCount: function.typeParameterCount,
+      );
+    } else if (type.name == 'Function') {
+      result = FunctionRuntimeType.untyped();
+    } else {
+      final base = metadata.parse(type.name);
+      result = type.typeArguments.isEmpty
+          ? base
+          : AppliedRuntimeType(base, [
+              for (final argument in type.typeArguments)
+                _enumFormalType(argument, metadata),
+            ]);
+    }
+    return type.isNullable ? nullableEnumType(result) : result;
   }
 
   // -------------------------------------------------------------------------
@@ -967,10 +1148,18 @@ class TransformPipeline {
   // -------------------------------------------------------------------------
 
   BridgeableEnum _transformEnum(EnumMetadata meta) {
+    _currentBounds
+      ..clear()
+      ..addEntries(meta.typeParameters.map((parameter) =>
+          MapEntry(parameter.name, parameter.bound?.fullName ?? 'dynamic')));
     final methods = <BridgeableMethod>[];
     final staticMethods = <BridgeableMethod>[];
 
+    bool visible(String name) =>
+        config.includePrivateMembers || !name.startsWith('_');
+
     for (final m in meta.methods) {
+      if (!visible(m.name)) continue;
       if (m.isStatic) {
         staticMethods.add(_transformMethod(m));
         continue;
@@ -986,24 +1175,194 @@ class TransformPipeline {
       }
     }
 
-    final getters =
-        meta.getters.where((g) => !g.isStatic).map(_transformGetter).toList();
-    final staticGetters =
-        meta.getters.where((g) => g.isStatic).map(_transformGetter).toList();
-    final staticSetters =
-        meta.setters.where((s) => s.isStatic).map(_transformSetter).toList();
+    final getters = meta.getters
+        .where((g) => !g.isStatic && visible(g.name))
+        .map(_transformGetter)
+        .toList();
+    final setters = meta.setters
+        .where((setter) => !setter.isStatic && visible(setter.name))
+        .map(_transformSetter)
+        .toList();
+    final staticGetters = meta.getters
+        .where((g) => g.isStatic && visible(g.name))
+        .map(_transformGetter)
+        .toList();
+    final staticSetters = meta.setters
+        .where((s) => s.isStatic && visible(s.name))
+        .map(_transformSetter)
+        .toList();
 
     return BridgeableEnum(
       name: meta.name,
       values: meta.values.map((v) => v.name).toList(),
       getters: getters,
+      setters: setters,
       methods: methods,
       staticGetters: staticGetters,
       staticMethods: staticMethods,
       staticSetters: staticSetters,
+      factories: _transformEnumFactories(meta),
       libraryUri: _getLibraryUri(meta.annotations),
       documentation: meta.documentation,
+      typeParameters:
+          meta.typeParameters.map((parameter) => parameter.name).toList(),
+      typeBounds: {
+        for (final parameter in meta.typeParameters)
+          parameter.name: parameter.bound?.fullName ?? 'dynamic'
+      },
+      supertypes: meta.supertypes,
+      supertypeDeclarations: meta.supertypeDeclarations,
     );
+  }
+
+  List<BridgeableEnumFactory> _transformEnumFactories(EnumMetadata meta) {
+    if (meta.factories.isEmpty) return const [];
+    final names = meta.typeParameters.map((type) => type.name).toList();
+    final metadata = EnumTypeMetadata(
+        typeParameters: names,
+        typeBounds: {
+          for (final type in meta.typeParameters)
+            type.name: type.bound?.fullName ?? 'dynamic',
+        },
+        supertypeDeclarations: meta.supertypeDeclarations);
+    final bounds = metadata.resolvedBounds;
+    final tuples = <List<RuntimeType>>[];
+    void add(List<String> sources, {bool configured = false}) {
+      final tuple =
+          sources.map((source) => _compiledEnumType(source, metadata)).toList();
+      resolveEnumTypeArguments(meta.name, names, bounds, tuple);
+      final duplicate = tuples.any((previous) =>
+          previous.length == tuple.length &&
+          List.generate(tuple.length,
+                  (i) => enumTypesEquivalent(previous[i], tuple[i]))
+              .every((same) => same));
+      if (duplicate) {
+        if (configured) {
+          throw ArgumentError('Duplicate enum factory tuple for ${meta.name}.');
+        }
+        return;
+      }
+      tuples.add(tuple);
+    }
+
+    // Configured duplicates are errors; overlap with automatic tuples is harmless.
+    for (final tuple in config.enumFactoryTypeArguments[meta.name] ??
+        const <List<String>>[]) {
+      add(tuple, configured: true);
+    }
+    add(instantiateEnumTypeBounds(names, bounds)
+        .map((type) => type.name)
+        .toList());
+    for (final value in meta.values) {
+      final explicit = value.typeArguments;
+      if (explicit == null) continue; // Never guess native inferred tuples.
+      try {
+        add(explicit);
+      } on ArgumentError {
+        // An alias or imported name is not safely source-known. Configure a
+        // resolved source declaration instead; native registration still knows
+        // the constant's actual reified arguments.
+      }
+    }
+    return [
+      for (final factory in meta.factories)
+        if (!factory.name.startsWith('_') || config.includePrivateMembers)
+          BridgeableEnumFactory(factory.name, [
+            for (final parameter in factory.parameters)
+              EnumFormalParameter(
+                  parameter.name, _enumFormalType(parameter.type, metadata),
+                  isNamed: parameter.isNamed, isRequired: parameter.isRequired),
+          ], [
+            for (final tuple in tuples)
+              _enumFactorySpecialization(factory, names, tuple, metadata),
+          ])
+    ];
+  }
+
+  BridgeableEnumFactorySpecialization _enumFactorySpecialization(
+      ConstructorMetadata factory,
+      List<String> names,
+      List<RuntimeType> tuple,
+      EnumTypeMetadata metadata) {
+    _positionalIndex = 0;
+    return BridgeableEnumFactorySpecialization(
+        tuple.map((type) => type.name).toList(), [
+      for (final parameter in factory.parameters)
+        _enumFactoryParameter(parameter, names, tuple, metadata)
+    ]);
+  }
+
+  BridgeableParameter _enumFactoryParameter(ParameterMetadata parameter,
+      List<String> names, List<RuntimeType> tuple, EnumTypeMetadata metadata) {
+    final index = parameter.isNamed ? null : _positionalIndex++;
+    final raw = parameter.isNamed
+        ? "namedArgs['${parameter.name}']"
+        : 'positionalArgs[$index]';
+    final present = parameter.isNamed
+        ? "namedArgs.containsKey('${parameter.name}')"
+        : 'positionalArgs.length > $index';
+    final type = substituteEnumType(
+        _enumFormalType(parameter.type, metadata), names, tuple);
+    final typeName = type.name;
+    String conversion(RuntimeType type, String expression) {
+      if (type is NullableEnumArgument) {
+        return '$expression == null ? null : (${conversion(type.type, expression)})';
+      }
+      if (type is AppliedRuntimeType &&
+          const ['List', 'Set', 'Iterable', 'Map']
+              .contains(type.baseType.name)) {
+        final arguments =
+            type.typeArguments.map((argument) => argument.name).join(', ');
+        return '$expression is ${type.name} ? $expression as ${type.name} '
+            ': ($expression as ${type.baseType.name}).cast<$arguments>()';
+      }
+      if (type is FunctionRuntimeType) {
+        final wrapped = _wrapFunctionType(
+            '($expression as Callable)', type.name,
+            signature: type);
+        return '$expression is Callable ? ($wrapped) : ($expression as ${type.name})';
+      }
+      return '$expression as ${type.name}';
+    }
+
+    final supplied = conversion(type, raw);
+    final extraction = parameter.isRequired
+        ? '($supplied)'
+        : '($present ? ($supplied) : ${parameter.defaultValue ?? 'null'})';
+    return BridgeableParameter(
+        name: parameter.name,
+        type: typeName,
+        isNamed: parameter.isNamed,
+        isRequired: parameter.isRequired,
+        defaultValue: parameter.defaultValue,
+        extractionExpr: extraction);
+  }
+
+  RuntimeType _compiledEnumType(String source, EnumTypeMetadata metadata) {
+    final type = parseEnumTypeName(source);
+    if (source.replaceAll(RegExp(r'\s'), '') !=
+        type.name.replaceAll(RegExp(r'\s'), '')) {
+      throw ArgumentError('Invalid compiled enum type: $source');
+    }
+    void validate(RuntimeType type) {
+      if (type is NullableEnumArgument) return validate(type.type);
+      final base = type is AppliedRuntimeType ? type.baseType : type;
+      final arity = _nativeTypeArities[base.name];
+      final arguments = type is AppliedRuntimeType
+          ? type.typeArguments
+          : const <RuntimeType>[];
+      if (arity == null ||
+          arity != arguments.length ||
+          !RegExp(r'^[A-Za-z][A-Za-z0-9_]*$').hasMatch(base.name)) {
+        throw ArgumentError('Not a compile-known enum type: $source');
+      }
+      for (final argument in arguments) {
+        validate(argument);
+      }
+    }
+
+    validate(type);
+    return metadata.resolveType(type);
   }
 
   // -------------------------------------------------------------------------

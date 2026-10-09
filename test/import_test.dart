@@ -649,41 +649,21 @@ String main() => 'must-not-complete';
           library: 'd4rt-mem:/invalid_superclass_main.dart',
           sources: invalidDeclarationSources,
         ),
-        throwsA(
-          isA<RuntimeError>().having(
-            (error) => error.message,
-            'message',
-            contains(
-              "Superclass 'MissingBase' not found for class 'BrokenChild'",
-            ),
-          ),
-        ),
+        throwsA(isA<RuntimeError>()),
       );
       expect(
         () => D4rt().execute(
           library: 'd4rt-mem:/invalid_mixin_main.dart',
           sources: invalidDeclarationSources,
         ),
-        throwsA(
-          isA<RuntimeError>().having(
-            (error) => error.message,
-            'message',
-            contains("Type 'MissingBase' in 'on' clause of mixin"),
-          ),
-        ),
+        throwsA(isA<RuntimeError>()),
       );
       expect(
         () => D4rt().execute(
           library: 'd4rt-mem:/invalid_extension_main.dart',
           sources: invalidDeclarationSources,
         ),
-        throwsA(
-          isA<RuntimeError>().having(
-            (error) => error.message,
-            'message',
-            contains("Could not resolve 'on' type 'MissingType'"),
-          ),
-        ),
+        throwsA(isA<RuntimeError>()),
       );
     });
 

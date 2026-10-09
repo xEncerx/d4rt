@@ -53,7 +53,7 @@ class ConvertStdlib {
     environment.defineBridge(ByteConversionConvert.definition);
 
     // Register global functions
-    environment.define(
+    environment.defineFunction(
         'jsonEncode',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.isEmpty) {
@@ -68,7 +68,7 @@ class ConvertStdlib {
           );
         }, arity: 1, name: 'jsonEncode'));
 
-    environment.define(
+    environment.defineFunction(
         'jsonDecode',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.isEmpty || arguments[0] is! String) {
@@ -82,7 +82,7 @@ class ConvertStdlib {
             reviver: wrapJsonReviver(visitor, reviverArg),
           );
         }, arity: 1, name: 'jsonDecode'));
-    environment.define(
+    environment.defineFunction(
         'base64Encode',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.length != 1 || arguments[0] is! List) {
@@ -94,7 +94,7 @@ class ConvertStdlib {
             (arguments[0] as List).toNativeList().cast<int>(),
           );
         }, arity: 1, name: 'base64Encode'));
-    environment.define(
+    environment.defineFunction(
         'base64UrlEncode',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.length != 1 || arguments[0] is! List) {
@@ -106,7 +106,7 @@ class ConvertStdlib {
             (arguments[0] as List).toNativeList().cast<int>(),
           );
         }, arity: 1, name: 'base64UrlEncode'));
-    environment.define(
+    environment.defineFunction(
         'base64Decode',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.length != 1 || arguments[0] is! String) {

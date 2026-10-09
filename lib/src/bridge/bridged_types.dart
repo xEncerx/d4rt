@@ -1,8 +1,9 @@
-import '../runtime_interfaces.dart';
-import '../exceptions.dart';
-import '../interpreter_visitor.dart';
-import 'registration.dart' hide BridgedMethodCallable;
-import '../callable.dart';
+import 'package:d4rt/src/bridge/enum_mixin_metadata.dart';
+import 'package:d4rt/src/bridge/registration.dart' hide BridgedMethodCallable;
+import 'package:d4rt/src/callable.dart';
+import 'package:d4rt/src/exceptions.dart';
+import 'package:d4rt/src/interpreter_visitor.dart';
+import 'package:d4rt/src/runtime_interfaces.dart';
 
 /// Represents a natively defined class that is accessible to the interpreter.
 ///
@@ -68,6 +69,12 @@ class BridgedClass implements RuntimeType {
   // Support for mixin usage
   final bool canBeUsedAsMixin;
 
+  /// Optional declaration constraints for native mixin application to enums.
+  final EnumMixinMetadata? enumMixinMetadata;
+
+  /// Constructors allowed in an interpreted constant context.
+  final Set<String> constantConstructors;
+
   // Adapters for constructors
   Map<String, BridgedConstructorCallable> constructors = {};
   // Adapters for instance methods
@@ -85,6 +92,8 @@ class BridgedClass implements RuntimeType {
       this.nativeNames,
       this.typeParameterCount = 0,
       this.canBeUsedAsMixin = false,
+      this.enumMixinMetadata,
+      this.constantConstructors = const {},
       this.constructors = const {},
       this.staticMethods = const {},
       this.staticGetters = const {},

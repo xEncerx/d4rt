@@ -1,4 +1,5 @@
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/stdlib/core/enum.dart';
 
 class SetCore {
   static BridgedClass get definition => BridgedClass(
@@ -30,6 +31,8 @@ class SetCore {
           },
         },
         methods: {
+          'byName': EnumCore.byName,
+          'asNameMap': EnumCore.asNameMap,
           'add': (visitor, target, positionalArgs, namedArgs) {
             return (target as Set).add(positionalArgs[0]);
           },
@@ -101,19 +104,20 @@ class SetCore {
           'map': (visitor, target, positionalArgs, namedArgs) {
             final f = positionalArgs[0] as InterpretedFunction;
             return (target as Set).map((element) {
-              return f.call(visitor, [element]);
+              return InterpreterVisitor.invokeCallback(f, [element]);
             });
           },
           'where': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0] as InterpretedFunction;
             return (target as Set).where((element) {
-              return test.call(visitor, [element]) as bool;
+              return InterpreterVisitor.invokeCallback(test, [element]) as bool;
             });
           },
           'expand': (visitor, target, positionalArgs, namedArgs) {
             final f = positionalArgs[0] as InterpretedFunction;
             return (target as Set).expand((element) {
-              return f.call(visitor, [element]) as Iterable;
+              return InterpreterVisitor.invokeCallback(f, [element])
+                  as Iterable;
             });
           },
           'every': (visitor, target, positionalArgs, namedArgs) {
@@ -164,13 +168,13 @@ class SetCore {
           'takeWhile': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0] as InterpretedFunction;
             return (target as Set).takeWhile((element) {
-              return test.call(visitor, [element]) as bool;
+              return InterpreterVisitor.invokeCallback(test, [element]) as bool;
             });
           },
           'skipWhile': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0] as InterpretedFunction;
             return (target as Set).skipWhile((element) {
-              return test.call(visitor, [element]) as bool;
+              return InterpreterVisitor.invokeCallback(test, [element]) as bool;
             });
           },
           'fold': (visitor, target, positionalArgs, namedArgs) {

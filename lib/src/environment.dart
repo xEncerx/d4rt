@@ -1,3 +1,4 @@
+import 'package:analyzer/dart/ast/ast.dart' show Expression;
 import 'package:d4rt/d4rt.dart';
 import 'package:d4rt/src/utils/extensions/string.dart';
 
@@ -31,9 +32,12 @@ class Environment {
 
   final Environment? _enclosing;
   final Map<String, Object?> _values = {};
+  final Map<String, _ConstantBinding> _constants = {};
+  Map<String, Callable>? _functionDeclarations;
   final Map<String, BridgedClass> _bridgedClasses = {};
   final Map<Type, BridgedClass> _bridgedClassesLookupByType = {};
   final Map<String, BridgedEnum> _bridgedEnums = {}; // Store bridged enums
+  final Map<Enum, BridgedEnumValue> _nativeEnumValues = {};
   final List<InterpretedExtension> _unnamedExtensions =
       []; // Store unnamed extensions
   final Map<String, Environment> _prefixedImports = {}; // For prefixed imports
@@ -83,7 +87,85 @@ class Environment {
       // CHECK: Also check bridged enums
       Logger.warn("Redefining variable or colliding with bridged type: $name");
     }
+    _functionDeclarations?.remove(name);
     _values[name] = value;
+  }
+
+  /// Defines a declaration, retaining tearoff provenance only for functions.
+  void defineFunction(String name, Callable function) {
+    define(name, function);
+    // Accessors execute when read; they are not constant function tearoffs.
+    if (function is InterpretedFunction &&
+        (function.isGetter || function.isSetter)) {
+      return;
+    }
+    (_functionDeclarations ??= {})[name] = function;
+  }
+
+  /// Whether the visible binding is still its declared, constant function.
+  bool isFunctionDeclaration(String name) {
+    final separator = name.indexOf('.');
+    if (separator >= 0) {
+      final namespace = get(name.substring(0, separator));
+      return namespace is Environment &&
+          namespace.isFunctionDeclaration(name.substring(separator + 1));
+    }
+    final owner = findDefiningEnvironment(name);
+    final function = owner?._functionDeclarations?[name];
+    return function != null && identical(function, owner?._values[name]);
+  }
+
+  /// Retains a top-level const initializer for forward enum constant references.
+  void declareConstant(String name, Expression expression) {
+    _constants[name] = _ConstantBinding(name, expression, this);
+  }
+
+  _ConstantBinding? _constantBinding(String name) {
+    final separator = name.indexOf('.');
+    if (separator >= 0) {
+      final prefix = name.substring(0, separator);
+      final member = name.substring(separator + 1);
+      for (Environment? scope = this; scope != null; scope = scope.enclosing) {
+        final namespace = scope._prefixedImports[prefix];
+        if (namespace != null) return namespace._constantBinding(member);
+      }
+      return null;
+    }
+    return findDefiningEnvironment(name)?._constants[name];
+  }
+
+  /// Returns the initializer for a lexically visible const binding.
+  Expression? constantInitializer(String name) =>
+      _constantBinding(name)?.expression;
+
+  /// The lexical owner of a const initializer, including imported bindings.
+  Environment? constantOwner(String name) => _constantBinding(name)?.owner;
+
+  /// Initializes a declared const binding without repeating an earlier read.
+  Object? initializeConstant(String name, Object? Function() initialize) {
+    final binding = _constants[name];
+    if (binding == null) return initialize();
+    if (!binding.initialized) {
+      binding.value = initialize();
+      binding.initialized = true;
+    }
+    _values[name] = binding.value;
+    return binding.value;
+  }
+
+  /// Reads a const binding lazily in its declaration scope during enum evaluation.
+  Object? resolveConstant(String name,
+      Object? Function(Expression expression, Environment owner) evaluate) {
+    final binding = _constantBinding(name);
+    if (binding == null) throw RuntimeError('No constant named $name.');
+    if (binding.initializing) throw StackOverflowError();
+    binding.initializing = true;
+    try {
+      return binding.owner.initializeConstant(
+          binding.name, () => evaluate(binding.expression, binding.owner));
+    } finally {
+      binding.initializing = false;
+    }
   }
 
   /// Registers a bridged class in this environment.
@@ -109,8 +191,13 @@ class Environment {
           "Redefining bridged class or colliding with existing definition: $name");
     }
     _bridgedClasses[name] = bridgedClass;
-    _bridgedClassesLookupByType[bridgedClass.nativeType] = bridgedClass;
+    registerBridgedClassDiscovery(bridgedClass);
     Logger.debug("[Environment] Defined bridge for class: $name");
+  }
+
+  /// Registers native object discovery without exporting a lexical type name.
+  void registerBridgedClassDiscovery(BridgedClass bridgedClass) {
+    _bridgedClassesLookupByType[bridgedClass.nativeType] = bridgedClass;
   }
 
   /// Converts a native object to a bridged instance if a bridge exists.
@@ -228,32 +315,27 @@ class Environment {
           "Redefining bridged enum or colliding with existing definition: $name");
     }
     _bridgedEnums[name] = bridgedEnum;
+    registerBridgedEnumDiscovery(bridgedEnum);
     Logger.debug("[Environment] Defined bridge for enum: $name");
   }
 
-  /// Checks if the given object is a bridged enum value
-  BridgedEnum? findBridgedEnumForValue(Object value) {
-    for (final bridgedEnum in _bridgedEnums.values) {
-      for (final enumValue in bridgedEnum.values.values) {
-        if (enumValue.nativeValue == value) {
-          return bridgedEnum;
-        }
+  /// Registers canonical native values independently of imported name visibility.
+  void registerBridgedEnumDiscovery(BridgedEnum bridgedEnum) {
+    for (final value in bridgedEnum.values.values) {
+      if (value.nativeValue is Enum) {
+        _nativeEnumValues[value.nativeValue as Enum] = value;
       }
     }
-    return _enclosing?.findBridgedEnumForValue(value);
   }
 
+  /// Checks if the given object is a bridged enum value
+  BridgedEnum? findBridgedEnumForValue(Object value) =>
+      getBridgedEnumValue(value)?.enumType;
+
   /// Gets the BridgedEnumValue for a native enum value
-  BridgedEnumValue? getBridgedEnumValue(Object value) {
-    for (final bridgedEnum in _bridgedEnums.values) {
-      for (final enumValue in bridgedEnum.values.values) {
-        if (enumValue.nativeValue == value) {
-          return enumValue;
-        }
-      }
-    }
-    return _enclosing?.getBridgedEnumValue(value);
-  }
+  BridgedEnumValue? getBridgedEnumValue(Object value) => value is Enum
+      ? _nativeEnumValues[value] ?? _enclosing?.getBridgedEnumValue(value)
+      : null;
 
   /// Retrieves the value associated with [name].
   /// Searches the current environment, then recursively searches parent environments.
@@ -501,7 +583,7 @@ class Environment {
     return null; // Not found
   }
 
-  // Placeholder helper to get RuntimeType - needs actual implementation
+  /// Returns a value's reified type, including canonical registered native enums.
   RuntimeType? getRuntimeType(Object? value) {
     final annotatedRuntimeType = getAnnotatedRuntimeType(value);
     if (annotatedRuntimeType != null) {
@@ -510,6 +592,10 @@ class Environment {
 
     if (value is RuntimeValue) {
       return value.valueType;
+    }
+    if (value is Enum) {
+      final enumValue = getBridgedEnumValue(value);
+      if (enumValue != null) return enumValue.valueType;
     }
     if (value is InterpretedRecord) {
       return RecordRuntimeType(
@@ -523,8 +609,16 @@ class Environment {
         ),
       );
     }
-    if (value is Callable && value is! RuntimeType) {
+    if (value is Callable &&
+        (value is! RuntimeType || value is NativeFunction)) {
       return value.callableRuntimeType;
+    }
+    if (value is RuntimeType) {
+      for (Environment? scope = this; scope != null; scope = scope.enclosing) {
+        final coreType = scope._bridgedClassesLookupByType[Type];
+        if (coreType != null) return coreType;
+      }
+      throw RuntimeError('Core Type is not registered.');
     }
     // Handle Dart primitive/core types by looking them up in the environment
     // Assumes core types (String, int, bool, List, Map, etc.) are registered as BridgedClass
@@ -600,6 +694,13 @@ class Environment {
       }
       if (include) {
         newEnv._values[name] = value;
+        if (_constants.containsKey(name)) {
+          newEnv._constants[name] = _constants[name]!;
+        }
+        final function = _functionDeclarations?[name];
+        if (function != null && identical(function, value)) {
+          (newEnv._functionDeclarations ??= {})[name] = function;
+        }
       }
     });
 
@@ -628,6 +729,7 @@ class Environment {
       }
       if (include) {
         newEnv._bridgedEnums[name] = bridgedEnum;
+        newEnv.registerBridgedEnumDiscovery(bridgedEnum);
       }
     });
 
@@ -695,6 +797,13 @@ class Environment {
             "Name conflict in environment: Symbol '$name' is already defined.");
       }
       _values[name] = value;
+      if (sourceEnvToImportFrom._constants.containsKey(name)) {
+        _constants[name] = sourceEnvToImportFrom._constants[name]!;
+      }
+      final function = sourceEnvToImportFrom._functionDeclarations?[name];
+      if (function != null && identical(function, value)) {
+        (_functionDeclarations ??= {})[name] = function;
+      }
     });
 
     sourceEnvToImportFrom._bridgedClasses.forEach((name, bridgedClass) {
@@ -731,6 +840,7 @@ class Environment {
         throw RuntimeError(
             "Name conflict in environment: Symbol '$name' (bridged enum) is already defined.");
       }
+      registerBridgedEnumDiscovery(bridgedEnum);
       _bridgedEnums[name] = bridgedEnum;
     });
 
@@ -765,4 +875,14 @@ class Environment {
         "[Env.definePrefixedImport] Defining prefixed import '$prefix' with environment $importEnvironment (hash: ${importEnvironment.hashCode})");
     _prefixedImports[prefix] = importEnvironment;
   }
+}
+
+class _ConstantBinding {
+  final String name;
+  final Expression expression;
+  final Environment owner;
+  bool initialized = false;
+  bool initializing = false;
+  Object? value;
+  _ConstantBinding(this.name, this.expression, this.owner);
 }

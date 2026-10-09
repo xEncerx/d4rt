@@ -1,17 +1,17 @@
-import 'package:analyzer/dart/ast/ast.dart';
-import 'package:d4rt/d4rt.dart';
-import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/analysis/features.dart';
-import 'package:d4rt/src/stdlib/convert.dart';
-import 'package:d4rt/src/stdlib/isolate.dart';
-import 'package:d4rt/src/invocation_deadline.dart';
-import 'package:d4rt/src/stdlib/math.dart';
-import 'package:d4rt/src/stdlib/collection.dart';
-import 'package:d4rt/src/stdlib/typed_data.dart';
-import 'package:d4rt/src/stdlib/developer.dart';
+import 'package:analyzer/dart/analysis/utilities.dart';
+import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/error/error.dart';
+import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/invocation_deadline.dart';
+import 'package:d4rt/src/stdlib/collection.dart';
+import 'package:d4rt/src/stdlib/convert.dart';
+import 'package:d4rt/src/stdlib/developer.dart';
+import 'package:d4rt/src/stdlib/isolate.dart';
+import 'package:d4rt/src/stdlib/math.dart';
 import 'package:d4rt/src/stdlib/stdlib_io.dart'
     if (dart.library.html) 'package:d4rt/src/stdlib/stdlib_web.dart';
+import 'package:d4rt/src/stdlib/typed_data.dart';
 import 'package:d4rt/src/utils/platform/filesystem.dart';
 
 // Represent an module of source code loaded and parsed.
@@ -200,7 +200,8 @@ class ModuleLoader {
     return (showNames: showNames, hideNames: hideNames);
   }
 
-  void _applyImportedEnvironment(
+  /// Applies one filtered import, keeping locally declared names authoritative.
+  void applyImportedEnvironment(
     Environment targetEnvironment,
     LoadedModule importedModule, {
     required Uri ownerUri,
@@ -208,6 +209,7 @@ class ModuleLoader {
     Set<String>? showNames,
     Set<String>? hideNames,
     String? prefix,
+    Set<String> localNames = const {},
   }) {
     if (prefix != null) {
       final prefixedEnv =
@@ -221,11 +223,9 @@ class ModuleLoader {
       return;
     }
 
-    targetEnvironment.importEnvironment(
-      importedModule.exportedEnvironment,
-      show: showNames,
-      hide: hideNames,
-    );
+    final visible = importedModule.exportedEnvironment
+        .shallowCopyFiltered(showNames: showNames, hideNames: hideNames);
+    targetEnvironment.importEnvironment(visible, hide: localNames);
     Logger.debug(
         "[ModuleLoader loadModule for $ownerUri]   Successfully imported environment from ${resolvedImportUri.toString()} into ${ownerUri.toString()} (show: ${showNames?.join(", ")}, hide: ${hideNames?.join(", ")}).");
   }
@@ -288,12 +288,10 @@ class ModuleLoader {
     try {
       Logger.debug(
           "[ModuleLoader loadModule for $uri] Loading module: ${uri.toString()}");
-      String sourceCode = _fetchModuleSource(uri);
-      CompilationUnit ast = _parseSource(uri, sourceCode);
-
       final moduleEnvironment =
           _ModuleEnvironment(enclosing: globalEnvironment);
-
+      String sourceCode = _fetchModuleSource(uri, moduleEnvironment);
+      CompilationUnit ast = _parseSource(uri, sourceCode);
       final DeclarationVisitor declarationVisitor =
           DeclarationVisitor(moduleEnvironment);
       // Declare local names before imports while deferring function metadata
@@ -329,6 +327,7 @@ class ModuleLoader {
           .toSet();
       final Environment exportedEnvironment =
           moduleEnvironment.shallowCopyFiltered(hideNames: privateNames);
+      final localNames = moduleEnvironment.values.keys.toSet();
 
       Logger.debug(
           "[ModuleLoader loadModule for $uri] Processing import directives...");
@@ -357,7 +356,7 @@ class ModuleLoader {
             ownerUri: uri,
           );
 
-          _applyImportedEnvironment(
+          applyImportedEnvironment(
             moduleEnvironment,
             importedModule,
             ownerUri: uri,
@@ -365,6 +364,7 @@ class ModuleLoader {
             showNames: combinators.showNames,
             hideNames: combinators.hideNames,
             prefix: prefix,
+            localNames: localNames,
           );
         } catch (e, s) {
           Logger.error(
@@ -398,8 +398,8 @@ class ModuleLoader {
           declaration.accept(moduleInterpreter);
           final functionName = declaration.name.lexeme;
           if (_isPublicName(functionName)) {
-            exportedEnvironment.assign(
-                functionName, moduleEnvironment.values[functionName]);
+            exportedEnvironment.defineFunction(functionName,
+                moduleEnvironment.values[functionName] as Callable);
           }
         }
       }
@@ -460,18 +460,20 @@ class ModuleLoader {
 
       Logger.debug(
           "[ModuleLoader loadModule for $uri] Executing InterpreterVisitor pass for initializers...");
-      for (final declaration in ast.declarations) {
-        if (declaration is TopLevelVariableDeclaration) {
-          declaration.accept(moduleInterpreter);
-          for (final variable in declaration.variables.variables) {
-            final variableName = variable.name.lexeme;
-            if (variableName != '_' && _isPublicName(variableName)) {
-              exportedEnvironment.assign(
-                  variableName, moduleEnvironment.values[variableName]);
+      moduleInterpreter.runCollectionInvocation(() {
+        for (final declaration in ast.declarations) {
+          if (declaration is TopLevelVariableDeclaration) {
+            declaration.accept(moduleInterpreter);
+            for (final variable in declaration.variables.variables) {
+              final variableName = variable.name.lexeme;
+              if (variableName != '_' && _isPublicName(variableName)) {
+                exportedEnvironment.assign(
+                    variableName, moduleEnvironment.values[variableName]);
+              }
             }
           }
         }
-      }
+      });
       Logger.debug(
           "[ModuleLoader loadModule for $uri] Finished InterpreterVisitor pass for initializers.");
 
@@ -537,7 +539,7 @@ class ModuleLoader {
     }
   }
 
-  String _fetchModuleSource(Uri uri) {
+  String _fetchModuleSource(Uri uri, Environment namespace) {
     final uriString = uri.toString();
     Logger.debug(
         "[ModuleLoader] Récupération de la source pour: $uriString depuis sources.");
@@ -617,39 +619,23 @@ class ModuleLoader {
             "Dart library '${uri.toString()}' not supported.");
       }
     }
-    if (bridgedClases.isNotEmpty || bridgedEnumDefinitions.isNotEmpty) {
-      for (var bridgedEnumDefinition in bridgedEnumDefinitions) {
-        if (bridgedEnumDefinition.containsKey(uriString)) {
-          final definition = bridgedEnumDefinition[uriString]!;
-          try {
-            final bridgedEnum = definition.buildBridgedEnum();
-            globalEnvironment.defineBridgedEnum(bridgedEnum);
-            Logger.debug(
-                " [execute] Registered bridged enum: ${definition.name}");
-          } catch (e) {
-            Logger.error("registering bridged enum '${definition.name}': $e");
-            throw Exception(
-                "Failed to register bridged enum '${definition.name}': $e");
-          }
-        }
-      }
-
-      for (var bridgedClass in bridgedClases) {
-        if (bridgedClass.containsKey(uriString)) {
-          final definition = bridgedClass[uriString]!;
-          try {
-            globalEnvironment.defineBridge(definition);
-            Logger.debug(
-                " [execute] Registered bridged class: ${definition.name}");
-          } catch (e) {
-            Logger.error("registering bridged class '${definition.name}': $e");
-            throw Exception(
-                "Failed to register bridged class '${definition.name}': $e");
-          }
-        }
-      }
-      return '';
+    var registered = false;
+    for (final registration in bridgedClases) {
+      final definition = registration[uriString];
+      if (definition == null) continue;
+      registered = true;
+      namespace.defineBridge(definition);
+      globalEnvironment.registerBridgedClassDiscovery(definition);
     }
+    for (final registration in bridgedEnumDefinitions) {
+      final definition = registration[uriString];
+      if (definition == null) continue;
+      registered = true;
+      final bridgedEnum = definition.buildBridgedEnum(environment: namespace);
+      namespace.defineBridgedEnum(bridgedEnum);
+      globalEnvironment.registerBridgedEnumDiscovery(bridgedEnum);
+    }
+    if (registered) return '';
 
     // If it's neither explicitly preloaded nor a known Dart library, it's an error.
     Logger.error(

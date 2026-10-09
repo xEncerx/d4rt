@@ -1,27 +1,27 @@
 import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/analysis/utilities.dart';
-import 'package:analyzer/error/error.dart';
-import 'package:d4rt/src/bridge/bridged_enum.dart';
-import 'package:d4rt/src/utils/logger/logger.dart';
-import 'package:d4rt/src/bridge/bridged_types.dart';
-import 'package:d4rt/src/runtime_interfaces.dart';
-import 'package:d4rt/src/runtime_types.dart';
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:d4rt/src/environment.dart';
-import 'package:d4rt/src/interpreter_visitor.dart';
-import 'package:d4rt/src/module_loader.dart';
-import 'package:d4rt/src/exceptions.dart';
-import 'package:d4rt/src/invocation_deadline.dart';
+import 'package:analyzer/error/error.dart';
+import 'package:d4rt/src/bridge/bridge_registry_manager.dart';
+import 'package:d4rt/src/bridge/bridged_enum.dart';
+import 'package:d4rt/src/bridge/bridged_types.dart';
+import 'package:d4rt/src/bridge/library_tracking.dart';
+import 'package:d4rt/src/bridge/registration.dart';
 import 'package:d4rt/src/callable.dart';
 import 'package:d4rt/src/declaration_visitor.dart';
-import 'package:d4rt/src/stdlib/stdlib.dart';
-import 'package:d4rt/src/bridge/registration.dart';
-import 'package:d4rt/src/security/permissions.dart';
+import 'package:d4rt/src/environment.dart';
+import 'package:d4rt/src/exceptions.dart';
+import 'package:d4rt/src/interpreter_visitor.dart';
 import 'package:d4rt/src/introspection.dart';
-import 'package:d4rt/src/bridge/bridge_registry_manager.dart';
-import 'package:d4rt/src/bridge/library_tracking.dart';
-import 'package:d4rt/src/utils/platform/filesystem.dart';
+import 'package:d4rt/src/invocation_deadline.dart';
+import 'package:d4rt/src/module_loader.dart';
+import 'package:d4rt/src/runtime_interfaces.dart';
+import 'package:d4rt/src/runtime_types.dart';
 import 'package:d4rt/src/script.dart';
+import 'package:d4rt/src/security/permissions.dart';
+import 'package:d4rt/src/stdlib/stdlib.dart';
+import 'package:d4rt/src/utils/logger/logger.dart';
+import 'package:d4rt/src/utils/platform/filesystem.dart';
 
 /// The main D4rt interpreter class.
 ///
@@ -218,7 +218,7 @@ class D4rt {
           );
     Stdlib(moduleLoader.globalEnvironment).register();
     for (final function in _nativeFunctions) {
-      moduleLoader.globalEnvironment.define(function.name, function);
+      moduleLoader.globalEnvironment.defineFunction(function.name, function);
     }
     return moduleLoader;
   }
@@ -634,7 +634,8 @@ class D4rt {
     int? maxSteps,
     void Function(String)? onPrint,
   }) {
-    final Environment executionEnvironment = moduleLoader.globalEnvironment;
+    final Environment executionEnvironment =
+        Environment(enclosing: moduleLoader.globalEnvironment);
     Logger.debug("[execute] Starting Pass 1: Declaration");
     final declarationVisitor = DeclarationVisitor(executionEnvironment);
     for (final declaration in compilationUnit.declarations) {
@@ -691,11 +692,13 @@ class D4rt {
       Logger.debug(" [execute] Finished pre-processing extensions");
 
       // Process all other declarations
-      for (final declaration in compilationUnit.declarations) {
-        if (declaration is! ExtensionDeclaration) {
-          declaration.accept<Object?>(visitor);
+      visitor.runCollectionInvocation(() {
+        for (final declaration in compilationUnit.declarations) {
+          if (declaration is! ExtensionDeclaration) {
+            declaration.accept<Object?>(visitor);
+          }
         }
-      }
+      });
       Logger.debug(" [execute] Finished processing declarations");
     } on InternalInterpreterException catch (e) {
       if (deadline?.expired ?? false) throw deadline!.exception;
@@ -760,8 +763,8 @@ class D4rt {
 
       Logger.debug(
           "[execute] Calling '$name' with ${interpreterArgs.length} positional and ${interpreterNamedArgs.length} named arguments");
-      functionResult =
-          functionCallable.call(visitor, interpreterArgs, interpreterNamedArgs);
+      functionResult = invokeFunctionFromHost(
+          functionCallable, visitor, interpreterArgs, interpreterNamedArgs);
       Logger.debug(" [execute] Finished Pass 2: Interpretation");
     } on InternalInterpreterException catch (e) {
       if (deadline?.expired ?? false) throw deadline!.exception;
@@ -1265,7 +1268,8 @@ class D4rt {
       );
     }
 
-    final globalEnv = _visitor!.globalEnvironment;
+    final visitor = InterpreterVisitor.currentCollectionVisitor ?? _visitor!;
+    final globalEnv = visitor.globalEnvironment;
     final interpreterArgs = positionalArguments
         .map((v) => _bridgeNativeValueToInterpreter(v, globalEnv))
         .toList();
@@ -1273,8 +1277,8 @@ class D4rt {
       (k, v) => MapEntry(k, _bridgeNativeValueToInterpreter(v, globalEnv)),
     );
     return _tryFunction(
-      () => f.call(
-          _visitor!, interpreterArgs, interpreterNamedArgs, typeArguments),
+      () => invokeFunctionFromHost(
+          f, visitor, interpreterArgs, interpreterNamedArgs, typeArguments),
       "Error invoking interpreted function '$f'",
     );
   }

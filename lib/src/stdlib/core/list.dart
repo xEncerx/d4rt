@@ -1,4 +1,5 @@
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/stdlib/core/enum.dart';
 
 /// Creates an immutable native list for reifiable core element types.
 ///
@@ -106,6 +107,8 @@ class ListCore {
           },
         },
         methods: {
+          'byName': EnumCore.byName,
+          'asNameMap': EnumCore.asNameMap,
           '[]': (visitor, target, positionalArgs, namedArgs) {
             return (target as List)[positionalArgs[0] as int];
           },
@@ -174,8 +177,8 @@ class ListCore {
           },
           'map': (visitor, target, positionalArgs, namedArgs) {
             final toElement = positionalArgs[0] as Callable;
-            return (target as List)
-                .map((element) => toElement.call(visitor, [element], {}));
+            return (target as List).map((element) =>
+                InterpreterVisitor.invokeCallback(toElement, [element]));
           },
           'indexWhere': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0] as Callable;
@@ -191,13 +194,14 @@ class ListCore {
           },
           'where': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0] as Callable;
-            return (target as List)
-                .where((element) => test.call(visitor, [element], {}) as bool);
+            return (target as List).where((element) =>
+                InterpreterVisitor.invokeCallback(test, [element]) as bool);
           },
           'expand': (visitor, target, positionalArgs, namedArgs) {
             final toElements = positionalArgs[0] as Callable;
             return (target as List).expand((element) =>
-                toElements.call(visitor, [element], {}) as Iterable);
+                InterpreterVisitor.invokeCallback(toElements, [element])
+                    as Iterable);
           },
           'reduce': (visitor, target, positionalArgs, namedArgs) {
             final combine = positionalArgs[0] as Callable;
@@ -223,16 +227,16 @@ class ListCore {
           },
           'takeWhile': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0] as Callable;
-            return (target as List)
-                .takeWhile((value) => test.call(visitor, [value], {}) as bool);
+            return (target as List).takeWhile((value) =>
+                InterpreterVisitor.invokeCallback(test, [value]) as bool);
           },
           'skip': (visitor, target, positionalArgs, namedArgs) {
             return (target as List).skip(positionalArgs[0] as int);
           },
           'skipWhile': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0] as Callable;
-            return (target as List)
-                .skipWhile((value) => test.call(visitor, [value], {}) as bool);
+            return (target as List).skipWhile((value) =>
+                InterpreterVisitor.invokeCallback(test, [value]) as bool);
           },
           'toList': (visitor, target, positionalArgs, namedArgs) {
             return (target as List)

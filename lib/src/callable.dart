@@ -1,10 +1,46 @@
 import 'dart:async';
+
 import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:d4rt/d4rt.dart';
 import 'package:d4rt/src/catch_clause_matcher.dart';
-import 'package:d4rt/src/type_annotation_utils.dart';
 import 'package:d4rt/src/native_collection_types.dart';
+import 'package:d4rt/src/type_annotation_utils.dart';
+
+/// Enters a public host invocation without inheriting a different root's limits.
+///
+/// Internal entry adapter; not exported by the package facade.
+Object? invokeFunctionFromHost(
+    Callable function, InterpreterVisitor visitor, List<Object?> positional,
+    [Map<String, Object?> named = const {}, List<RuntimeType>? types]) {
+  return visitor.runCollectionInvocation(() {
+    visitor.checkDeadline();
+    if (function is InterpretedFunction) {
+      final generatorEntry = function.isGenerator || function.isAsyncGenerator;
+      return function._call(visitor, positional, named, types,
+          hostInvocation:
+              generatorEntry ? _GeneratorHostInvocation(visitor) : null);
+    }
+    return function.call(visitor, positional, named, types);
+  });
+}
+
+// Only a directly invoked generator receives this host-consumption capability.
+// It retains the explicit entry's terminal limits, never a renewed budget.
+class _GeneratorHostInvocation {
+  final InterpreterVisitor visitor;
+  _GeneratorHostInvocation(this.visitor);
+}
+
+T _runGeneratorInvocation<T>(_GeneratorHostInvocation? hostInvocation,
+    T Function(InterpreterVisitor) body) {
+  if (InterpreterVisitor.currentCollectionVisitor != null ||
+      hostInvocation == null) {
+    return body(InterpreterVisitor.requireCurrentInvocation());
+  }
+  return hostInvocation.visitor.runCollectionInvocation(
+      () => body(InterpreterVisitor.requireCurrentInvocation()));
+}
 
 /// Represents an invocation for noSuchMethod support in interpreted code
 class InterpretedInvocation {
@@ -111,12 +147,16 @@ class InterpretedFunction implements Callable {
   // Factory flag for constructors
   final bool isFactory;
 
+  /// Whether this constructor is declared const (enum generative const is induced).
+  final bool isConstConstructor;
+
   /// The analyzer descriptor for a redirecting factory target, if present.
   final ConstructorName? redirectedConstructor;
   // Default constructor flag - set for classes without explicit constructors
   final bool isDefaultConstructor;
 
   final RuntimeType? declaredReturnType; // Store the declared type
+  final TypeAnnotation? _returnTypeAnnotation;
 
   final bool isNullable; // Store if the return type is nullable
 
@@ -129,6 +169,9 @@ class InterpretedFunction implements Callable {
 
   // Public getter for the closure environment
   Environment get closure => _closure;
+
+  /// Declared parameters, retained for owning enum constructor type inference.
+  FormalParameterList? get parameters => _parameters;
 
   // Helper method to extract type parameter names from a TypeParameterList
   static List<String> _extractTypeParameterNames(
@@ -197,13 +240,16 @@ class InterpretedFunction implements Callable {
     this.isGenerator = false,
     this.isAsyncGenerator = false,
     this.isFactory = false,
+    this.isConstConstructor = false,
     this.redirectedConstructor,
     this.isDefaultConstructor = false,
     this.declaredReturnType,
+    TypeAnnotation? returnTypeAnnotation,
     this.isNullable = false,
     this.typeParameterNames = const [],
     this.typeParameterBounds = const {},
-  }) : _constructorInitializers = constructorInitializers;
+  })  : _constructorInitializers = constructorInitializers,
+        _returnTypeAnnotation = returnTypeAnnotation;
 
   // Constructor for declared functions (top-level or nested, not methods)
   InterpretedFunction.declaration(FunctionDeclaration declaration,
@@ -226,6 +272,7 @@ class InterpretedFunction implements Callable {
                   declaration.functionExpression.body
                       .isGenerator, // Pass async generator flag
           declaredReturnType: declaredReturnType,
+          returnTypeAnnotation: declaration.returnType,
           isNullable: isNullable,
           typeParameterNames: _extractTypeParameterNames(
               declaration.functionExpression.typeParameters),
@@ -261,6 +308,7 @@ class InterpretedFunction implements Callable {
           isGetter: declaration.isGetter, // Pass getter flag
           isSetter: declaration.isSetter, // Pass setter flag
           ownerType: owner, // Pass the owner type (class or enum)
+          returnTypeAnnotation: declaration.returnType,
           isAbstract: !declaration.isComplete, // Set the abstract flag
           isAsync: declaration.body.isAsynchronous, // Pass async flag
           isGenerator: declaration.body.isGenerator, // Pass generator flag
@@ -288,6 +336,7 @@ class InterpretedFunction implements Callable {
           isFactory:
               declaration.factoryKeyword != null, // Detect factory constructors
           redirectedConstructor: declaration.redirectedConstructor,
+          isConstConstructor: declaration.constKeyword != null,
           // Constructors don't have their own type parameters - they inherit from their class
           typeParameterNames: const [],
           typeParameterBounds: const {},
@@ -323,6 +372,11 @@ class InterpretedFunction implements Callable {
 
   @override
   RuntimeType get callableRuntimeType {
+    final signatureScope = Environment(enclosing: _closure);
+    for (final name in typeParameterNames) {
+      signatureScope.define(
+          name, TypeParameter(name, bound: typeParameterBounds[name]));
+    }
     final positionalParameterTypes = <RuntimeType>[];
     final namedParameterTypes = <String, RuntimeType>{};
     final requiredNamedParameters = <String>{};
@@ -334,12 +388,21 @@ class InterpretedFunction implements Callable {
       String? parameterName;
 
       if (parameter is RegularFormalParameter) {
-        parameterType = parameter.functionTypedSuffix != null
-            ? FunctionRuntimeType.untyped()
-            : resolveRuntimeTypeAnnotation(parameter.type, _closure);
+        final suffix = parameter.functionTypedSuffix;
+        parameterType = suffix == null
+            ? resolveRuntimeTypeArgumentOrDynamic(
+                parameter.type, signatureScope)
+            : resolveFunctionRuntimeType(
+                parameter.type, suffix.formalParameters, signatureScope,
+                typeParameterCount:
+                    suffix.typeParameters?.typeParameters.length ?? 0);
+        if (suffix?.question != null) {
+          parameterType = nullableEnumType(parameterType);
+        }
         parameterName = parameter.name?.lexeme;
       } else if (parameter is FieldFormalParameter) {
-        parameterType = resolveRuntimeTypeAnnotation(parameter.type, _closure);
+        parameterType =
+            resolveRuntimeTypeArgumentOrDynamic(parameter.type, signatureScope);
         parameterName = parameter.name.lexeme;
       }
 
@@ -359,13 +422,15 @@ class InterpretedFunction implements Callable {
     }
 
     return FunctionRuntimeType(
-      returnType: declaredReturnType ?? const NamedRuntimeType('dynamic'),
+      returnType: _returnTypeAnnotation == null
+          ? const NamedRuntimeType('dynamic')
+          : resolveRuntimeTypeArgument(_returnTypeAnnotation, signatureScope),
       positionalParameterTypes: positionalParameterTypes,
       requiredPositionalParameterCount: requiredPositionalCount,
       namedParameterTypes: namedParameterTypes,
       requiredNamedParameters: requiredNamedParameters,
       typeParameterCount: typeParameterNames.length,
-      isUntyped: declaredReturnType == null &&
+      isUntyped: _returnTypeAnnotation == null &&
           positionalParameterTypes.isEmpty &&
           namedParameterTypes.isEmpty &&
           typeParameterNames.isEmpty,
@@ -403,6 +468,42 @@ class InterpretedFunction implements Callable {
         .toList();
   }
 
+  /// Checks const payload/default/initializer expressions used by enum entries.
+  void validateEnumConstantConstructor(InterpreterVisitor visitor) {
+    final previous = visitor.environment;
+    visitor.environment = closure;
+    try {
+      final parameters = _parameters?.parameters ?? const <FormalParameter>[];
+      final names = {
+        for (final parameter in parameters)
+          if (parameter.name != null) parameter.name!.lexeme
+      };
+      for (final parameter in parameters) {
+        final expression = parameter.defaultClause?.value;
+        if (expression != null) visitor.validateEnumConstant(expression);
+      }
+      for (final initializer
+          in _constructorInitializers ?? const <ConstructorInitializer>[]) {
+        visitor.validateEnumConstant(initializer, parameters: names);
+      }
+      if (ownerType is InterpretedClass) {
+        for (final field in (ownerType as InterpretedClass).fieldDeclarations) {
+          if (field.isStatic) continue;
+          if (!field.fields.isFinal) {
+            throw RuntimeError('Const enum payloads require final fields.');
+          }
+          for (final variable in field.fields.variables) {
+            if (variable.initializer != null) {
+              visitor.validateEnumConstant(variable.initializer!);
+            }
+          }
+        }
+      }
+    } finally {
+      visitor.environment = previous;
+    }
+  }
+
   /// Binds 'this' to a specific instance, returning a new callable
   /// where the closure has 'this' defined.
   Callable bind(RuntimeValue instance) {
@@ -427,6 +528,10 @@ class InterpretedFunction implements Callable {
                 bound: klass.typeParameterBounds[paramName]);
         boundEnvironment.define(paramName, typeArg);
       }
+    }
+    if (instance is InterpretedEnumValue) {
+      instance.parentEnum.bindTypeParameters(
+          ownerType!, instance.typeArguments, boundEnvironment);
     }
 
     // Define representation field for extension type instances
@@ -455,10 +560,12 @@ class InterpretedFunction implements Callable {
       isGenerator: isGenerator,
       isAsyncGenerator: isAsyncGenerator,
       isFactory: isFactory, // Copy the factory flag
+      isConstConstructor: isConstConstructor,
       redirectedConstructor: redirectedConstructor,
       isDefaultConstructor:
           isDefaultConstructor, // Copy default constructor flag
       declaredReturnType: declaredReturnType,
+      returnTypeAnnotation: _returnTypeAnnotation,
       typeParameterNames: typeParameterNames, // Copy type parameter names
       typeParameterBounds: typeParameterBounds, // Copy type parameter bounds
     );
@@ -524,7 +631,26 @@ class InterpretedFunction implements Callable {
     Map<String, Object?> namedArguments,
     List<RuntimeType>? typeArguments,
   ) {
-    final executionEnvironment = Environment(enclosing: _closure);
+    Environment memberClosure = _closure;
+    Object? receiver;
+    if (ownerType != null) {
+      try {
+        receiver = _closure.get('this');
+      } on RuntimeError {/* Static member. */}
+    }
+    if (receiver is InterpretedEnumValue) {
+      memberClosure = receiver.parentEnum.memberEnvironment(
+          receiver: receiver, enclosing: _closure, owner: ownerType);
+    } else if (ownerType is InterpretedEnum) {
+      memberClosure =
+          (ownerType as InterpretedEnum).memberEnvironment(enclosing: _closure);
+    }
+    final executionEnvironment = Environment(enclosing: memberClosure);
+    if (isFactory && ownerType is InterpretedEnum) {
+      final enumType = ownerType as InterpretedEnum;
+      enumType.bindTypeParameters(enumType,
+          enumType.validateTypeArguments(typeArguments), executionEnvironment);
+    }
 
     // For static methods, add static members of the owner class to the execution environment
     // This allows static methods to call other static methods without prefixing the class name
@@ -730,6 +856,9 @@ class InterpretedFunction implements Callable {
           Logger.debug(
               "[_prepareEnv] Setting this.$paramName (${valueToDefine?.runtimeType}) for instance ${thisValue.hashCode}");
           thisValue.set(paramName, valueToDefine);
+          if (thisValue is InterpretedEnumValue) {
+            executionEnvironment.define(paramName, valueToDefine);
+          }
         } else if (!isSuperParameter) {
           // It's a regular parameter (not super). Define it in the execution environment.
           executionEnvironment.define(paramName, valueToDefine);
@@ -752,6 +881,10 @@ class InterpretedFunction implements Callable {
     } else if (positionalArguments.isNotEmpty || providedNamedArgs.isNotEmpty) {
       throw RuntimeError(
           "Function '${_name ?? '<anonymous>'}' takes no arguments, but arguments were provided.");
+    }
+    if (ownerType is InterpretedEnum && (isInitializer || isFactory)) {
+      (ownerType as InterpretedEnum)
+          .validateBoundConstructorArguments(_parameters, executionEnvironment);
     }
 
     bool explicitSuperCalled = false; // Track if super() or this() was called
@@ -906,6 +1039,10 @@ class InterpretedFunction implements Callable {
                 targetConstructor =
                     ownerClass.findConstructor(targetConstructorName);
               }
+              if (ownerType is InterpretedEnum) {
+                targetConstructor = (ownerType as InterpretedEnum)
+                    .constructors[targetConstructorName];
+              }
               if (targetConstructor == null) {
                 throw RuntimeError(
                     "Class '${ownerType?.name ?? '<unknown>'}' does not have a constructor named '$targetConstructorName' for redirection."); // Use ownerType?.name
@@ -945,9 +1082,12 @@ class InterpretedFunction implements Callable {
 
               // Call the target constructor, bound to the *same* instance
               // NOTE: Redirecting constructor call CANNOT suspend
-              final redirectCallResult = targetConstructor
-                  .bind(thisValue)
-                  .call(visitor, targetPositionalArgs, targetNamedArgs);
+              final redirectCallResult = thisValue is InterpretedEnumValue
+                  ? thisValue.initialize(visitor, targetConstructorName,
+                      targetPositionalArgs, targetNamedArgs)
+                  : targetConstructor
+                      .bind(thisValue)
+                      .call(visitor, targetPositionalArgs, targetNamedArgs);
               if (redirectCallResult is AsyncSuspensionRequest) {
                 // Should not happen as constructors are not async
                 throw StateError(
@@ -1264,15 +1404,18 @@ class InterpretedFunction implements Callable {
   Object? call(InterpreterVisitor visitor, List<Object?> positionalArguments,
       [Map<String, Object?> namedArguments = const {},
       List<RuntimeType>? typeArguments]) {
-    if (identical(InterpreterVisitor.currentCollectionVisitor, visitor)) {
-      return _call(visitor, positionalArguments, namedArguments, typeArguments);
+    final current = InterpreterVisitor.currentCollectionVisitor;
+    if (current == null) {
+      return invokeFunctionFromHost(
+          this, visitor, positionalArguments, namedArguments, typeArguments);
     }
-    return visitor.runCollectionInvocation(() =>
-        _call(visitor, positionalArguments, namedArguments, typeArguments));
+    // Retained callbacks use current authority while retaining only their scope.
+    return _call(current, positionalArguments, namedArguments, typeArguments);
   }
 
   Object? _call(InterpreterVisitor visitor, List<Object?> positionalArguments,
-      Map<String, Object?> namedArguments, List<RuntimeType>? typeArguments) {
+      Map<String, Object?> namedArguments, List<RuntimeType>? typeArguments,
+      {_GeneratorHostInvocation? hostInvocation}) {
     Logger.debug(
         "[InterpretedFunction.call] Called '${_name ?? 'anonymous'}' with ${positionalArguments.length} positional, ${namedArguments.length} named arguments.");
 
@@ -1301,11 +1444,11 @@ class InterpretedFunction implements Callable {
         if (isAsyncGenerator) {
           // Handle async* functions - return a Stream
           return _createAsyncGeneratorStream(
-              visitor, executionEnvironment, redirected);
+              executionEnvironment, redirected, hostInvocation);
         } else if (isGenerator) {
           // Handle sync* functions - return an Iterable
           return _createSyncGeneratorIterable(
-              visitor, executionEnvironment, redirected);
+              executionEnvironment, redirected, hostInvocation);
         } else if (isAsync) {
           final completer = Completer<Object?>();
 
@@ -1444,7 +1587,9 @@ class InterpretedFunction implements Callable {
 
     // Main loop of state machine execution
     while (currentNode != null) {
-      if (visitor.executionTimedOut) return;
+      // State-machine loops bypass visitBlock/visitWhileStatement, so charge
+      // each executed state to the invocation just as synchronous AST execution.
+      visitor.checkExecutionLimits();
       // Save current visitor environment (in case of error)
       final originalVisitorEnv = visitor.environment;
       final previousAsyncState = visitor.currentAsyncState;
@@ -2360,7 +2505,7 @@ class InterpretedFunction implements Callable {
 
           // Attach the callbacks to the Future
           suspension.future.then((futureResult) {
-            if (visitor.executionTimedOut) return;
+            if (_stopExpiredAsyncExecution(visitor, currentState)) return;
             if (currentState.generatorCancelled &&
                 !resumesGeneratorCancellation) {
               return;
@@ -2439,7 +2584,7 @@ class InterpretedFunction implements Callable {
             // Reschedule the state machine execution
             _scheduleStateMachineRun(visitor, currentState);
           }).catchError((Object error, StackTrace stackTrace) {
-            if (visitor.executionTimedOut) return;
+            if (_stopExpiredAsyncExecution(visitor, currentState)) return;
             if (currentState.generatorCancelled &&
                 !resumesGeneratorCancellation) {
               return;
@@ -2659,15 +2804,21 @@ class InterpretedFunction implements Callable {
   // Schedule the state machine execution via microtask
   static void _scheduleStateMachineRun(
       InterpreterVisitor visitor, AsyncExecutionState state) {
-    if (visitor.executionTimedOut) return;
+    if (_stopExpiredAsyncExecution(visitor, state)) return;
     // Check if the completer is already completed to avoid unnecessary executions
     if (state.completer.isCompleted) {
       Logger.debug(
           " [_scheduleStateMachineRun] Completer already completed. Skipping schedule.");
       return;
     }
-    Future.microtask(() => _runStateMachine(visitor, state))
-        .catchError((error, stackTrace) {
+    Future.microtask(() {
+      // Resolve at execution, not stream creation or scheduling. Async
+      // continuations inherit the consuming invocation's zone.
+      final executionVisitor = state.generatorStreamController == null
+          ? visitor
+          : InterpreterVisitor.requireCurrentInvocation();
+      return _runStateMachine(executionVisitor, state);
+    }).catchError((error, stackTrace) {
       // Catch errors not caught by the internal logic of _runStateMachine
       if (!state.completer.isCompleted) {
         _clearExpressionContinuations(state);
@@ -2676,6 +2827,19 @@ class InterpretedFunction implements Callable {
         state.completer.completeError(error, stackTrace);
       }
     });
+  }
+
+  static bool _stopExpiredAsyncExecution(
+      InterpreterVisitor visitor, AsyncExecutionState state) {
+    if (!visitor.executionTimedOut) return false;
+    // A host-consumed generator has no enclosing Future timeout to complete it.
+    // Keep late ordinary async work suppressed, but terminate its stream frame.
+    if (state.generatorStreamController != null &&
+        !state.completer.isCompleted) {
+      _clearExpressionContinuations(state);
+      state.completer.completeError(visitor.deadline!.exception);
+    }
+    return true;
   }
 
   static void _clearExpressionContinuations(AsyncExecutionState state) {
@@ -2771,7 +2935,7 @@ class InterpretedFunction implements Callable {
 
   static void _handleAsyncError(InterpreterVisitor visitor,
       AsyncExecutionState state, AstNode nodeWhereErrorOccurred) {
-    if (visitor.executionTimedOut) return;
+    if (_stopExpiredAsyncExecution(visitor, state)) return;
     state.returnAfterFinally = null;
     state.hasReturnAfterFinally = false;
     state.resumeReturnAfterFinallyFrom = null;
@@ -4123,55 +4287,58 @@ class InterpretedFunction implements Callable {
   }
 
   // Create a Stream for async* generator functions using real async state machine
-  Stream<Object?> _createAsyncGeneratorStream(InterpreterVisitor visitor,
-      Environment executionEnvironment, bool redirected) {
+  Stream<Object?> _createAsyncGeneratorStream(Environment executionEnvironment,
+      bool redirected, _GeneratorHostInvocation? hostInvocation) {
     late StreamController<Object?> controller;
     AsyncExecutionState? generatorState;
 
     controller = StreamController<Object?>(
       onListen: () async {
         try {
-          final previousVisitorEnv = visitor.environment;
-          final previousCurrentFunction = visitor.currentFunction;
-          final previousAsyncState = visitor.currentAsyncState;
+          await _runGeneratorInvocation(hostInvocation, (visitor) async {
+            final previousVisitorEnv = visitor.environment;
+            final previousCurrentFunction = visitor.currentFunction;
+            final previousAsyncState = visitor.currentAsyncState;
 
-          try {
-            visitor.environment = executionEnvironment;
-            visitor.currentFunction = this;
+            try {
+              visitor.environment = executionEnvironment;
+              visitor.currentFunction = this;
 
-            if (isAbstract) {
-              controller.addError(RuntimeError(
-                  "Cannot call abstract method '${_name ?? '<abstract>'}'."));
-              return;
-            }
+              if (isAbstract) {
+                controller.addError(RuntimeError(
+                    "Cannot call abstract method '${_name ?? '<abstract>'}'."));
+                return;
+              }
 
-            final bodyToExecute = _body;
-            if (!redirected && bodyToExecute is BlockFunctionBody) {
-              // Use the real async state machine for generators
-              await _runAsyncGenerator(
-                visitor,
-                bodyToExecute,
-                controller,
-                executionEnvironment,
-                (state) => generatorState = state,
-              );
-            } else if (bodyToExecute is ExpressionFunctionBody) {
-              final result = bodyToExecute.expression.accept<Object?>(visitor);
-              if (result is YieldValue) {
-                if (result.isYieldStar) {
-                  await _handleYieldStar(result.value, controller);
-                } else {
-                  controller.add(result.value);
+              final bodyToExecute = _body;
+              if (!redirected && bodyToExecute is BlockFunctionBody) {
+                // Use the real async state machine for generators
+                await _runAsyncGenerator(
+                  visitor,
+                  bodyToExecute,
+                  controller,
+                  executionEnvironment,
+                  (state) => generatorState = state,
+                );
+              } else if (bodyToExecute is ExpressionFunctionBody) {
+                final result =
+                    bodyToExecute.expression.accept<Object?>(visitor);
+                if (result is YieldValue) {
+                  if (result.isYieldStar) {
+                    await _handleYieldStar(result.value, controller);
+                  } else {
+                    controller.add(result.value);
+                  }
                 }
               }
+            } on ReturnException catch (_) {
+              // Generator completed with return
+            } finally {
+              visitor.environment = previousVisitorEnv;
+              visitor.currentFunction = previousCurrentFunction;
+              visitor.currentAsyncState = previousAsyncState;
             }
-          } on ReturnException catch (_) {
-            // Generator completed with return
-          } finally {
-            visitor.environment = previousVisitorEnv;
-            visitor.currentFunction = previousCurrentFunction;
-            visitor.currentAsyncState = previousAsyncState;
-          }
+          });
         } catch (error, stackTrace) {
           if (generatorState?.generatorCancelled != true &&
               !controller.isClosed) {
@@ -4186,7 +4353,8 @@ class InterpretedFunction implements Callable {
       onCancel: () async {
         final state = generatorState;
         if (state != null && !state.completer.isCompleted) {
-          await _cancelAsyncGenerator(visitor, state);
+          await _runGeneratorInvocation(hostInvocation,
+              (visitor) => _cancelAsyncGenerator(visitor, state));
         }
       },
     );
@@ -4233,10 +4401,12 @@ class InterpretedFunction implements Callable {
   }
 
   // Create an Iterable for sync* generator functions
-  Iterable<Object?> _createSyncGeneratorIterable(InterpreterVisitor visitor,
-      Environment executionEnvironment, bool redirected) {
+  Iterable<Object?> _createSyncGeneratorIterable(
+      Environment executionEnvironment,
+      bool redirected,
+      _GeneratorHostInvocation? hostInvocation) {
     return _SyncGeneratorIterable(
-        this, visitor, executionEnvironment, redirected);
+        this, executionEnvironment, redirected, hostInvocation);
   }
 
   // Handle yield* expressions
@@ -4260,24 +4430,24 @@ class InterpretedFunction implements Callable {
 // Iterable implementation for sync* generators
 class _SyncGeneratorIterable extends Iterable<Object?> {
   final InterpretedFunction function;
-  final InterpreterVisitor visitor;
   final Environment executionEnvironment;
   final bool redirected;
+  final _GeneratorHostInvocation? hostInvocation;
 
-  _SyncGeneratorIterable(
-      this.function, this.visitor, this.executionEnvironment, this.redirected);
+  _SyncGeneratorIterable(this.function, this.executionEnvironment,
+      this.redirected, this.hostInvocation);
 
   @override
   Iterator<Object?> get iterator => _SyncGeneratorIterator(
-      function, visitor, executionEnvironment, redirected);
+      function, executionEnvironment, redirected, hostInvocation);
 }
 
 // Iterator implementation for sync* generators - LAZY evaluation
 class _SyncGeneratorIterator implements Iterator<Object?> {
   final InterpretedFunction function;
-  final InterpreterVisitor visitor;
   final Environment executionEnvironment;
   final bool redirected;
+  final _GeneratorHostInvocation? hostInvocation;
 
   Object? _currentValue;
   bool _done = false;
@@ -4287,14 +4457,16 @@ class _SyncGeneratorIterator implements Iterator<Object?> {
   bool _executionCompleted = false;
   static const int _chunkSize = 5;
 
-  _SyncGeneratorIterator(
-      this.function, this.visitor, this.executionEnvironment, this.redirected);
+  _SyncGeneratorIterator(this.function, this.executionEnvironment,
+      this.redirected, this.hostInvocation);
 
   @override
   Object? get current => _currentValue;
 
   @override
-  bool moveNext() {
+  bool moveNext() => _runGeneratorInvocation(hostInvocation, _moveNext);
+
+  bool _moveNext(InterpreterVisitor visitor) {
     if (_done) {
       return false;
     }
@@ -4322,7 +4494,7 @@ class _SyncGeneratorIterator implements Iterator<Object?> {
     _buffer = [];
     _bufferIndex = 0;
 
-    _collectNextChunk();
+    _collectNextChunk(visitor);
 
     // If we got any values, consume first one
     if (_bufferIndex < _buffer.length) {
@@ -4334,7 +4506,7 @@ class _SyncGeneratorIterator implements Iterator<Object?> {
     return false;
   }
 
-  void _collectNextChunk() {
+  void _collectNextChunk(InterpreterVisitor visitor) {
     final previousVisitorEnv = visitor.environment;
     final previousCurrentFunction = visitor.currentFunction;
     final previousYieldsList = visitor.currentSyncGeneratorYields;
@@ -4353,7 +4525,8 @@ class _SyncGeneratorIterator implements Iterator<Object?> {
       final bodyToExecute = function._body;
       if (!redirected) {
         if (bodyToExecute is BlockFunctionBody) {
-          _executeBlockAndCollectYields(bodyToExecute.block.statements);
+          _executeBlockAndCollectYields(
+              bodyToExecute.block.statements, visitor);
         } else if (bodyToExecute is ExpressionFunctionBody) {
           bodyToExecute.expression.accept<Object?>(visitor);
         }
@@ -4390,7 +4563,8 @@ class _SyncGeneratorIterator implements Iterator<Object?> {
     }
   }
 
-  void _executeBlockAndCollectYields(List<Statement> statements) {
+  void _executeBlockAndCollectYields(
+      List<Statement> statements, InterpreterVisitor visitor) {
     for (final statement in statements) {
       try {
         statement.accept<Object?>(visitor);
@@ -4492,6 +4666,10 @@ class BridgedMethodCallable implements Callable {
   Object? call(InterpreterVisitor visitor, List<Object?> positionalArguments,
       [Map<String, Object?> namedArguments = const {},
       List<RuntimeType>? typeArguments]) {
+    if (InterpreterVisitor.currentCollectionVisitor == null) {
+      return visitor.runCollectionInvocation(() =>
+          call(visitor, positionalArguments, namedArguments, typeArguments));
+    }
     try {
       // Call the adapter with the native object of the instance and the arguments
       return retainCollectionOperationResult(
@@ -4501,6 +4679,10 @@ class BridgedMethodCallable implements Callable {
           _methodName,
           visitor.environment,
           positionalArguments);
+    } on ExecutionLimitException {
+      rethrow;
+    } on ExecutionTimeoutException {
+      rethrow;
     } on ArgumentError catch (e) {
       // Convert native ArgumentError to RuntimeError
       throw RuntimeError(
@@ -4545,6 +4727,10 @@ class BridgedStaticMethodCallable implements Callable {
     try {
       // Call the adapter with the visitor and arguments
       return _adapter(visitor, positionalArguments, namedArguments);
+    } on ExecutionLimitException {
+      rethrow;
+    } on ExecutionTimeoutException {
+      rethrow;
     } on ArgumentError catch (e) {
       // Convert native ArgumentError to RuntimeError
       throw RuntimeError(
@@ -4583,6 +4769,10 @@ class BridgedEnumStaticMethodCallable implements Callable {
       List<RuntimeType>? typeArguments]) {
     try {
       return _adapter(visitor, positionalArguments, namedArguments);
+    } on ExecutionLimitException {
+      rethrow;
+    } on ExecutionTimeoutException {
+      rethrow;
     } on ArgumentError catch (e) {
       throw RuntimeError(
           "Invalid arguments for bridged enum static method '${_bridgedEnum.name}.$_methodName': ${e.message}");

@@ -4,8 +4,9 @@
 /// from transformed metadata.
 library;
 
-import 'generator_config.dart';
-import 'transform_pipeline.dart';
+import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/generator/generator_config.dart';
+import 'package:d4rt/src/generator/transform_pipeline.dart';
 
 // =============================================================================
 // CODE EMITTER
@@ -34,8 +35,6 @@ class CodeEmitter {
 
     // Imports
     buffer.writeln("import 'package:d4rt/d4rt.dart';");
-    buffer.writeln(
-        "import 'package:d4rt/d4rt.dart' show BridgeInstanceValidation;");
     for (final import_ in config.additionalImports) {
       buffer.writeln("import '$import_';");
     }
@@ -46,6 +45,13 @@ class CodeEmitter {
     buffer.writeln('final ${_bridgeVarName(cls.name)} = BridgedClass(');
     buffer.writeln("$indent name: '${cls.name}',");
     buffer.writeln('$indent nativeType: ${cls.nativeType},');
+    final constantConstructors = cls.constructors
+        .where((constructor) => constructor.isConst)
+        .map((constructor) => constructor.name);
+    if (constantConstructors.isNotEmpty) {
+      buffer.writeln(
+          '$indent constantConstructors: {${constantConstructors.map((name) => "'$name'").join(', ')}},');
+    }
 
     // Constructors
     if (cls.constructors.isNotEmpty) {
@@ -78,7 +84,8 @@ class CodeEmitter {
     if (cls.setters.isNotEmpty) {
       buffer.writeln('$indent setters: {');
       for (final setter in cls.setters) {
-        _emitSetter(buffer, setter, cls, indent);
+        _emitSetter(buffer, setter, cls.name, indent,
+            typeArguments: cls.typeArguments);
       }
       buffer.writeln('$indent},');
     }
@@ -132,8 +139,6 @@ class CodeEmitter {
 
     // Imports
     buffer.writeln("import 'package:d4rt/d4rt.dart';");
-    buffer.writeln(
-        "import 'package:d4rt/d4rt.dart' show BridgeInstanceValidation;");
     for (final import_ in config.additionalImports) {
       buffer.writeln("import '$import_';");
     }
@@ -145,12 +150,48 @@ class CodeEmitter {
         'final ${_bridgeVarName(enm.name)} = BridgedEnumDefinition<${enm.name}>(');
     buffer.writeln("$indent name: '${enm.name}',");
     buffer.writeln('$indent values: ${enm.name}.values,');
+    if (enm.typeParameters.isNotEmpty || enm.supertypes.isNotEmpty) {
+      buffer.writeln('$indent typeMetadata: EnumTypeMetadata(');
+      buffer.writeln(
+          '$indent$indent typeParameters: ${_quotedList(enm.typeParameters)},');
+      buffer.writeln('$indent$indent typeBounds: {');
+      for (final bound in enm.typeBounds.entries) {
+        buffer
+            .writeln("$indent$indent$indent '${bound.key}': '${bound.value}',");
+      }
+      buffer.writeln('$indent$indent },');
+      buffer.writeln(
+          '$indent$indent supertypes: ${_quotedList(enm.supertypes)},');
+      buffer.writeln('$indent$indent supertypeDeclarations: {');
+      for (final declaration in enm.supertypeDeclarations.entries) {
+        buffer.writeln(
+            "$indent$indent$indent '${declaration.key}': ${_quotedList(declaration.value)},");
+      }
+      buffer.writeln('$indent$indent },');
+      buffer.writeln('$indent ),');
+    }
+
+    if (enm.factories.isNotEmpty) {
+      buffer.writeln('$indent factories: {');
+      for (final factory in enm.factories) {
+        _emitEnumFactory(buffer, factory, enm.name, indent);
+      }
+      buffer.writeln('$indent },');
+    }
 
     // Getters
     if (enm.getters.isNotEmpty) {
       buffer.writeln('$indent getters: {');
       for (final getter in enm.getters) {
         _emitEnumGetter(buffer, getter, enm.name, indent);
+      }
+      buffer.writeln('$indent},');
+    }
+
+    if (enm.setters.isNotEmpty) {
+      buffer.writeln('$indent setters: {');
+      for (final setter in enm.setters) {
+        _emitSetter(buffer, setter, enm.name, indent);
       }
       buffer.writeln('$indent},');
     }
@@ -195,6 +236,9 @@ class CodeEmitter {
 
     return buffer.toString();
   }
+
+  String _quotedList(List<String> values) =>
+      "[${values.map((value) => "'$value'").join(', ')}]";
 
   /// Emits registration code for all bridges.
   String emitRegistration(
@@ -334,12 +378,13 @@ class CodeEmitter {
   void _emitSetter(
     StringBuffer buffer,
     BridgeableSetter setter,
-    BridgeableClass cls,
-    String indent,
-  ) {
-    final typeArgs = cls.typeArguments != null ? '<${cls.typeArguments}>' : '';
-    final typedClassName = '${cls.name}$typeArgs';
-    final typedTarget = "target.asTarget<$typedClassName>('${cls.name}')";
+    String className,
+    String indent, {
+    String? typeArguments,
+  }) {
+    final typeArgs = typeArguments != null ? '<$typeArguments>' : '';
+    final typedClassName = '$className$typeArgs';
+    final typedTarget = "target.asTarget<$typedClassName>('$className')";
     final coercedValue =
         "value.coerce<${setter.parameterType}>('${setter.name}')";
     buffer.writeln("$indent$indent '${setter.name}': "
@@ -465,6 +510,64 @@ class CodeEmitter {
     }
 
     buffer.writeln('$indent$indent },');
+  }
+
+  void _emitEnumFactory(StringBuffer buffer, BridgeableEnumFactory factory,
+      String enumName, String indent) {
+    final inner = '$indent$indent';
+    buffer.writeln("$inner '${factory.name}': BridgedEnumFactory(");
+    buffer.writeln('$inner$indent signature: EnumSignature([');
+    for (final formal in factory.formals) {
+      buffer.writeln("$inner$indent$indent EnumFormalParameter("
+          "'${formal.name}', ${_enumTypeExpression(formal.type)}, "
+          "isNamed: ${formal.isNamed}, isRequired: ${formal.isRequired}),");
+    }
+    buffer.writeln('$inner$indent ]),');
+    buffer.writeln('$inner$indent specializations: [');
+    for (final specialization in factory.specializations) {
+      final types = specialization.typeArguments;
+      buffer.writeln('$inner$indent$indent BridgedEnumFactorySpecialization(');
+      buffer.writeln('$inner$indent$indent$indent '
+          '[${types.map((type) => "parseEnumTypeName('$type')").join(', ')}],');
+      buffer.writeln('$inner$indent$indent$indent '
+          '(visitor, positionalArgs, namedArgs, enumTypeArguments) {');
+      final suffix = types.isEmpty ? '' : '<${types.join(', ')}>';
+      final name = factory.name.isEmpty ? '' : '.${factory.name}';
+      buffer.writeln(
+          '$inner$indent$indent$indent$indent return $enumName$suffix$name(');
+      _emitCallArgs(buffer, specialization.parameters,
+          '$inner$indent$indent$indent$indent$indent');
+      buffer.writeln('$inner$indent$indent$indent$indent );');
+      buffer.writeln('$inner$indent$indent$indent },');
+      buffer.writeln('$inner$indent$indent ),');
+    }
+    buffer.writeln('$inner$indent ],');
+    buffer.writeln('$inner ),');
+  }
+
+  String _enumTypeExpression(RuntimeType type) {
+    if (type is NullableEnumArgument) {
+      return 'nullableEnumType(${_enumTypeExpression(type.type)})';
+    }
+    if (type is AppliedRuntimeType) {
+      return 'AppliedRuntimeType(${_enumTypeExpression(type.baseType)}, '
+          '[${type.typeArguments.map(_enumTypeExpression).join(', ')}])';
+    }
+    if (type is FunctionRuntimeType) {
+      final positional =
+          type.positionalParameterTypes.map(_enumTypeExpression).join(', ');
+      final named = type.namedParameterTypes.entries
+          .map((entry) => "'${entry.key}': ${_enumTypeExpression(entry.value)}")
+          .join(', ');
+      final required =
+          type.requiredNamedParameters.map((name) => "'$name'").join(', ');
+      return 'FunctionRuntimeType(returnType: ${_enumTypeExpression(type.returnType)}, '
+          'positionalParameterTypes: [$positional], '
+          'requiredPositionalParameterCount: ${type.requiredPositionalParameterCount}, '
+          'namedParameterTypes: {$named}, requiredNamedParameters: {$required}, '
+          'typeParameterCount: ${type.typeParameterCount}, isUntyped: ${type.isUntyped})';
+    }
+    return "parseEnumTypeName('${type.name}')";
   }
 
   void _emitCountChecks(

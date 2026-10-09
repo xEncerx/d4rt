@@ -1,3 +1,10 @@
+## 0.4.0
+- Add enum lexical scopes, immutable ordered constants and values, enhanced members, const constructors and factories returning existing constants across source, compiled and imported execution.
+- Support enum names and iterable helpers, generic owner arguments, substituted interfaces and mixins, and nominal type checks, casts and patterns.
+- Validate const payloads and defaults by declaration provenance, including qualified class and transitive enum static constants, and reject mutation before enum initialization.
+- Generate native enum fields, setters and finite factory specializations with retained bounds and callback signatures; keep factory owner arguments separate from ordinary static-method adapters.
+- Run retained interpreted callbacks, native lazy iterables and streams, generators, and escaped enum closures under the current invocation's step and time limits.
+
 ## 0.3.5
 - Recognize implicit instance-field getters when validating abstract and interface implementations, including inherited fields, while distinguishing getters, setters, and methods.
 - Expose interpreted `UnmodifiableListView`, `UnmodifiableMapView`, and `MapView` subclasses through native collection interfaces without traversing or copying collection graphs. Preserve interpreted identity, field-backed and explicit virtual overrides, native callback dispatch, actual superclass fallback, live backing aliases, and unmodifiable behavior.

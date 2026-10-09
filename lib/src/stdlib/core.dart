@@ -1,39 +1,40 @@
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/stdlib/core/bigint.dart';
+import 'package:d4rt/src/stdlib/core/bool.dart';
 import 'package:d4rt/src/stdlib/core/comparable.dart';
+import 'package:d4rt/src/stdlib/core/date_time.dart';
 import 'package:d4rt/src/stdlib/core/double.dart';
+import 'package:d4rt/src/stdlib/core/duration.dart';
+import 'package:d4rt/src/stdlib/core/enum.dart';
 import 'package:d4rt/src/stdlib/core/errors.dart';
 import 'package:d4rt/src/stdlib/core/exceptions.dart';
+import 'package:d4rt/src/stdlib/core/expando.dart';
+import 'package:d4rt/src/stdlib/core/finalizer.dart';
+import 'package:d4rt/src/stdlib/core/function.dart';
 import 'package:d4rt/src/stdlib/core/int.dart';
 import 'package:d4rt/src/stdlib/core/iterable.dart';
+import 'package:d4rt/src/stdlib/core/iterator.dart';
 import 'package:d4rt/src/stdlib/core/list.dart';
 import 'package:d4rt/src/stdlib/core/map.dart';
 import 'package:d4rt/src/stdlib/core/null.dart';
 import 'package:d4rt/src/stdlib/core/num.dart';
 import 'package:d4rt/src/stdlib/core/object.dart';
 import 'package:d4rt/src/stdlib/core/patern.dart';
+import 'package:d4rt/src/stdlib/core/record.dart';
+import 'package:d4rt/src/stdlib/core/regexp.dart';
+import 'package:d4rt/src/stdlib/core/rune_iterator.dart';
+import 'package:d4rt/src/stdlib/core/runes.dart';
 import 'package:d4rt/src/stdlib/core/set.dart';
 import 'package:d4rt/src/stdlib/core/sink.dart';
+import 'package:d4rt/src/stdlib/core/stack_trace.dart';
+import 'package:d4rt/src/stdlib/core/stopwatch.dart';
 import 'package:d4rt/src/stdlib/core/string.dart';
-import 'package:d4rt/src/stdlib/core/runes.dart';
 import 'package:d4rt/src/stdlib/core/string_buffer.dart';
 import 'package:d4rt/src/stdlib/core/string_sink.dart';
-import 'package:d4rt/src/stdlib/core/bigint.dart';
-import 'package:d4rt/src/stdlib/core/bool.dart';
-import 'package:d4rt/src/stdlib/core/iterator.dart';
-import 'package:d4rt/src/stdlib/core/date_time.dart';
-import 'package:d4rt/src/stdlib/core/duration.dart';
 import 'package:d4rt/src/stdlib/core/symbol.dart';
 import 'package:d4rt/src/stdlib/core/type.dart';
 import 'package:d4rt/src/stdlib/core/uri.dart';
-import 'package:d4rt/src/stdlib/core/stack_trace.dart';
-import 'package:d4rt/src/stdlib/core/regexp.dart';
-import 'package:d4rt/src/stdlib/core/function.dart';
-import 'package:d4rt/src/stdlib/core/stopwatch.dart';
-import 'package:d4rt/src/stdlib/core/expando.dart';
-import 'package:d4rt/src/stdlib/core/rune_iterator.dart';
 import 'package:d4rt/src/stdlib/core/weak_reference.dart';
-import 'package:d4rt/src/stdlib/core/finalizer.dart';
-import 'package:d4rt/src/stdlib/core/record.dart';
 
 export 'package:d4rt/src/environment.dart';
 export 'package:d4rt/src/stdlib/core/record.dart';
@@ -67,7 +68,15 @@ export 'package:d4rt/src/stdlib/core/weak_reference.dart';
 export 'package:d4rt/src/stdlib/core/finalizer.dart';
 
 class CoreStdlib {
+  /// The actual core intrinsic, whose invocation is legal in constant contexts.
+  static final NativeFunction identicalFunction = NativeFunction(
+      (visitor, arguments, namedArguments, typeArguments) =>
+          identical(arguments[0], arguments[1]),
+      arity: 2,
+      name: 'identical');
+
   static void register(Environment environment) {
+    EnumCore.register(environment);
     environment.defineBridge(DoubleCore.definition);
     environment.defineBridge(IntCore.definition);
     environment.defineBridge(IterableCore.definition);
@@ -116,12 +125,8 @@ class CoreStdlib {
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           return dynamic;
         }, arity: 0, name: 'dynamic'));
-    environment.define(
-        'identical',
-        NativeFunction((visitor, arguments, namedArguments, typeArguments) {
-          return identical(arguments[0], arguments[1]);
-        }, arity: 2, name: 'identical'));
-    environment.define(
+    environment.defineFunction('identical', identicalFunction);
+    environment.defineFunction(
         'print',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           final message = visitor.valueToString(arguments[0]);

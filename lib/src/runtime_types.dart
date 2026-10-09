@@ -1,12 +1,13 @@
 import 'dart:collection';
 import 'dart:math' show Random;
-import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
 import 'package:d4rt/d4rt.dart';
-import 'bridge/bridged_types.dart' as bridge;
-import 'type_annotation_utils.dart';
+import 'package:d4rt/src/bridge/bridged_types.dart' as bridge;
 import 'package:d4rt/src/native_collection_types.dart';
+import 'package:d4rt/src/type_annotation_utils.dart';
 
 part 'interpreted_collections.dart';
+part 'enum_runtime.dart';
 
 /// Represents a class definition at runtime.
 class InterpretedClass implements Callable, RuntimeType {
@@ -15,6 +16,55 @@ class InterpretedClass implements Callable, RuntimeType {
   InterpretedClass? superclass;
   final Environment classDefinitionEnvironment;
   final List<FieldDeclaration> fieldDeclarations;
+
+  /// Source declaration retained for dependencies referenced by earlier enums.
+  final AstNode? declaration;
+
+  /// Owns declared static const initializers and their lexical evaluation cache.
+  ///
+  /// Provenance is available before class population, so enum admission does
+  /// not execute unrelated static initializers merely to inspect a declaration.
+  late final Environment staticConstantEnvironment = () {
+    final scope = Environment(enclosing: classDefinitionEnvironment);
+    final source = declaration;
+    if (source is ClassDeclaration) {
+      for (final member in source.body.members) {
+        if (member is! FieldDeclaration ||
+            !member.isStatic ||
+            !member.fields.isConst) {
+          continue;
+        }
+        for (final variable in member.fields.variables) {
+          final expression = variable.initializer;
+          if (expression != null) {
+            scope.define(variable.name.lexeme, null);
+            scope.declareConstant(variable.name.lexeme, expression);
+          }
+        }
+      }
+    }
+    return scope;
+  }();
+  bool _declarationPopulated = false;
+
+  /// Starts declaration population once across normal and enum-triggered passes.
+  bool beginDeclarationPopulation() {
+    if (_declarationPopulated) return false;
+    _declarationPopulated = true;
+    return true;
+  }
+
+  /// Populates a forward class or mixin dependency in its original lexical scope.
+  void ensureEnumDependency(InterpreterVisitor visitor) {
+    if (_declarationPopulated || declaration == null) return;
+    final previous = visitor.environment;
+    visitor.environment = classDefinitionEnvironment;
+    try {
+      declaration!.accept<Object?>(visitor);
+    } finally {
+      visitor.environment = previous;
+    }
+  }
 
   // Separate maps for different member types
   final Map<String, InterpretedFunction> methods;
@@ -54,6 +104,15 @@ class InterpretedClass implements Callable, RuntimeType {
 
   /// The extends annotation retains native collection arguments and substitutions.
   NamedType? superclassType;
+
+  /// Declared interface annotations, retaining generic substitutions.
+  final List<NamedType> interfaceTypes = [];
+
+  /// Source mixin applications, retaining each substituted argument vector.
+  final List<NamedType> mixinApplicationTypes = [];
+
+  /// Declared mixin constraints, including core and generic types.
+  final List<NamedType> onConstraintTypes = [];
 
   // Helper methods to extract type parameter information from AST (similar to InterpretedFunction)
   static List<String> extractTypeParameterNames(
@@ -119,6 +178,7 @@ class InterpretedClass implements Callable, RuntimeType {
     this.constructors,
     this.operators, {
     this.isAbstract = false,
+    this.declaration,
     List<InterpretedClass>? interfaces,
     List<BridgedClass>? bridgedInterfaces,
     this.isMixin = false,
@@ -1515,259 +1575,6 @@ class InterpretedRecord {
       if (namedStr.isNotEmpty) namedStr
     ];
     return '(${parts.join(', ')})';
-  }
-}
-
-/// Represents an enum definition at runtime.
-class InterpretedEnum implements RuntimeType {
-  @override
-  final String name;
-
-  /// The environment where the enum was declared.
-  final Environment declarationEnvironment;
-
-  /// List of enum value names (in declaration order).
-  final List<String> valueNames;
-
-  /// Map of enum value names to their runtime instances (populated in interpretation pass).
-  final Map<String, InterpretedEnumValue> values = {};
-
-  /// The list of fully resolved enum value instances for the `values` getter.
-  List<InterpretedEnumValue>? _valuesListCache;
-
-  final Map<String, InterpretedFunction> methods = {};
-  final Map<String, InterpretedFunction> getters = {};
-  final Map<String, InterpretedFunction> setters =
-      {}; // Though unlikely for enums?
-  final Map<String, InterpretedFunction> staticMethods = {};
-  final Map<String, InterpretedFunction> staticGetters = {};
-  final Map<String, InterpretedFunction> staticSetters = {};
-  final Map<String, Object?> staticFields = {};
-  final Map<String, InterpretedFunction> constructors = {};
-
-  final List<FieldDeclaration> fieldDeclarations = [];
-
-  // Mixin support - similar to InterpretedClass
-  List<InterpretedClass> mixins;
-  List<BridgedClass> bridgedMixins;
-
-  // Constructor used during Interpretation Pass (Populates members)
-  InterpretedEnum(
-    this.name,
-    this.declarationEnvironment,
-    this.valueNames, {
-    List<InterpretedClass>? mixins,
-    List<BridgedClass>? bridgedMixins,
-  })  : mixins = mixins ?? [],
-        bridgedMixins = bridgedMixins ?? [];
-
-  // Constructor for Declaration Pass (Placeholder)
-  InterpretedEnum.placeholder(
-    this.name,
-    this.declarationEnvironment,
-    this.valueNames, {
-    List<InterpretedClass>? mixins,
-    List<BridgedClass>? bridgedMixins,
-  })  : mixins = mixins ?? [],
-        bridgedMixins = bridgedMixins ?? [];
-
-  @override
-  String toString() => '<enum $name>';
-
-  /// Returns the list of enum values for the static `values` getter.
-  /// Populates the cache on first access during interpretation pass.
-  List<InterpretedEnumValue> get valuesList {
-    if (_valuesListCache == null) {
-      if (values.length != valueNames.length) {
-        // This shouldn't happen if interpretation pass is correct, but safeguard.
-        throw StateError(
-            "Enum '$name' values mismatch between declaration and interpretation.");
-      }
-      // Ensure the order matches the declaration order
-      _valuesListCache = valueNames.map((name) => values[name]!).toList();
-    }
-    return _valuesListCache!;
-  }
-
-  // Implement isSubtypeOf
-  @override
-  bool isSubtypeOf(RuntimeType other, {Object? value}) {
-    // An enum is a subtype of itself and Object.
-    // For now, we don't handle complex type hierarchies involving enums.
-    // We might need to look up 'Object' in the environment later.
-    return identical(this, other) || other.name == 'Object';
-  }
-}
-
-/// Represents a specific value within an enum at runtime.
-class InterpretedEnumValue implements RuntimeValue /* Add RuntimeValue */ {
-  final InterpretedEnum parentEnum;
-  final String name;
-  final int index;
-  final Map<String, Object?> _fields = {};
-
-  // Constructor now needs the parent Enum definition
-  InterpretedEnumValue(this.parentEnum, this.name, this.index);
-
-  @override
-  String toString() => '${parentEnum.name}.$name';
-
-  @override
-  int get hashCode => Object.hash(parentEnum, index);
-
-  @override
-  bool operator ==(Object other) {
-    // Enums compare by identity (same enum type and same index)
-    return identical(this, other) ||
-        (other is InterpretedEnumValue &&
-            parentEnum ==
-                other.parentEnum && // Check if they belong to the same enum
-            index == other.index);
-  }
-
-  // RuntimeValue Implementation (get/set/valueType)
-  @override
-  RuntimeType get valueType =>
-      parentEnum; // The type of an enum value is the enum itself
-
-  // Get: Field -> Instance Getter (executed) -> Instance Method (bound)
-  @override
-  Object? get(String memberName, [InterpreterVisitor? visitor]) {
-    // Handle implicit 'name' property
-    if (memberName == 'name') {
-      Logger.debug(
-          " [EnumValue.get] Accessing implicit property 'name'. Returning: $name");
-      return name; // Return the stored name of the enum value
-    }
-
-    // Handle implicit 'index' property
-    if (memberName == 'index') {
-      Logger.debug(
-          " [EnumValue.get] Accessing implicit property 'index'. Returning: $index");
-      return index;
-    }
-
-    // 1. Check instance fields specific to this enum value
-    if (_fields.containsKey(memberName)) {
-      final fieldValue = _fields[memberName];
-      Logger.debug(
-          " [EnumValue.get] Found field '$memberName' with value: $fieldValue");
-      return fieldValue;
-    }
-
-    // 2. Check instance getters defined on the enum
-    final getter = parentEnum.getters[memberName];
-    if (getter != null) {
-      // We need to call the getter, binding `this` to `this` enum value instance
-      // This requires the getter function to be callable with the instance
-      if (visitor == null) {
-        throw RuntimeError(
-            "Internal error: Visitor required to execute enum getter '$memberName'.");
-      }
-      final boundGetter = getter.bind(this);
-      // Call the getter immediately with no arguments
-      final getterResult = boundGetter.call(visitor, [], {});
-      Logger.debug(
-          " [EnumValue.get] Executed getter '$memberName'. Result: $getterResult");
-      return getterResult;
-    }
-
-    // 3. Check instance methods defined on the enum
-    final method = parentEnum.methods[memberName];
-    if (method != null) {
-      // Return the bound method
-      final boundMethod = method.bind(this);
-      Logger.debug(
-          " [EnumValue.get] Found method '$memberName'. Returning bound method: $boundMethod");
-      return boundMethod;
-    }
-
-    // 4. Check mixins (similar to InterpretedInstance)
-    // Search in reverse order (last mixin wins)
-    for (final mixin in parentEnum.mixins.reversed) {
-      // Check mixin getters
-      final mixinGetter = mixin.getters[memberName];
-      if (mixinGetter != null) {
-        if (visitor == null) {
-          throw RuntimeError(
-              "Internal error: Visitor required to execute mixin getter '$memberName'.");
-        }
-        final boundGetter = mixinGetter.bind(this);
-        final getterResult = boundGetter.call(visitor, [], {});
-        Logger.debug(
-            " [EnumValue.get] Executed mixin getter '$memberName' from '${mixin.name}'. Result: $getterResult");
-        return getterResult;
-      }
-
-      // Check mixin methods
-      final mixinMethod = mixin.methods[memberName];
-      if (mixinMethod != null) {
-        final boundMethod = mixinMethod.bind(this);
-        Logger.debug(
-            " [EnumValue.get] Found mixin method '$memberName' from '${mixin.name}'. Returning bound method.");
-        return boundMethod;
-      }
-    }
-
-    // 5. Check bridged mixins
-    for (final bridgedMixin in parentEnum.bridgedMixins.reversed) {
-      // Try getter first
-      final getterAdapter = bridgedMixin.findInstanceGetterAdapter(memberName);
-      if (getterAdapter != null) {
-        if (visitor == null) {
-          throw RuntimeError(
-              "Internal error: Visitor required to execute bridged mixin getter '$memberName'.");
-        }
-        Logger.debug(
-            " [EnumValue.get] Executing bridged mixin getter '$memberName' from '${bridgedMixin.name}'.");
-        try {
-          return getterAdapter(visitor, this);
-        } catch (e, s) {
-          Logger.error(
-              "Native exception during bridged mixin getter '$memberName': $e\n$s");
-          throw RuntimeError(
-              "Native error in bridged mixin getter '$memberName': $e");
-        }
-      }
-
-      // Try method next
-      final methodAdapter = bridgedMixin.findInstanceMethodAdapter(memberName);
-      if (methodAdapter != null) {
-        Logger.debug(
-            " [EnumValue.get] Found bridged mixin method '$memberName' from '${bridgedMixin.name}'.");
-        // Return a callable that wraps the bridged method
-        return BridgedEnumMixinMethodCallable(
-            this, methodAdapter, memberName, bridgedMixin.name);
-      }
-    }
-
-    // Property not found
-    throw RuntimeError(
-        "Undefined property '$memberName' on enum value '$this'.");
-  }
-
-  // Set: Instance Setter -> Field
-  @override
-  void set(String memberName, Object? value, [InterpreterVisitor? visitor]) {
-    Logger.debug(
-        "[EnumValue.set] called for '$this.$memberName' with value: $value");
-    // 1. Check instance setters defined on the enum
-    final setter = parentEnum.setters[memberName];
-    if (setter != null) {
-      // Call the setter, binding `this`
-      setter.bind(this).call(visitor!, [value], {});
-      return;
-    }
-
-    // 2. Set instance field specific to this enum value
-    // Should only allow setting fields declared in the enum? Dart enums usually have final fields.
-    // For now, allow setting for flexibility, like InterpretedInstance.
-    _fields[memberName] = value;
-  }
-
-  // Public method to set fields during initialization
-  void setField(String name, Object? value) {
-    _fields[name] = value;
   }
 }
 

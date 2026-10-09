@@ -45,6 +45,7 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
       <String, InterpretedFunction>{}, // constructors
       <String, InterpretedFunction>{}, // operators
       // Named parameters
+      declaration: node,
       isAbstract: node.abstractKeyword != null,
       isMixin: node.mixinKeyword != null,
       interfaces: [], // Initially empty
@@ -59,6 +60,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
       typeParameterNames: typeParameterNames,
       typeParameterBounds: typeParameterBounds,
     );
+    placeholder.superclassType = node.extendsClause?.superclass;
+    placeholder.interfaceTypes
+        .addAll(node.implementsClause?.interfaces ?? const []);
+    placeholder.mixinApplicationTypes
+        .addAll(node.withClause?.mixinTypes ?? const []);
     environment.define(className, placeholder);
     Logger.debug(
         "[DeclarationVisitor] Defined placeholder for class '$className' in env: [38;5;244m${environment.hashCode}[0m");
@@ -86,12 +92,20 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
       <String, InterpretedFunction>{}, // constructors (empty for mixins)
       <String, InterpretedFunction>{}, // operators
       // Named parameters
+      declaration: node,
       isAbstract: false, // Mixins are not abstract
       isMixin: true,
       interfaces: [], // Initially empty
       onClauseTypes: [], // Will be filled in pass 2
       mixins: [], // Initially empty (mixins cannot use 'with')
+      typeParameterNames:
+          InterpretedClass.extractTypeParameterNames(node.typeParameters),
+      typeParameterBounds: {},
     );
+    placeholder.interfaceTypes
+        .addAll(node.implementsClause?.interfaces ?? const []);
+    placeholder.onConstraintTypes
+        .addAll(node.onClause?.superclassConstraints ?? const []);
     environment.define(mixinName, placeholder);
     Logger.debug(
         "[DeclarationVisitor] Defined placeholder for mixin '$mixinName' in env: [38;5;244m${environment.hashCode}[0m");
@@ -108,8 +122,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
     final valueNames = node.body.constants.map((c) => c.name.lexeme).toList();
 
     // Create the placeholder enum runtime object, storing only names for now
-    final enumPlaceholder =
-        InterpretedEnum.placeholder(enumName, environment, valueNames);
+    final enumPlaceholder = InterpretedEnum.placeholder(
+        enumName, environment, valueNames,
+        declaration: node,
+        typeParameterNames: InterpretedClass.extractTypeParameterNames(
+            node.namePart.typeParameters));
 
     // Define the enum type placeholder in the current environment
     environment.define(enumName, enumPlaceholder);
@@ -236,7 +253,7 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
         isNullable);
     Logger.debug(
         "[DeclarationVisitor.visitFunctionDeclaration]   Defining function '$functionName' with declaredReturnType: ${declaredReturnType.name} (Hash: ${declaredReturnType.hashCode})");
-    environment.define(functionName, function);
+    environment.defineFunction(functionName, function);
   }
 
   @override
@@ -251,6 +268,10 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
       // The actual initialization will happen in InterpreterVisitor.
       if (!environment.isDefinedLocally(variable.name.lexeme)) {
         environment.define(variable.name.lexeme, null);
+        if (node.variables.isConst && variable.initializer != null) {
+          environment.declareConstant(
+              variable.name.lexeme, variable.initializer!);
+        }
         Logger.debug(
             "[DeclarationVisitor] Defined top-level variable placeholder '${variable.name.lexeme}' in env: ${environment.hashCode}");
       }

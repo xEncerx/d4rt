@@ -1,5 +1,4 @@
-import '../interpreter_visitor.dart'; // Import InterpreterVisitor for adapters
-import 'bridged_enum.dart';
+import 'package:d4rt/d4rt.dart';
 
 // The idea is that these functions will encapsulate the native call
 // and type conversion.
@@ -35,6 +34,14 @@ typedef BridgedStaticMethodAdapter = Object? Function(
     List<Object?> positionalArguments,
     Map<String, Object?> namedArguments);
 
+/// Calls a compiled native enum factory with the resolved owner type vector.
+/// General constructor, static-method and instance-method adapters are unchanged.
+typedef BridgedEnumFactoryAdapter = Object? Function(
+    InterpreterVisitor visitor,
+    List<Object?> positionalArguments,
+    Map<String, Object?> namedArguments,
+    List<RuntimeType> enumTypeArguments);
+
 /// Adapter for bridged static getters.
 /// Takes interpreter context.
 /// Returns the result of the native static getter.
@@ -57,6 +64,7 @@ typedef BridgedInstanceGetterAdapter = Object? Function(
 typedef BridgedInstanceSetterAdapter = void Function(
     InterpreterVisitor? visitor, Object target, Object? value);
 
+/// Registers a native enum while retaining native identities and adapter targets.
 class BridgedEnumDefinition<T extends Enum> {
   /// The name under which the enum will be known in the interpreter.
   final String name;
@@ -72,6 +80,9 @@ class BridgedEnumDefinition<T extends Enum> {
   /// The key is the method name.
   final Map<String, BridgedMethodAdapter> methods;
 
+  /// Adapters for declared instance setters; enum fields remain immutable.
+  final Map<String, BridgedInstanceSetterAdapter> setters;
+
   /// Adapters for static getters on the enum class.
   final Map<String, BridgedStaticGetterAdapter> staticGetters;
 
@@ -81,82 +92,77 @@ class BridgedEnumDefinition<T extends Enum> {
   /// Adapters for static setters on the enum class.
   final Map<String, BridgedStaticSetterAdapter> staticSetters;
 
+  /// Actual enum factories, with signatures and exact compiled capabilities.
+  final Map<String, BridgedEnumFactory> factories;
+
+  /// Generic parameter names and bounds, plus substituted hierarchy metadata.
+  final EnumTypeMetadata? typeMetadata;
+
+  /// Optional explicit generic arguments, keyed by the native constant name.
+  final Map<String, List<RuntimeType>> valueTypeArguments;
+
+  /// Creates a native enum registration with optional reified type information.
   BridgedEnumDefinition({
     required this.name,
     required this.values,
     this.getters = const {},
     this.methods = const {},
+    this.setters = const {},
     this.staticGetters = const {},
     this.staticMethods = const {},
     this.staticSetters = const {},
+    this.factories = const {},
+    this.typeMetadata,
+    this.valueTypeArguments = const {},
   }) {
     // Validation: Ensure the value list is not empty
     if (values.isEmpty) {
       throw ArgumentError('Cannot bridge an enum with no values: $name');
     }
+    for (final factory in factories.keys) {
+      if (staticMethods.containsKey(factory) ||
+          staticGetters.containsKey(factory) ||
+          staticSetters.containsKey(factory) ||
+          values.any((value) => value.name == factory)) {
+        throw ArgumentError(
+            'Enum factory conflicts with another member: $name.$factory');
+      }
+    }
   }
 
-  /// Builds the [BridgedEnum] object from this definition.
-  BridgedEnum buildBridgedEnum() {
-    // Placeholder for the main enum, will be replaced by the real instance after creation.
-    // This is necessary because BridgedEnumValue needs a reference to its type,
-    // but the full type (BridgedEnum) needs the value list.
-    final placeholderEnum = BridgedEnum(name, {});
-    final bridgedValues = <String, BridgedEnumValue>{};
-
-    // Share instance adapters with all created values
-    placeholderEnum.getters = getters;
-    placeholderEnum.methods = methods;
-    placeholderEnum.staticGetters = staticGetters;
-    placeholderEnum.staticMethods = staticMethods;
-    placeholderEnum.staticSetters = staticSetters;
-
-    for (final nativeValue in values) {
-      final valueName = nativeValue.name; // Use the .name getter of Dart enums
-      final index = nativeValue.index;
-
-      // Create the bridged value for this enum element, using the placeholder
-      // Note: Adapters are also passed here
-      final bridgedValue = BridgedEnumValue(
-        placeholderEnum, // Pass the placeholder initially
-        valueName,
-        index,
-        nativeValue, // Store the native value
-        getters: getters, // Pass the adapters
-        methods: methods, // Pass the adapters
-      );
-
-      bridgedValues[valueName] = bridgedValue;
-    }
-
-    // Create the main BridgedEnum object with the finalized value map.
-    final bridgedEnum = BridgedEnum(name, bridgedValues);
-
-    // Copy adapters into the final instance as well
+  /// Builds a native enum, resolving metadata in its owning library namespace.
+  BridgedEnum buildBridgedEnum({Environment? environment}) {
+    final metadata = environment == null
+        ? typeMetadata
+        : typeMetadata?.inEnvironment(environment);
+    final bridgedEnum = BridgedEnum(name, {}, typeMetadata: metadata);
     bridgedEnum.getters = getters;
     bridgedEnum.methods = methods;
+    bridgedEnum.setters = setters;
     bridgedEnum.staticGetters = staticGetters;
     bridgedEnum.staticMethods = staticMethods;
     bridgedEnum.staticSetters = staticSetters;
-
-    final finalBridgedValues = <String, BridgedEnumValue>{};
+    bridgedEnum.factories = Map.unmodifiable({
+      for (final entry in factories.entries)
+        entry.key: entry.value.resolveTypes(metadata),
+    });
+    for (final factory in bridgedEnum.factories.values) {
+      factory.validate(bridgedEnum);
+    }
     for (final nativeValue in values) {
       final valueName = nativeValue.name;
-      final index = nativeValue.index;
-      finalBridgedValues[valueName] = BridgedEnumValue(
+      bridgedEnum.values[valueName] = BridgedEnumValue(
         bridgedEnum,
         valueName,
-        index,
+        nativeValue.index,
         nativeValue,
         getters: getters,
         methods: methods,
+        typeArguments: valueTypeArguments[valueName] != null
+            ? metadata?.arguments(valueTypeArguments[valueName]) ?? const []
+            : metadata?.nativeArguments(nativeValue) ?? const [],
       );
     }
-
-    // Update the value map in the final BridgedEnum.
-    bridgedEnum.values.clear();
-    bridgedEnum.values.addAll(finalBridgedValues);
-
     return bridgedEnum;
   }
 }

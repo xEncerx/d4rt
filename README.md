@@ -70,33 +70,6 @@ void main() {
 ```
 ## Advanced Features
 
-### Collection subclasses at native boundaries
-
-Interpreted subclasses of `UnmodifiableListView`, `UnmodifiableMapView`, and
-`MapView` retain their interpreted identity, fields, and overrides while also
-implementing the native `List` or `Map` interface. They remain usable when nested
-inside results or passed to registered native functions. View construction and
-native argument/result bridging do not traverse or copy the collection graph;
-backing-source changes remain visible and unmodifiable views reject mutation.
-Native consumers remain responsible for validation, cycle detection, and limits.
-
-Explicit view and superclass arguments are reified lazily for supported core
-types (`String`, `int`, `double`, `num`, `bool`, `Object`, their nullable variants,
-`dynamic`, `Null`, and `Never`). These source contracts are checked without
-inspecting contents. Nested, non-core, and interpreter-defined arguments remain
-usable through the interpreter with retained declared metadata and an erased
-native interface; that interface does not claim arbitrary native Dart reification.
-Explicit non-core host type checks retain the interpreter's existing compatibility
-semantics. Native virtual calls honor interpreted overrides, while inherited map
-operations retain the actual native superclass's backing-map semantics.
-Field-backed collection getters read the same interpreted state as interpreted
-property access, including inherited fields and lazy initialization of late fields.
-Collections produced by interpreted transformations retain interpreter ownership
-through lazy iterable operations and materialization. Their erased backing types
-do not cause new typed-return failures, while untouched host collections still use
-native reified checks.
-
-
 ### Function Argument Passing
 
 Pass positional and named arguments directly to functions:
@@ -364,6 +337,33 @@ Rules:
 - Reading modules from disk also requires a matching `FilesystemPermission`.
 - Missing local files raise a `SourceCodeException` with the resolved filesystem path.
 
+## Enums
+
+Enum declarations work in source passed to `execute`, `compile` and `executeCompiled`, including imported modules.
+
+```dart
+final result = D4rt().execute(source: '''
+  enum Priority {
+    low(1), high(2);
+
+    const Priority(this.level);
+    final int level;
+
+    static Priority? fromLevel(int level) {
+      for (final priority in values) {
+        if (priority.level == level) return priority;
+      }
+      return null;
+    }
+  }
+
+  main() => Priority.fromLevel(2)!.name;
+''');
+print(result); // high
+```
+
+Enums support constructors, fields, methods and static members. Use `values`, `name`, `index` and `values.byName(...)` to work with enum constants.
+
 ## Bridging Native Classes & Enums
 
 d4rt provides a powerful bridging system that allows you to automate the process of exposing your Dart and Flutter classes, enums, and functions to the interpreter using `build_runner`.
@@ -509,6 +509,12 @@ void main() {
   print(result); // 1
 }
 ```
+
+For generic native enums, supply `typeMetadata` on `BridgedEnumDefinition` with `typeParameters`, `typeBounds` and `supertypes`. Generic hierarchy edges can be supplied through `supertypeDeclarations`; native constant arguments are recovered from their runtime types or supplied explicitly through `valueTypeArguments`. Generated bridges include this metadata and adapters for declared fields, methods, factories and setters.
+
+Native mixins used by interpreted enums can supply `EnumMixinMetadata` on `BridgedClass` to describe generic types, `on` constraints, instance fields and abstract member obligations. Adapters receive the interpreted enum constant as their receiver; mixin static members are not inherited by the enum.
+
+Native const constructors used by enum entry payloads are listed in `BridgedClass.constantConstructors`. Generated class bridges provide these constructor names automatically.
 
 ### Advanced Annotation Options
 

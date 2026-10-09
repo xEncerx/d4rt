@@ -26,7 +26,7 @@ class DeveloperStdlib {
     environment.defineBridge(FlowDeveloper.definition);
 
     // Register Global Functions
-    environment.define(
+    environment.defineFunction(
         'log',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.isEmpty || arguments[0] is! String) {
@@ -55,7 +55,7 @@ class DeveloperStdlib {
           return null;
         }, arity: 1, name: 'log'));
 
-    environment.define(
+    environment.defineFunction(
         'debugger',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           final when = namedArguments['when'] as bool? ?? true;
@@ -63,7 +63,7 @@ class DeveloperStdlib {
           return debugger(when: when, message: message);
         }, arity: 0, name: 'debugger'));
 
-    environment.define(
+    environment.defineFunction(
         'inspect',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.isEmpty) {
@@ -72,7 +72,7 @@ class DeveloperStdlib {
           return inspect(arguments[0]);
         }, arity: 1, name: 'inspect'));
 
-    environment.define(
+    environment.defineFunction(
         'postEvent',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.length < 2 ||
@@ -87,7 +87,7 @@ class DeveloperStdlib {
           return null;
         }, arity: 2, name: 'postEvent'));
 
-    environment.define(
+    environment.defineFunction(
         'registerExtension',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
           if (arguments.length < 2 || arguments[0] is! String) {

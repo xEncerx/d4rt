@@ -1,4 +1,5 @@
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/stdlib/core/enum.dart';
 
 class IterableCore {
   static BridgedClass get definition => BridgedClass(
@@ -29,7 +30,8 @@ class IterableCore {
                 generator == null
                     ? null
                     : (index) {
-                        return generator.call(visitor, [index]);
+                        return InterpreterVisitor.invokeCallback(
+                            generator, [index]);
                       });
           },
           'empty': (visitor, positionalArgs, namedArgs) {
@@ -37,22 +39,25 @@ class IterableCore {
           },
         },
         methods: {
+          'byName': EnumCore.byName,
+          'asNameMap': EnumCore.asNameMap,
           'map': (visitor, target, positionalArgs, namedArgs) {
             final f = positionalArgs[0] as InterpretedFunction;
             return (target as Iterable).map((element) {
-              return f.call(visitor, [element]);
+              return InterpreterVisitor.invokeCallback(f, [element]);
             });
           },
           'where': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0] as InterpretedFunction;
             return (target as Iterable).where((element) {
-              return test.call(visitor, [element]) as bool;
+              return InterpreterVisitor.invokeCallback(test, [element]) as bool;
             });
           },
           'expand': (visitor, target, positionalArgs, namedArgs) {
             final f = positionalArgs[0] as InterpretedFunction;
             return (target as Iterable).expand((element) {
-              return f.call(visitor, [element]) as Iterable;
+              return InterpreterVisitor.invokeCallback(f, [element])
+                  as Iterable;
             });
           },
           'contains': (visitor, target, positionalArgs, namedArgs) {
@@ -112,7 +117,7 @@ class IterableCore {
           'takeWhile': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0] as InterpretedFunction;
             return (target as Iterable).takeWhile((element) {
-              return test.call(visitor, [element]) as bool;
+              return InterpreterVisitor.invokeCallback(test, [element]) as bool;
             });
           },
           'skip': (visitor, target, positionalArgs, namedArgs) {
@@ -121,7 +126,7 @@ class IterableCore {
           'skipWhile': (visitor, target, positionalArgs, namedArgs) {
             final test = positionalArgs[0] as InterpretedFunction;
             return (target as Iterable).skipWhile((element) {
-              return test.call(visitor, [element]) as bool;
+              return InterpreterVisitor.invokeCallback(test, [element]) as bool;
             });
           },
           'firstWhere': (visitor, target, positionalArgs, namedArgs) {

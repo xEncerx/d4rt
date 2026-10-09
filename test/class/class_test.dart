@@ -1097,6 +1097,37 @@ void main() {
         ''');
         expect(result, equals(11));
       });
+      test('Custom operators preserve prefix postfix and decrement operands',
+          () {
+        final result = execute('''
+          class CustomNumber {
+            final int value;
+            CustomNumber(this.value);
+            CustomNumber operator +(CustomNumber other) =>
+                CustomNumber(value + other.value);
+            CustomNumber operator -(CustomNumber other) =>
+                CustomNumber(value - other.value);
+          }
+          class Box {
+            CustomNumber value = CustomNumber(10);
+          }
+          main() {
+            var value = CustomNumber(10);
+            final old = value++;
+            final next = ++value;
+            final before = value--;
+            final last = --value;
+            final box = Box();
+            final property = box.value++;
+            final list = [CustomNumber(20)];
+            final indexed = --list[0];
+            return [old.value, next.value, before.value, last.value,
+              value.value, property.value, box.value.value,
+              indexed.value, list[0].value];
+          }
+        ''');
+        expect(result, [10, 12, 12, 10, 10, 10, 11, 19, 19]);
+      });
     });
   });
   group('Super Parameters (Dart 2.17+):', () {
