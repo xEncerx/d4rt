@@ -404,59 +404,63 @@ class ModuleLoader {
         }
       }
 
-      Logger.debug(
-          "[ModuleLoader loadModule for $uri] Processing class/mixin declarations to populate constructors...");
-      // First process all mixin declarations to ensure they're fully initialized
-      // before classes try to use them
-      for (final declaration in ast.declarations) {
-        if (declaration is MixinDeclaration) {
-          declaration.accept(moduleInterpreter);
-        }
-      }
-      // Then process all class declarations now that mixins are ready
-      for (final declaration in ast.declarations) {
-        if (declaration is ClassDeclaration) {
-          declaration.accept(moduleInterpreter);
-        }
-      }
-      // Then populate enums, whose class-like members can depend on local
-      // classes and mixins.
-      for (final declaration in ast.declarations) {
-        if (declaration is EnumDeclaration) {
-          declaration.accept(moduleInterpreter);
-        }
-      }
-      // Finally process all extension declarations and extension types.
-      for (final declaration in ast.declarations) {
-        if (declaration is ExtensionDeclaration) {
-          declaration.accept<Object?>(moduleInterpreter);
-          final extensionName = declaration.name?.lexeme;
-          final extension = extensionName == null
-              ? moduleEnvironment._takeLastDeclaredUnnamedExtension()
-              : moduleEnvironment.values[extensionName];
-          if (extension is! InterpretedExtension) {
-            throw RuntimeError(
-                "Extension '${declaration.name?.lexeme ?? '<unnamed>'}' was not populated.");
-          }
-          if (extensionName == null) {
-            exportedEnvironment.addUnnamedExtension(extension);
-          } else if (_isPublicName(extensionName)) {
-            exportedEnvironment.assign(extensionName, extension);
+      // Class-like declarations can execute static initializers, including
+      // native iteration that invokes interpreted callbacks.
+      moduleInterpreter.runCollectionInvocation(() {
+        Logger.debug(
+            "[ModuleLoader loadModule for $uri] Processing class/mixin declarations to populate constructors...");
+        // First process all mixin declarations to ensure they're fully initialized
+        // before classes try to use them
+        for (final declaration in ast.declarations) {
+          if (declaration is MixinDeclaration) {
+            declaration.accept(moduleInterpreter);
           }
         }
-      }
-      for (final declaration in ast.declarations) {
-        if (declaration is ExtensionTypeDeclaration) {
-          declaration.accept(moduleInterpreter);
-          final extensionTypeName = declaration.namePart.typeName.lexeme;
-          if (_isPublicName(extensionTypeName)) {
-            exportedEnvironment.assign(
-                extensionTypeName, moduleEnvironment.values[extensionTypeName]);
+        // Then process all class declarations now that mixins are ready
+        for (final declaration in ast.declarations) {
+          if (declaration is ClassDeclaration) {
+            declaration.accept(moduleInterpreter);
           }
         }
-      }
-      Logger.debug(
-          "[ModuleLoader loadModule for $uri] Finished processing class/mixin/extension declarations.");
+        // Then populate enums, whose class-like members can depend on local
+        // classes and mixins.
+        for (final declaration in ast.declarations) {
+          if (declaration is EnumDeclaration) {
+            declaration.accept(moduleInterpreter);
+          }
+        }
+        // Finally process all extension declarations and extension types.
+        for (final declaration in ast.declarations) {
+          if (declaration is ExtensionDeclaration) {
+            declaration.accept<Object?>(moduleInterpreter);
+            final extensionName = declaration.name?.lexeme;
+            final extension = extensionName == null
+                ? moduleEnvironment._takeLastDeclaredUnnamedExtension()
+                : moduleEnvironment.values[extensionName];
+            if (extension is! InterpretedExtension) {
+              throw RuntimeError(
+                  "Extension '${declaration.name?.lexeme ?? '<unnamed>'}' was not populated.");
+            }
+            if (extensionName == null) {
+              exportedEnvironment.addUnnamedExtension(extension);
+            } else if (_isPublicName(extensionName)) {
+              exportedEnvironment.assign(extensionName, extension);
+            }
+          }
+        }
+        for (final declaration in ast.declarations) {
+          if (declaration is ExtensionTypeDeclaration) {
+            declaration.accept(moduleInterpreter);
+            final extensionTypeName = declaration.namePart.typeName.lexeme;
+            if (_isPublicName(extensionTypeName)) {
+              exportedEnvironment.assign(extensionTypeName,
+                  moduleEnvironment.values[extensionTypeName]);
+            }
+          }
+        }
+        Logger.debug(
+            "[ModuleLoader loadModule for $uri] Finished processing class/mixin/extension declarations.");
+      });
 
       Logger.debug(
           "[ModuleLoader loadModule for $uri] Executing InterpreterVisitor pass for initializers...");

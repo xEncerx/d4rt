@@ -14,6 +14,128 @@ void main() {
     }
   });
 
+  group('Imported static initializer callbacks', () {
+    for (final declaration in [
+      'class Catalog',
+      'mixin Catalog',
+      'extension Catalog on int',
+    ]) {
+      test('$declaration preserves callback lexical scope', () async {
+        const entry = '''
+import 'package:fixture/catalog.dart' as catalog;
+Future<Object?> main() async => catalog.readEntries();
+''';
+        final modules = {
+          'package:fixture/main.dart': entry,
+          'package:fixture/catalog.dart': '''
+import 'package:fixture/helpers.dart' as helpers;
+int adjust(int value) => helpers.offset + value;
+$declaration {
+  static final List<int> entries = List.unmodifiable(
+    [1, 2, 3].where((value) => value != 2).map((value) => adjust(value)),
+  );
+}
+List<int> readEntries() => Catalog.entries;
+''',
+          'package:fixture/helpers.dart': 'const offset = 10;',
+        };
+        for (final mode in ['library', 'source', 'compiled']) {
+          final interpreter = D4rt();
+          final result = switch (mode) {
+            'library' => interpreter.execute(
+                library: 'package:fixture/main.dart', sources: modules),
+            'compiled' => interpreter.executeCompiled(
+                interpreter.compile(source: entry),
+                sources: modules),
+            _ => interpreter.execute(source: entry, sources: modules),
+          };
+          expect(await result, [11, 13], reason: mode);
+        }
+      });
+    }
+
+    test('class callbacks preserve forward enhanced enum values', () {
+      final result = D4rt().execute(
+        library: 'package:fixture/main.dart',
+        sources: {
+          'package:fixture/main.dart': '''
+import 'package:fixture/catalog.dart';
+main() => [
+  Catalog.ids,
+  Method.values.map((method) => method.name).toList(),
+  Method.values.map((method) => method.index).toList(),
+  identical(Method.values.byName('read'), Method.read),
+];
+''',
+          'package:fixture/catalog.dart': '''
+class Catalog {
+  static final List<String> ids =
+      List.unmodifiable(Method.values.map((method) => method.id));
+}
+mixin Label {
+  String get label => 'method';
+}
+enum Method with Label {
+  read('read-id'), write('write-id');
+  const Method(this.id);
+  final String id;
+}
+''',
+        },
+      );
+      expect(result, [
+        ['read-id', 'write-id'],
+        ['read', 'write'],
+        [0, 1],
+        true,
+      ]);
+    });
+
+    test('initialization authority does not escape with a lazy callback', () {
+      var effects = 0;
+      final interpreter = D4rt();
+      interpreter.registertopLevelFunction(
+          'touch', (visitor, args, named, types) => ++effects);
+      final values = interpreter.execute(
+        library: 'package:fixture/main.dart',
+        sources: {
+          'package:fixture/main.dart': '''
+import 'package:fixture/catalog.dart';
+main() => Catalog.values;
+''',
+          'package:fixture/catalog.dart': '''
+class Catalog {
+  static final entries = List.unmodifiable([1].map((value) => value + 1));
+  static final values = [1].map((value) {
+    var n = 0;
+    while (n < 1000) { n++; }
+    return touch() + n + entries[0];
+  });
+}
+''',
+        },
+      ) as Iterable;
+      // Observe only effects after the loading invocation has returned.
+      effects = 0;
+      expect(() => values.single, throwsA(isA<RuntimeError>()));
+      expect(effects, 0);
+      interpreter.registertopLevelFunction(
+          'retained', (visitor, args, named, types) => values);
+      expect(
+        () => interpreter.execute(
+            source: 'main() => retained().toList();', maxSteps: 100),
+        throwsA(isA<ExecutionLimitException>()),
+      );
+      expect(effects, 0);
+      expect(
+        interpreter.execute(
+            source: 'main() => retained().toList();', maxSteps: 20000),
+        [1003],
+      );
+      expect(effects, 1);
+    });
+  });
+
   group('Import Tests', () {
     final Map<String, String> sources = {
       "d4rt-mem:/lib_common.dart": '''
