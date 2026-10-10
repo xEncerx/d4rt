@@ -1,7 +1,8 @@
 import 'dart:io';
 import 'package:d4rt/d4rt.dart';
 
-const String version = '0.4.0';
+/// Package release reported by the command-line interface.
+const String version = '0.4.1';
 
 void main(List<String> args) async {
   if (args.contains('-h') || args.contains('--help')) {

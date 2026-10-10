@@ -5195,8 +5195,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     if (value is AsyncSuspensionRequest) {
       return value;
     }
-    Logger.debug(
-        "[YieldStatement] Yielding value: $value (star: ${node.star != null})");
 
     // If we're collecting yields for a sync* generator
     if (currentSyncGeneratorYields != null) {
@@ -9122,12 +9120,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       Map<String, Object?> named,
       [List<RuntimeType>? types]) {
     if (name.isEmpty &&
-        types != null &&
-        types.isNotEmpty &&
         (klass.name == 'UnmodifiableListView' ||
             klass.name == 'UnmodifiableMapView' ||
             klass.name == 'MapView')) {
-      return nativeCollectionView(klass.name, args.single!, types, this);
+      if (args.length != 1 || named.isNotEmpty) {
+        throw RuntimeError(
+            '${klass.name} expects one positional source argument and no named arguments.');
+      }
+      if (types != null && types.isNotEmpty) {
+        return nativeCollectionView(klass.name, args.single!, types, this);
+      }
     }
     return klass.findConstructorAdapter(name)!(this, args, named);
   }
@@ -9820,11 +9822,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     if (pattern is DeclaredVariablePattern) {
       // Handles: var x, final T x, int x
       final name = pattern.name.lexeme;
-      if (name == '_') {
-        // Wildcard name in declaration: match succeeds, no binding
-        Logger.debug("[_matchAndBind] Wildcard (declared) match success.");
-        return;
-      }
 
       // Check if there's a type annotation that needs to match
       if (pattern.type != null) {
@@ -9851,13 +9848,22 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           rethrow;
         }
       }
+      if (name == '_') return;
 
       environment.define(name, value);
       Logger.debug("[_matchAndBind] Bound variable '$name' = $value");
     } else if (pattern is WildcardPattern) {
-      // Handles: _ when used as a standalone sub-pattern
-      Logger.debug("[_matchAndBind] Wildcard (sub-pattern) match success.");
-      return; // Match succeeds, no binding
+      final typeAnnotation = pattern.type;
+      if (typeAnnotation != null) {
+        final expectedType = InterpretedClass.resolveTypeAnnotationDynamic(
+            typeAnnotation, environment);
+        if (!_valueMatchesType(value, expectedType,
+            typeAnnotation: typeAnnotation)) {
+          throw PatternMatchException(
+              "Pattern type ${expectedType.name} does not match value type ${value?.runtimeType}");
+        }
+      }
+      return; // Wildcards check their type without binding a variable.
     } else if (pattern is AssignedVariablePattern) {
       // Handles assignment patterns like: (a, _) = record;
       final name = pattern.name.lexeme;
@@ -10265,68 +10271,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       // Get the expected type name
       final expectedTypeName = pattern.type.name.lexeme;
 
-      // Check if the value is of the expected type
-      bool typeMatches = false;
-
       final expectedType = _resolveTypeAnnotation(pattern.type);
-      final expectedBase = expectedType is AppliedRuntimeType
-          ? expectedType.baseType
-          : expectedType;
-      if (value is InterpretedEnumValue ||
-          value is BridgedEnumValue ||
-          value is Enum ||
-          expectedBase is InterpretedEnum ||
-          expectedBase is BridgedEnum ||
-          expectedBase.name == 'Enum') {
-        typeMatches = _valueMatchesType(value, expectedType,
-            typeAnnotation: pattern.type);
-      } else if (value is InterpretedInstance) {
-        // Check if the instance's class name matches the expected type
-        if (value.klass.name == expectedTypeName) {
-          typeMatches = true;
-        }
-      } else {
-        // Handle common Dart types and matches
-        String actualTypeName = value?.runtimeType.toString() ?? 'null';
-
-        // Handle common type aliases and matches
-        if (expectedTypeName == 'int' && value is int) {
-          typeMatches = true;
-        } else if (expectedTypeName == 'double' && value is double) {
-          typeMatches = true;
-        } else if (expectedTypeName == 'num' && value is num) {
-          typeMatches = true;
-        } else if (expectedTypeName == 'String' && value is String) {
-          typeMatches = true;
-        } else if (expectedTypeName == 'bool' && value is bool) {
-          typeMatches = true;
-        } else if (expectedTypeName == 'List' && value is List) {
-          typeMatches = true;
-        } else if (expectedTypeName == 'Map' && value is Map) {
-          typeMatches = true;
-        } else if (expectedTypeName == 'Set' && value is Set) {
-          typeMatches = true;
-        } else if (value != null && actualTypeName.endsWith(expectedTypeName)) {
-          // Basic heuristic: if the actual type name ends with expected type name
-          typeMatches = true;
-        } else {
-          // Check if the value has an interpreted class that matches
-          // This is a simplified check - a full implementation would be more robust
-          try {
-            // Try to look up the expected type in the environment
-            final expectedType = environment.get(expectedTypeName);
-            if (expectedType is RuntimeType) {
-              // In a full implementation, we'd check if value is an instance of expectedType
-              typeMatches =
-                  true; // For now, assume it matches if we found the type
-            }
-          } catch (e) {
-            // Type not found in environment, use basic matching
-          }
-        }
-      }
-
-      if (!typeMatches) {
+      if (!_valueMatchesType(value, expectedType,
+          typeAnnotation: pattern.type)) {
         throw PatternMatchException(
             "Object pattern expected type '$expectedTypeName', but got '${value?.runtimeType}'");
       }
@@ -11148,8 +11095,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     });
   }
 
-  /// Checks host collection arguments using Dart's reified interface checks.
-  /// RuntimeType cannot recover generic arguments from an unannotated host value.
+  /// Matches resolved types while preserving specialized host collection checks.
+  /// Unannotated host values cannot prove erased generic arguments.
   bool _valueMatchesType(
     Object? value,
     RuntimeType expectedType, {
@@ -11175,6 +11122,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           .isSubtypeOf(expectedType, value: enumValue);
     }
     final nativeValue = value is BridgedInstance ? value.nativeObject : value;
+    // Native interfaces also apply to interpreted collection subclasses whose
+    // nominal descriptors do not expose their erased core collection interface.
+    if (isEnumCoreType(expectedType, 'List')) return nativeValue is List;
+    if (isEnumCoreType(expectedType, 'Map')) return nativeValue is Map;
+    if (isEnumCoreType(expectedType, 'Set')) return nativeValue is Set;
     if (expectedType is AppliedRuntimeType &&
         (expectedType.baseType.name == 'List' ||
             expectedType.baseType.name == 'Map' ||
@@ -11248,31 +11200,27 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       return true;
     }
 
-    value = nativeValue;
-    final expectedTypeName = expectedType is AppliedRuntimeType
-        ? expectedType.baseType.name
-        : expectedType.name;
-    if (expectedTypeName == 'dynamic') return true;
-    if (expectedTypeName == 'Object') return true;
-    if (expectedTypeName == 'String' && value is String) return true;
-    if (expectedTypeName == 'int' && value is int) return true;
-    if (expectedTypeName == 'double' && value is double) return true;
-    if (expectedTypeName == 'num' && value is num) return true;
-    if (expectedTypeName == 'bool' && value is bool) return true;
-    if (expectedTypeName == 'List' && value is List) return true;
-    if (expectedTypeName == 'Map' && value is Map) return true;
-    if (expectedTypeName == 'Set' && value is Set) return true;
-
-    if (value is InterpretedInstance && expectedType is InterpretedClass) {
-      InterpretedClass? currentClass = value.klass;
-      while (currentClass != null) {
-        if (currentClass == expectedType) {
-          return true;
-        }
-        currentClass = currentClass.superclass;
-      }
+    if (isEnumCoreType(expectedType, 'dynamic') ||
+        isEnumCoreType(expectedType, 'Object')) {
+      return true;
+    }
+    if (expectedType is BridgedClass && expectedType.isSubtypeOfFunc != null) {
+      return expectedType.isSubtypeOf(null, value: nativeValue);
     }
 
-    return false;
+    final actualType = environment.getRuntimeType(value);
+    if (actualType == null) return false;
+    // A lexical core-name shadow must not turn a native value into an instance
+    // of the interpreted declaration returned by primitive type lookup.
+    if (actualType is InterpretedClass && value is! InterpretedInstance) {
+      return false;
+    }
+    if (expectedType is AppliedRuntimeType ||
+        actualType is AppliedRuntimeType ||
+        actualType is BridgedClass) {
+      // Retain nominal identities and generic arguments, not display names.
+      return enumTypeArgumentSatisfies(actualType, expectedType);
+    }
+    return actualType.isSubtypeOf(expectedType, value: value);
   }
 } // End of InterpreterVisitor class

@@ -1244,25 +1244,18 @@ class InterpretedInstance implements RuntimeValue {
         if (getterAdapter != null) {
           Logger.debug(
               "[Instance.get] Found getter '$name' in bridged superclass '${bridgedSuper.name}' at level '${currentClass.name}'. Calling adapter.");
-          try {
-            final result = getterAdapter(visitor, nativeTarget);
+          final result = getterAdapter(visitor, nativeTarget);
 
-            // Check if result is a native enum that has been bridged
-            if (result != null && visitor != null) {
-              final bridgedEnumValue =
-                  visitor.environment.getBridgedEnumValue(result);
-              if (bridgedEnumValue != null) {
-                return bridgedEnumValue;
-              }
+          // Check if result is a native enum that has been bridged
+          if (result != null && visitor != null) {
+            final bridgedEnumValue =
+                visitor.environment.getBridgedEnumValue(result);
+            if (bridgedEnumValue != null) {
+              return bridgedEnumValue;
             }
-
-            return result;
-          } catch (e, s) {
-            Logger.error(
-                "Native exception during bridged superclass getter '$name': $e\n$s");
-            throw RuntimeError(
-                "Native error in bridged superclass getter '$name': $e");
           }
+
+          return result;
         }
 
         // Try method next
@@ -1387,15 +1380,8 @@ class InterpretedInstance implements RuntimeValue {
         if (setterAdapter != null) {
           Logger.debug(
               "[Instance.set] Found setter '$name' in bridged superclass '${bridgedSuper.name}' at level '${currentClass.name}'. Calling adapter.");
-          try {
-            setterAdapter(visitor, nativeTarget, value);
-            return; // Setter called, assignment done
-          } catch (e, s) {
-            Logger.error(
-                "Native exception during bridged superclass setter '$name': $e\n$s");
-            throw RuntimeError(
-                "Native error in bridged superclass setter '$name': $e");
-          }
+          setterAdapter(visitor, nativeTarget, value);
+          return; // Setter called, assignment done
         }
       }
 
@@ -1645,6 +1631,8 @@ class InterpretedExtension {
 
 /// Represents a method call on a bridged superclass object.
 /// Stores the specific native super object and the method adapter.
+///
+/// Native failures and interpreter control flow propagate unchanged to callers.
 class BridgedSuperMethodCallable implements Callable {
   final Object
       superObject; // The actual native object from the bridged super constructor
@@ -1665,23 +1653,14 @@ class BridgedSuperMethodCallable implements Callable {
   Object? call(InterpreterVisitor visitor, List<Object?> positionalArguments,
       [Map<String, Object?> namedArguments = const {},
       List<RuntimeType>? typeArguments]) {
-    try {
-      // Call the adapter, passing the stored native super object as the target
-      return retainCollectionOperationResult(
-          adapter(visitor, superObject, positionalArguments, namedArguments),
-          superObject,
-          methodName,
-          visitor.environment,
-          positionalArguments);
-    } on ArgumentError catch (e) {
-      throw RuntimeError(
-          "Invalid arguments for bridged superclass method '$bridgedClassName.$methodName': ${e.message}");
-    } catch (e, s) {
-      Logger.error(
-          "Native exception during call to bridged superclass method '$bridgedClassName.$methodName': $e\n$s");
-      throw RuntimeError(
-          "Native error in bridged superclass method '$bridgedClassName.$methodName': $e");
-    }
+    // Preserve native errors and interpreter control flow for the existing
+    // interpreted catch and public invocation boundaries.
+    return retainCollectionOperationResult(
+        adapter(visitor, superObject, positionalArguments, namedArguments),
+        superObject,
+        methodName,
+        visitor.environment,
+        positionalArguments);
   }
 
   @override

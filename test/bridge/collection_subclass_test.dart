@@ -68,6 +68,19 @@ Object create(String kind) {
 }
 ''';
 
+const _superClasses = '''
+import 'dart:collection';
+class Values<T> extends UnmodifiableListView<T> {
+  Values(List<T> super.source);
+}
+class Child<T> extends Values<T> {
+  Child(super.renamed);
+}
+class Entries<K, V> extends UnmodifiableMapView<K, V> {
+  Entries(Map<K, V> super.map);
+}
+''';
+
 Object _native(String kind) => switch (kind) {
       'raw-list' => <Object?>[7],
       'view-list' => UnmodifiableListView<Object?>(<Object?>[7]),
@@ -150,6 +163,160 @@ main() {
 ''');
       expect(observed, _description(_native(kind), kind), reason: kind);
     }
+  });
+
+  test('implicit super formals create lazy live immutable list and map views',
+      () {
+    final list = _CountingList();
+    final map = _CountingMap();
+    final interpreter = D4rt();
+    interpreter.registertopLevelFunction(
+        'sources', (visitor, args, named, types) => [list, map]);
+    final result = interpreter.execute(source: '''
+$_superClasses
+main() {
+  final source = sources();
+  return [Child<Object?>(source[0]), Entries<String, Object?>(source[1])];
+}
+''') as List;
+    expect(list.reads, 0);
+    expect(map.reads, 0);
+    final values = result[0] as List<Object?>;
+    final entries = result[1] as Map<String, Object?>;
+    expect(values, isA<InterpretedInstance>());
+    expect(entries, isA<InterpretedInstance>());
+    expect(values.length, 1);
+    expect(entries.length, 1);
+    expect(list.reads, 0);
+    list.backing[0] = 8;
+    map.backing['page'] = 2;
+    expect(values[0], 8);
+    expect(entries['page'], 2);
+    expect(() => values[0] = 9, throwsUnsupportedError);
+    expect(() => entries['page'] = 3, throwsUnsupportedError);
+    expect(values.clear, throwsUnsupportedError);
+    expect(entries.clear, throwsUnsupportedError);
+  });
+
+  test('implicit immutable views retain interpreted typed native catches', () {
+    final list = <Object?>[1];
+    final map = <String, Object?>{'a': 1};
+    final additions = <String, Object?>{'blocked': 3};
+    final interpreter = D4rt();
+    interpreter.registertopLevelFunction(
+        'sources', (visitor, args, named, types) => [list, map, additions]);
+    expect(interpreter.execute(source: '''
+$_superClasses
+main() {
+  final source = sources();
+  final values = Child<Object?>(source[0]);
+  final entries = Entries<String, Object?>(source[1]);
+  final caught = <String>[];
+  int postFailure = 0;
+  try { values.add(2); postFailure++; }
+  on UnsupportedError { caught.add('list-add'); }
+  try { values.clear(); postFailure++; }
+  on UnsupportedError { caught.add('list-clear'); }
+  try { entries.addAll(source[2]); postFailure++; }
+  on UnsupportedError { caught.add('map-addAll'); }
+  try { entries.clear(); postFailure++; }
+  on UnsupportedError { caught.add('map-clear'); }
+  return [caught, postFailure, values.length, entries.length];
+}
+'''), [
+      ['list-add', 'list-clear', 'map-addAll', 'map-clear'],
+      0,
+      1,
+      1,
+    ]);
+    expect(list, [1]);
+    expect(map, {'a': 1});
+    expect(additions, {'blocked': 3});
+  });
+
+  test('implicit generic super views retain substituted type contracts', () {
+    expect(D4rt().execute(source: '''
+$_superClasses
+class Element {}
+main() {
+  final values = Child<int>(<int>[1]);
+  final nullable = Values<int?>(<int?>[null]);
+  final entries = Entries<String, Object?>(<String, Object?>{'a': 1});
+  final bottom = Values<Never>(<Never>[]);
+  final nested = Values<List<int>>(<List<int>>[<int>[2]]);
+  final elements = Values<Element>(<Element>[]);
+  return [values.length, entries.length,
+    values is List<int>, values is List<num>, values is List<String>,
+    nullable is List<int?>, nullable is List<int>, nullable[0],
+    entries is Map<String, Object?>, entries is Map<int, Object?>,
+    bottom is List<Never>, bottom.length,
+    nested is List<List<int>>, nested is List<List<String>>, nested[0][0],
+    elements is List<Element>, elements.length];
+}
+'''), [
+      1,
+      1,
+      true,
+      true,
+      false,
+      true,
+      false,
+      null,
+      true,
+      false,
+      true,
+      0,
+      true,
+      false,
+      2,
+      true,
+      0
+    ]);
+  });
+
+  test('explicit child collection defaults are forwarded', () {
+    expect(D4rt().execute(source: '''
+import 'dart:collection';
+class Values extends UnmodifiableListView<int> {
+  Values([List<int> super.source = const <int>[1]]);
+}
+main() => Values().length;
+'''), 1);
+  });
+
+  test('implicit view forwarding preserves ordinary argument errors', () {
+    for (final expression in [
+      'Values<int>()',
+      'Values<int>(<int>[1], <int>[2])',
+      'Values<int>(<int>[1], unknown: 2)',
+      'Values<int>(<String>[])',
+      'Values<int>(null)',
+      'Entries<String, int>(<String, String>{})',
+      'Entries<String, int>(<int, int>{})',
+    ]) {
+      expect(() => D4rt().execute(source: '''
+$_superClasses
+main() => $expression;
+'''), throwsA(isA<RuntimeError>()), reason: expression);
+    }
+    for (final constructor in [
+      'UnmodifiableListView<int>(<int>[1], unknown: 2)',
+      'UnmodifiableMapView<String, int>(<String, int>{}, unknown: 2)',
+      'MapView<String, int>(<String, int>{}, unknown: 2)',
+    ]) {
+      expect(
+          () => D4rt().execute(
+              source: "import 'dart:collection'; main() => $constructor;"),
+          throwsA(isA<RuntimeError>()),
+          reason: constructor);
+    }
+    expect(() => D4rt().execute(source: '''
+import 'dart:collection';
+class Values extends UnmodifiableListView<int> {
+  Values(super.source, {super.unknown});
+}
+main() => Values(<int>[1], unknown: 2);
+'''), throwsA(isA<RuntimeError>()));
   });
 
   test('final fields implement getters without erasing subclass identity', () {

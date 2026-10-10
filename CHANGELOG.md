@@ -1,9 +1,16 @@
+## 0.4.1
+- Isolate recursive synchronous calls and synchronous generator bodies from their async caller's continuation state while preserving exactly-once awaited operands, receivers, and arguments. Avoid extra iteration and repeated effects when delegating generator yields.
+- Forward positional and named super parameters to native superclass constructors, preserving supplied nulls, explicit child defaults, omitted trailing and named adapter defaults, and lazy live generic collection views. Inaccessible interior native default omissions fail before constructor effects.
+- Preserve native exception types, identities, and stacks from inherited superclass methods, getters, and setters so interpreted typed catches work without obscuring interpreter control flow or execution limits.
+- Match native and bridged values in typed-variable, record, wildcard, object, and cast patterns using registered type relations while preserving nullable, enum, interpreted hierarchy, and erased and generic collection interface checks.
+
 ## 0.4.0
 - Add enum lexical scopes, immutable ordered constants and values, enhanced members, const constructors and factories returning existing constants across source, compiled and imported execution.
 - Support enum names and iterable helpers, generic owner arguments, substituted interfaces and mixins, and nominal type checks, casts and patterns.
 - Validate const payloads and defaults by declaration provenance, including qualified class and transitive enum static constants, and reject mutation before enum initialization.
 - Generate native enum fields, setters and finite factory specializations with retained bounds and callback signatures; keep factory owner arguments separate from ordinary static-method adapters.
 - Run retained interpreted callbacks, native lazy iterables and streams, generators, and escaped enum closures under the current invocation's step and time limits.
+- Run native collection callbacks in imported class, mixin, and extension static initializers under the current invocation's authority and limits while preserving lexical scope.
 
 ## 0.3.5
 - Recognize implicit instance-field getters when validating abstract and interface implementations, including inherited fields, while distinguishing getters, setters, and methods.

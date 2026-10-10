@@ -122,6 +122,77 @@ class _ExecutionPreparationResult {
   _ExecutionPreparationResult(this.environment, this.redirected);
 }
 
+// Super formals preserve positional slots, including omitted inherited defaults.
+// Only interpreted parameter binding can resolve omitted interior slots; native
+// adapters own their defaults and expose no signature metadata.
+final class _SuperConstructorArguments {
+  static final Object omitted = Object();
+  List<Object?>? _positional;
+  Map<String, Object?>? _named;
+
+  void add(FormalParameter parameter, Object? value, {required bool forward}) {
+    if (parameter.isPositional) {
+      (_positional ??= <Object?>[]).add(forward ? value : omitted);
+    } else if (forward) {
+      (_named ??= <String, Object?>{})[parameter.name!.lexeme] = value;
+    }
+  }
+
+  (List<Object?>, Map<String, Object?>) forInvocation({
+    required bool native,
+    List<Object?>? explicitPositional,
+    Map<String, Object?>? explicitNamed,
+  }) {
+    final positional = _positional;
+    final named = _named;
+    if (positional != null &&
+        positional.isNotEmpty &&
+        explicitPositional != null &&
+        explicitPositional.isNotEmpty) {
+      throw RuntimeError(
+          'Positional super parameters cannot be combined with explicit positional super arguments.');
+    }
+    if (positional != null) {
+      while (positional.isNotEmpty && identical(positional.last, omitted)) {
+        positional.removeLast();
+      }
+    }
+    final arguments = explicitPositional ?? positional ?? const <Object?>[];
+    if (explicitPositional != null && positional != null) {
+      arguments.addAll(positional);
+    }
+    final names = explicitNamed ?? named ?? const <String, Object?>{};
+    if (explicitNamed != null && named != null) {
+      for (final entry in named.entries) {
+        if (names.containsKey(entry.key)) {
+          throw RuntimeError(
+              "Super argument '${entry.key}' is provided more than once.");
+        }
+        names[entry.key] = entry.value;
+      }
+    }
+    if (native) {
+      for (var i = 0; i < arguments.length; i++) {
+        if (identical(arguments[i], omitted)) {
+          throw RuntimeError(
+              'Cannot forward a native super argument after an omitted inherited positional default.');
+        }
+        arguments[i] = _nativeValue(arguments[i]);
+      }
+      for (final key in names.keys) {
+        names[key] = _nativeValue(names[key]);
+      }
+    }
+    return (arguments, names);
+  }
+
+  static Object? _nativeValue(Object? value) => switch (value) {
+        BridgedInstance instance => instance.nativeObject,
+        BridgedEnumValue value => value.nativeValue,
+        _ => value,
+      };
+}
+
 // Represents a function or method defined by the user
 class InterpretedFunction implements Callable {
   final FormalParameterList? _parameters;
@@ -743,9 +814,7 @@ class InterpretedFunction implements Callable {
     final providedNamedArgs = namedArguments;
     final processedParamNames = <String>{};
 
-    // Map to store super parameter values for parent constructor forwarding
-    // Key: parameter name (from parent), Value: argument value
-    final Map<String, Object?> superParameterValues = {};
+    _SuperConstructorArguments? superArguments;
 
     if (params != null) {
       for (final param in params) {
@@ -786,7 +855,7 @@ class InterpretedFunction implements Callable {
         }
 
         if (paramName == null) throw StateError("Parameter missing name");
-        processedParamNames.add(paramName);
+        if (isNamed) processedParamNames.add(paramName);
 
         // Find corresponding argument and value
         Object? valueToDefine;
@@ -795,7 +864,8 @@ class InterpretedFunction implements Callable {
         if (isOptionalPositional || isRequired) {
           if (positionalArgIndex < positionalArguments.length) {
             valueToDefine = positionalArguments[positionalArgIndex++];
-            argumentProvided = true;
+            argumentProvided = !isInitializer ||
+                !identical(valueToDefine, _SuperConstructorArguments.omitted);
           }
         } else if (isNamed) {
           if (providedNamedArgs.containsKey(paramName)) {
@@ -837,13 +907,10 @@ class InterpretedFunction implements Callable {
               executionEnvironment);
         }
 
-        // Store super parameter values for later forwarding to parent constructor
-        // BUT ONLY if the argument was actually provided
-        // This allows parent constructor to use its own defaults for optional super parameters
-        if (isSuperParameter && argumentProvided) {
-          superParameterValues[paramName] = valueToDefine;
-          Logger.debug(
-              "[_prepareEnv] Stored super parameter '$paramName' (${valueToDefine?.runtimeType}) for forwarding");
+        if (isSuperParameter) {
+          (superArguments ??= _SuperConstructorArguments()).add(
+              actualParam, valueToDefine,
+              forward: argumentProvided || defaultValueExpr != null);
         }
 
         // Define variable in execution scope OR Initialize field
@@ -957,11 +1024,15 @@ class InterpretedFunction implements Callable {
                   throw RuntimeError(
                       "Superclass '${dartSuperClass.name}' does not have a constructor named '$superConstructorName'.");
                 }
-                // Evaluate arguments (existing logic)
-                final (superPositionalArgs, superNamedArgs) =
+                final (explicitPositional, explicitNamed) =
                     _evaluateArgumentsForInvocation(
                         visitor, initializer.argumentList, "super()");
-                // Call Dart super constructor (existing logic)
+                final (superPositionalArgs, superNamedArgs) =
+                    superArguments?.forInvocation(
+                            native: false,
+                            explicitPositional: explicitPositional,
+                            explicitNamed: explicitNamed) ??
+                        (explicitPositional, explicitNamed);
                 final superCallResult = superConstructor
                     .bind(thisValue)
                     .call(visitor, superPositionalArgs, superNamedArgs);
@@ -976,11 +1047,15 @@ class InterpretedFunction implements Callable {
                   throw RuntimeError(
                       "Bridged superclass '${bridgedSuperClass.name}' does not have a constructor named '$superConstructorName'. Check bridge definition.");
                 }
-                // Evaluate arguments (using helper)
-                final (superPositionalArgs, superNamedArgs) =
+                final (explicitPositional, explicitNamed) =
                     _evaluateArgumentsForInvocation(
                         visitor, initializer.argumentList, "super()");
-                // Call the bridged constructor adapter
+                final (superPositionalArgs, superNamedArgs) =
+                    superArguments?.forInvocation(
+                            native: true,
+                            explicitPositional: explicitPositional,
+                            explicitNamed: explicitNamed) ??
+                        (explicitPositional, explicitNamed);
                 try {
                   // Adapter needs the *visitor* and args. It does NOT operate on 'thisValue' directly.
                   // The adapter is responsible for finding/creating the native object.
@@ -1150,40 +1225,9 @@ class InterpretedFunction implements Callable {
           // Call the default super constructor, bound to the *current* instance
           // NOTE: Default super constructor call CANNOT suspend
 
-          // Convert super parameters to positional/named arguments for the parent constructor
-          final superPositionalArgs = <Object?>[];
-          final superNamedArgs = <String, Object?>{};
-
-          if (superParameterValues.isNotEmpty) {
-            // Get the parent constructor's parameters to determine parameter ordering
-            final parentParams =
-                defaultSuperConstructor._parameters?.parameters;
-            if (parentParams != null) {
-              // Map super parameter values to parent constructor parameters by position/name
-              for (final parentParam in parentParams) {
-                final actualParentParam = parentParam;
-                final paramName = actualParentParam.name?.lexeme ?? '';
-
-                if (paramName.isNotEmpty &&
-                    superParameterValues.containsKey(paramName)) {
-                  final value = superParameterValues[paramName];
-
-                  if (actualParentParam.isPositional) {
-                    superPositionalArgs.add(value);
-                    Logger.debug(
-                        "[Implicit super()] Added super parameter '$paramName' (${value?.runtimeType}) as positional arg");
-                  } else if (actualParentParam.isNamed) {
-                    superNamedArgs[paramName] = value;
-                    Logger.debug(
-                        "[Implicit super()] Added super parameter '$paramName' (${value?.runtimeType}) as named arg");
-                  }
-                }
-              }
-            }
-
-            Logger.debug(
-                "[Implicit super()] Calling parent constructor with ${superPositionalArgs.length} positional and ${superNamedArgs.length} named super parameters");
-          }
+          final (superPositionalArgs, superNamedArgs) =
+              superArguments?.forInvocation(native: false) ??
+                  (const <Object?>[], const <String, Object?>{});
 
           final defaultSuperResult = defaultSuperConstructor
               .bind(thisValue)
@@ -1202,11 +1246,14 @@ class InterpretedFunction implements Callable {
           }
 
           try {
+            final (superPositionalArgs, superNamedArgs) =
+                superArguments?.forInvocation(native: true) ??
+                    (const <Object?>[], const <String, Object?>{});
             final nativeSuperObject = visitor.constructBridged(
                 bridgedSuperClass,
                 '',
-                const [],
-                const {},
+                superPositionalArgs,
+                superNamedArgs,
                 thisValue is InterpretedInstance
                     ? thisValue.nativeSuperclassArguments
                     : null);
@@ -1424,6 +1471,9 @@ class InterpretedFunction implements Callable {
 
     try {
       visitor.currentFunction = this;
+      // Preparation and synchronous bodies belong to this invocation, not the
+      // caller's suspended expression. Async bodies install their own state.
+      visitor.currentAsyncState = null;
 
       final preparationResult = _prepareExecutionEnvironment(
           visitor, positionalArguments, namedArguments, typeArguments);
@@ -4251,7 +4301,8 @@ class InterpretedFunction implements Callable {
 
     for (final arg in argumentList.arguments) {
       // Evaluate argument, disallow await for now in constructor contexts
-      final argValue = arg.accept<Object?>(visitor);
+      final expression = arg is NamedArgument ? arg.argumentExpression : arg;
+      final argValue = expression.accept<Object?>(visitor);
       if (argValue is AsyncSuspensionRequest) {
         throw UnimplementedError(
             "'await' is not yet supported within $invocationType call arguments.");
@@ -4260,19 +4311,13 @@ class InterpretedFunction implements Callable {
       if (arg is NamedArgument) {
         namedArgsEncountered = true;
         final name = arg.name.lexeme;
-        final value = arg.argumentExpression
-            .accept<Object?>(visitor); // Evaluate the expression part
         Logger.debug(
-            " [_evalArgs] Evaluated NAMED arg expression '$name' (${value?.runtimeType})");
-        if (value is AsyncSuspensionRequest) {
-          throw UnimplementedError(
-              "'await' is not yet supported within $invocationType call arguments.");
-        }
+            " [_evalArgs] Evaluated NAMED arg expression '$name' (${argValue?.runtimeType})");
         if (namedArgs.containsKey(name)) {
           throw RuntimeError(
               "Named argument '$name' provided multiple times to $invocationType.");
         }
-        namedArgs[name] = value;
+        namedArgs[name] = argValue;
       } else {
         if (namedArgsEncountered) {
           throw RuntimeError(
@@ -4510,12 +4555,15 @@ class _SyncGeneratorIterator implements Iterator<Object?> {
     final previousVisitorEnv = visitor.environment;
     final previousCurrentFunction = visitor.currentFunction;
     final previousYieldsList = visitor.currentSyncGeneratorYields;
+    final previousAsyncState = visitor.currentAsyncState;
 
     try {
       // Set up yields collection
       visitor.currentSyncGeneratorYields = [];
       visitor.environment = executionEnvironment;
       visitor.currentFunction = function;
+      // Deferred synchronous bodies cannot own the consumer's continuation.
+      visitor.currentAsyncState = null;
 
       if (function.isAbstract) {
         throw RuntimeError(
@@ -4555,6 +4603,7 @@ class _SyncGeneratorIterator implements Iterator<Object?> {
       visitor.environment = previousVisitorEnv;
       visitor.currentFunction = previousCurrentFunction;
       visitor.currentSyncGeneratorYields = previousYieldsList;
+      visitor.currentAsyncState = previousAsyncState;
     }
 
     // If we didn't collect anything, generator is done

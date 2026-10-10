@@ -1342,5 +1342,55 @@ void main() {
       ''';
       expect(execute(code), equals('chained'));
     });
+
+    test('Positional super formals forward by position rather than parent name',
+        () {
+      expect(execute('''
+class Parent {
+  Parent(this.left, this.right);
+  final int left;
+  final int right;
+}
+class Child extends Parent {
+  Child(super.right, super.left);
+}
+main() { final child = Child(1, 2); return [child.left, child.right]; }
+'''), [1, 2]);
+    });
+
+    test('Inherited positional default slots survive later child defaults', () {
+      expect(execute('''
+class GrandParent {
+  GrandParent([this.first = 1, this.second = 2]);
+  final Object? first;
+  final Object? second;
+}
+class Parent extends GrandParent {
+  Parent([super.renamed, super.other]);
+}
+class Child extends Parent {
+  Child([super.value, super.extra = 3]);
+}
+main() => [Child().first, Child().second, Child(null).first,
+    Child(null).second, Child(4).first, Child(4).second];
+'''), [1, 3, null, 3, 4, 3]);
+    });
+
+    test('Explicit interpreted super calls include super formals and defaults',
+        () {
+      expect(execute('''
+class Parent {
+  Parent.named(this.first, {this.second = 'parent'});
+  final Object? first;
+  final Object? second;
+}
+class Child extends Parent {
+  Child(super.renamed, {super.second = 'child'}) : super.named();
+  Child.explicit({super.second}) : super.named('fixed');
+}
+main() => [Child(1).first, Child(1).second, Child.explicit().first,
+    Child.explicit().second, Child.explicit(second: null).second];
+'''), [1, 'child', 'fixed', 'parent', null]);
+    });
   });
 }
