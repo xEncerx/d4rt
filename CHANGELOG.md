@@ -1,3 +1,11 @@
+## 0.5.0
+
+### Changed
+- Require Dart SDK 3.11 or later.
+
+### Fixed
+- Fix permission comparison and revocation, scoped access checks, and filesystem path matching.
+
 ## 0.4.1
 - Isolate recursive synchronous calls and synchronous generator bodies from their async caller's continuation state while preserving exactly-once awaited operands, receivers, and arguments. Avoid extra iteration and repeated effects when delegating generator yields.
 - Forward positional and named super parameters to native superclass constructors, preserving supplied nulls, explicit child defaults, omitted trailing and named adapter defaults, and lazy live generic collection views. Inaccessible interior native default omissions fail before constructor effects.

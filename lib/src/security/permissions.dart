@@ -11,10 +11,10 @@
 ///
 /// // Grant filesystem access
 /// interpreter.grant(FilesystemPermission.read);
-/// interpreter.grant(FilesystemPermission.write('/tmp'));
+/// interpreter.grant(FilesystemPermission.writePath('/tmp'));
 ///
 /// // Grant network access
-/// interpreter.grant(NetworkPermission.connect('api.example.com'));
+/// interpreter.grant(NetworkPermission.connectTo('api.example.com'));
 ///
 /// // Grant process execution
 /// interpreter.grant(ProcessRunPermission.any);
@@ -27,7 +27,23 @@
 /// ```
 library;
 
-import 'package:d4rt/src/utils/platform/filesystem.dart';
+import 'package:path/path.dart' as p;
+
+final _drivePrefix = RegExp(r'^[A-Za-z]:');
+
+// Normalize lexically, without requiring the target to exist or resolving links.
+// Stored scopes are normalized once; requested paths use the operation's cwd.
+String _canonicalizePermissionPath(String path) {
+  final normalized = p.normalize(p.absolute(path));
+  return p.separator == '\\' && _drivePrefix.hasMatch(normalized)
+      ? '${normalized.substring(0, 2).toLowerCase()}${normalized.substring(2)}'
+      : normalized;
+}
+
+bool _isPathQualifiedCommand(String command) =>
+    command.contains('/') ||
+    (p.separator == '\\' &&
+        (command.contains('\\') || _drivePrefix.hasMatch(command)));
 
 /// Base class for all permissions in the d4rt security system.
 abstract class Permission {
@@ -54,80 +70,77 @@ class FilesystemPermission extends Permission {
   final bool _write;
   final bool _execute;
 
-  FilesystemPermission._(this._path, this._read, this._write, this._execute);
+  FilesystemPermission._(String? path, this._read, this._write, this._execute)
+    : _path = path == null ? null : _canonicalizePermissionPath(path);
 
   /// Allows reading any file or directory.
-  static final FilesystemPermission read =
-      FilesystemPermission._(null, true, false, false);
+  static final FilesystemPermission read = FilesystemPermission._(
+    null,
+    true,
+    false,
+    false,
+  );
 
   /// Allows writing to any file or directory.
-  static final FilesystemPermission write =
-      FilesystemPermission._(null, false, true, false);
+  static final FilesystemPermission write = FilesystemPermission._(
+    null,
+    false,
+    true,
+    false,
+  );
 
   /// Allows executing any file.
-  static final FilesystemPermission execute =
-      FilesystemPermission._(null, false, false, true);
+  static final FilesystemPermission execute = FilesystemPermission._(
+    null,
+    false,
+    false,
+    true,
+  );
 
   /// Allows all filesystem operations on any path.
-  static final FilesystemPermission any =
-      FilesystemPermission._(null, true, true, true);
+  static final FilesystemPermission any = FilesystemPermission._(
+    null,
+    true,
+    true,
+    true,
+  );
 
-  /// Allows reading files/directories under the specified path.
+  /// Allows reading files/directories under [path], anchored at construction.
   factory FilesystemPermission.readPath(String path) =>
       FilesystemPermission._(path, true, false, false);
 
-  /// Allows writing files/directories under the specified path.
+  /// Allows writing files/directories under [path], anchored at construction.
   factory FilesystemPermission.writePath(String path) =>
       FilesystemPermission._(path, false, true, false);
 
-  /// Allows executing files under the specified path.
+  /// Allows executing files under [path], anchored at construction.
   factory FilesystemPermission.executePath(String path) =>
       FilesystemPermission._(path, false, false, true);
 
-  /// Allows all operations under the specified path.
+  /// Allows all operations under [path], anchored at construction.
   factory FilesystemPermission.path(String path) =>
       FilesystemPermission._(path, true, true, true);
 
-  static String _canonicalizePath(String path) {
-    final absolutePath = normalizeFilesystemPath(path);
-    final driveMatch = RegExp(r'^[A-Za-z]:').firstMatch(absolutePath);
-
-    String prefix = '';
-    String remainder = absolutePath;
-    if (driveMatch != null) {
-      prefix = driveMatch.group(0)!.toLowerCase();
-      remainder = absolutePath.substring(2);
-    }
-
-    final isAbsolute = remainder.startsWith('/');
-    final normalizedSegments = <String>[];
-
-    for (final rawSegment in remainder.split('/')) {
-      if (rawSegment.isEmpty || rawSegment == '.') {
-        continue;
-      }
-      if (rawSegment == '..') {
-        if (normalizedSegments.isNotEmpty) {
-          normalizedSegments.removeLast();
-        }
-        continue;
-      }
-      normalizedSegments.add(rawSegment);
-    }
-
-    final normalizedPath = normalizedSegments.join('/');
-    final leading = isAbsolute ? '/' : '';
-    return prefix.isNotEmpty
-        ? '$prefix$leading$normalizedPath'
-        : '$leading$normalizedPath';
-  }
-
   static bool _isPathWithinScope(String allowedPath, String requestedPath) {
-    final canonicalAllowed = _canonicalizePath(allowedPath);
-    final canonicalRequested = _canonicalizePath(requestedPath);
-    return canonicalRequested == canonicalAllowed ||
-        canonicalRequested.startsWith('$canonicalAllowed/');
+    final canonicalRequested = _canonicalizePermissionPath(requestedPath);
+    final prefix = allowedPath.endsWith(p.separator)
+        ? allowedPath
+        : '$allowedPath${p.separator}';
+    return canonicalRequested == allowedPath ||
+        canonicalRequested.startsWith(prefix);
   }
+
+  @override
+  bool operator ==(Object other) =>
+      other is FilesystemPermission &&
+      _path == other._path &&
+      _read == other._read &&
+      _write == other._write &&
+      _execute == other._execute;
+
+  @override
+  int get hashCode =>
+      Object.hash(FilesystemPermission, _path, _read, _write, _execute);
 
   @override
   String get description {
@@ -187,23 +200,48 @@ class NetworkPermission extends Permission {
   final bool _bind;
 
   NetworkPermission._(
-      this._host, this._port, this._connect, this._listen, this._bind);
+    String? host,
+    this._port,
+    this._connect,
+    this._listen,
+    this._bind,
+  ) : _host = host?.toLowerCase();
 
   /// Allows connecting to any host/port.
-  static final NetworkPermission connect =
-      NetworkPermission._(null, null, true, false, false);
+  static final NetworkPermission connect = NetworkPermission._(
+    null,
+    null,
+    true,
+    false,
+    false,
+  );
 
   /// Allows listening on any port.
-  static final NetworkPermission listen =
-      NetworkPermission._(null, null, false, true, false);
+  static final NetworkPermission listen = NetworkPermission._(
+    null,
+    null,
+    false,
+    true,
+    false,
+  );
 
   /// Allows binding to any address/port.
-  static final NetworkPermission bind =
-      NetworkPermission._(null, null, false, false, true);
+  static final NetworkPermission bind = NetworkPermission._(
+    null,
+    null,
+    false,
+    false,
+    true,
+  );
 
   /// Allows all network operations.
-  static final NetworkPermission any =
-      NetworkPermission._(null, null, true, true, true);
+  static final NetworkPermission any = NetworkPermission._(
+    null,
+    null,
+    true,
+    true,
+    true,
+  );
 
   /// Allows connecting to the specified host.
   factory NetworkPermission.connectTo(String host) =>
@@ -216,6 +254,19 @@ class NetworkPermission extends Permission {
   /// Allows listening on the specified port.
   factory NetworkPermission.listenOn(int port) =>
       NetworkPermission._(null, port, false, true, false);
+
+  @override
+  bool operator ==(Object other) =>
+      other is NetworkPermission &&
+      _host == other._host &&
+      _port == other._port &&
+      _connect == other._connect &&
+      _listen == other._listen &&
+      _bind == other._bind;
+
+  @override
+  int get hashCode =>
+      Object.hash(NetworkPermission, _host, _port, _connect, _listen, _bind);
 
   @override
   String get description {
@@ -258,10 +309,10 @@ class NetworkPermission extends Permission {
     }
 
     // Check host/port restrictions
-    if (_host != null && opHost != null && opHost != _host) {
+    if (_host != null && (opHost is! String || opHost.toLowerCase() != _host)) {
       return false;
     }
-    if (_port != null && opPort != null && opPort != _port) {
+    if (_port != null && (opPort is! int || opPort != _port)) {
       return false;
     }
 
@@ -277,19 +328,55 @@ class ProcessRunPermission extends Permission {
   final String? _command;
   final List<String>? _allowedArgs;
 
-  ProcessRunPermission._(this._command, this._allowedArgs);
+  ProcessRunPermission._(String? command, List<String>? allowedArgs)
+    : _command = command != null && _isPathQualifiedCommand(command)
+          ? _canonicalizePermissionPath(command)
+          : command,
+      _allowedArgs = allowedArgs == null
+          ? null
+          : List<String>.unmodifiable(allowedArgs);
 
   /// Allows running any command with any arguments.
   static final ProcessRunPermission any = ProcessRunPermission._(null, null);
 
-  /// Allows running the specified command.
+  /// Allows the exact command with any arguments.
+  ///
+  /// Path-qualified commands are anchored at construction. Bare names do not
+  /// authorize paths with the same basename, or vice versa.
   factory ProcessRunPermission.command(String command) =>
       ProcessRunPermission._(command, null);
 
-  /// Allows running the specified command with specific arguments.
+  /// Allows the exact command with an immutable snapshot of the ordered [args].
+  ///
+  /// Operations must supply arguments, including an explicit list for no args.
   factory ProcessRunPermission.commandWithArgs(
-          String command, List<String> args) =>
-      ProcessRunPermission._(command, args);
+    String command,
+    List<String> args,
+  ) => ProcessRunPermission._(command, args);
+
+  static bool _sameArgs(List<String> expected, List<dynamic> actual) {
+    if (actual.length != expected.length) return false;
+    for (var i = 0; i < expected.length; i++) {
+      if (actual[i] is! String || actual[i] != expected[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is ProcessRunPermission &&
+      _command == other._command &&
+      ((_allowedArgs == null && other._allowedArgs == null) ||
+          (_allowedArgs != null &&
+              other._allowedArgs != null &&
+              _sameArgs(_allowedArgs, other._allowedArgs)));
+
+  @override
+  int get hashCode => Object.hash(
+    ProcessRunPermission,
+    _command,
+    _allowedArgs == null ? null : Object.hashAll(_allowedArgs),
+  );
 
   @override
   String get description {
@@ -313,18 +400,22 @@ class ProcessRunPermission extends Permission {
     if (opType != 'process') return false;
 
     // Check command restrictions
-    if (_command != null && opCommand != _command) {
-      return false;
+    if (_command != null) {
+      if (opCommand is! String) return false;
+      if (_isPathQualifiedCommand(_command)) {
+        if (!_isPathQualifiedCommand(opCommand) ||
+            _canonicalizePermissionPath(opCommand) != _command) {
+          return false;
+        }
+      } else if (opCommand != _command) {
+        return false;
+      }
     }
 
     // Check argument restrictions
-    if (_allowedArgs != null && opArgs != null) {
-      final args = opArgs as List<String>;
-      if (args.length != _allowedArgs.length) return false;
-
-      for (int i = 0; i < args.length; i++) {
-        if (args[i] != _allowedArgs[i]) return false;
-      }
+    if (_allowedArgs != null &&
+        (opArgs is! List || !_sameArgs(_allowedArgs, opArgs))) {
+      return false;
     }
 
     return true;
@@ -352,6 +443,15 @@ class IsolatePermission extends Permission {
 
   /// Allows all isolate operations.
   static final IsolatePermission any = IsolatePermission._(true, true);
+
+  @override
+  bool operator ==(Object other) =>
+      other is IsolatePermission &&
+      _spawn == other._spawn &&
+      _communicate == other._communicate;
+
+  @override
+  int get hashCode => Object.hash(IsolatePermission, _spawn, _communicate);
 
   @override
   String get description {
@@ -389,16 +489,26 @@ class DangerousPermission extends Permission {
   DangerousPermission._(this._operation);
 
   /// Allows evaluation of arbitrary code strings (eval-like functionality).
-  static final DangerousPermission codeEvaluation =
-      DangerousPermission._('code evaluation');
+  static final DangerousPermission codeEvaluation = DangerousPermission._(
+    'code evaluation',
+  );
 
   /// Allows loading and executing native plugins/libraries.
-  static final DangerousPermission nativePlugins =
-      DangerousPermission._('native plugins');
+  static final DangerousPermission nativePlugins = DangerousPermission._(
+    'native plugins',
+  );
 
   /// Allows all dangerous operations.
-  static final DangerousPermission any =
-      DangerousPermission._('any dangerous operation');
+  static final DangerousPermission any = DangerousPermission._(
+    'any dangerous operation',
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      other is DangerousPermission && _operation == other._operation;
+
+  @override
+  int get hashCode => Object.hash(DangerousPermission, _operation);
 
   @override
   String get description => 'dangerous operation: $_operation';

@@ -241,7 +241,7 @@ Goodbye!
 
 ## Security Sandboxing
 
-d4rt includes a comprehensive permission-based security system to prevent malicious code execution. By default, access to dangerous modules like `dart:io` and `dart:isolate` is blocked unless explicitly granted.
+Access to `dart:io` and `dart:isolate` requires permissions.
 
 ### Granting Permissions
 
@@ -249,30 +249,11 @@ d4rt includes a comprehensive permission-based security system to prevent malici
 import 'package:d4rt/d4rt.dart';
 
 void main() {
-  final interpreter = D4rt();
-
-  // Grant filesystem access
-  interpreter.grant(FilesystemPermission.any);
-
-  // Grant network access
-  interpreter.grant(NetworkPermission.any);
-
-  // Grant process execution
-  interpreter.grant(ProcessRunPermission.any);
-
-  // Grant isolate operations
-  interpreter.grant(IsolatePermission.any);
-
-  // Now execute code that uses dangerous operations
-  final result = interpreter.execute(source: '''
-    import 'dart:io';
-    import 'dart:isolate';
-
-    void main() {
-      // This code can now access filesystem, network, etc.
-      print('Secure execution with granted permissions');
-    }
-  ''');
+  final interpreter = D4rt()
+    ..grant(FilesystemPermission.any)
+    ..grant(NetworkPermission.any)
+    ..grant(ProcessRunPermission.any)
+    ..grant(IsolatePermission.any);
 }
 ```
 
@@ -282,34 +263,42 @@ void main() {
   - `FilesystemPermission.any` - Allow all filesystem operations
   - `FilesystemPermission.read` - Allow read-only operations
   - `FilesystemPermission.write` - Allow write operations
-  - `FilesystemPermission.path('/specific/path')` - Allow operations on specific paths
+  - `FilesystemPermission.readPath('/specific/path')` - Allow reads within a subtree
+  - `FilesystemPermission.writePath('/specific/path')` - Allow writes within a subtree
+  - `FilesystemPermission.executePath('/specific/path')` - Allow execution within a subtree
+  - `FilesystemPermission.path('/specific/path')` - Allow all operations within a subtree
 
 - **`NetworkPermission`**: Controls network operations
   - `NetworkPermission.any` - Allow all network operations
-  - `NetworkPermission.connect('host:port')` - Allow connections to specific hosts
+  - `NetworkPermission.connect` - Allow connections to any host/port
+  - `NetworkPermission.connectTo('api.example.com')` - Allow connections to a specific host
+  - `NetworkPermission.connectToPort('api.example.com', 443)` - Restrict both host and port
+  - `NetworkPermission.listenOn(8080)` - Allow listening on a specific port
 
 - **`ProcessRunPermission`**: Controls process execution
   - `ProcessRunPermission.any` - Allow execution of any command
-  - `ProcessRunPermission.command('specific-command')` - Allow execution of specific commands
+  - `ProcessRunPermission.command('specific-command')` - Allow that exact command with any arguments
+  - `ProcessRunPermission.commandWithArgs('specific-command', ['--safe'])` - Require that exact command and ordered argument list
 
 - **`IsolatePermission`**: Controls isolate creation and communication
   - `IsolatePermission.any` - Allow all isolate operations
+  - `IsolatePermission.spawn` - Allow spawning, not communication
+  - `IsolatePermission.communicate` - Allow communication, not spawning
+
+- **`DangerousPermission`**: Controls explicitly requested dangerous operations
+  - `DangerousPermission.codeEvaluation` - Allow code evaluation, not native plugins
+  - `DangerousPermission.nativePlugins` - Allow native plugins, not code evaluation
+  - `DangerousPermission.any` - Allow all dangerous operations
 
 ### Permission Management
 
 ```dart
 final interpreter = D4rt();
 
-// Grant permissions
-interpreter.grant(FilesystemPermission.any);
-
-// Check permissions
-if (interpreter.hasPermission(FilesystemPermission.any)) {
-  print('Filesystem access granted');
-}
-
-// Revoke permissions
-interpreter.revoke(FilesystemPermission.any);
+interpreter.grant(FilesystemPermission.readPath('data'));
+final hasReadAccess =
+    interpreter.hasPermission(FilesystemPermission.readPath('data'));
+interpreter.revoke(FilesystemPermission.readPath('data'));
 ```
 
 ### Filesystem Module Imports
