@@ -12,7 +12,7 @@ platforms:
   windows:
 
 environment:
-  sdk: ^3.5.0
+  sdk: ^3.11.0
 
 executables:
   d4rt: interpreter
