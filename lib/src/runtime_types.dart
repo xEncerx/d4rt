@@ -764,6 +764,9 @@ class InterpretedClass implements Callable, RuntimeType {
         typeArguments,
       );
     } on RuntimeError catch (e) {
+      if (e is ExecutionLimitException || e is ExecutionTimeoutException) {
+        rethrow;
+      }
       throw RuntimeError(
           "Error during constructor execution for class '$name': ${e.message}");
     }

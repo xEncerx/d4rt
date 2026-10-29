@@ -3,6 +3,32 @@ import 'dart:io' as io;
 import 'package:d4rt/d4rt.dart';
 import 'package:test/test.dart';
 
+Object? _executeEntry(
+  D4rt interpreter,
+  String mode,
+  String source, {
+  Map<String, String> sources = const {},
+  int? maxSteps,
+}) {
+  return switch (mode) {
+    'library' => interpreter.execute(
+        library: 'package:fixture/entry.dart',
+        sources: {'package:fixture/entry.dart': source, ...sources},
+        maxSteps: maxSteps,
+      ),
+    'compiled' => interpreter.executeCompiled(
+        interpreter.compile(source: source),
+        sources: sources,
+        maxSteps: maxSteps,
+      ),
+    _ => interpreter.execute(
+        source: source,
+        sources: sources,
+        maxSteps: maxSteps,
+      ),
+  };
+}
+
 void main() {
   tearDown(() {
     final directories = ['test_fs_imports'];
@@ -11,6 +37,99 @@ void main() {
       if (directory.existsSync()) {
         directory.deleteSync(recursive: true);
       }
+    }
+  });
+
+  group('Module permission identity', () {
+    for (final mode in ['source', 'compiled', 'library']) {
+      for (final library in ['io', 'isolate']) {
+        for (final suffix in ['', '?audit=1', '#audit', '?audit=1#audit']) {
+          final uri = 'dart:$library$suffix';
+          test('$mode gates $uri directly and through exports', () {
+            for (final throughExport in [false, true]) {
+              final source = throughExport
+                  ? "import 'package:fixture/export.dart'; int main() => 7;"
+                  : "import '$uri'; int main() => 7;";
+              final sources = {'package:fixture/export.dart': "export '$uri';"};
+              expect(
+                () => _executeEntry(D4rt(), mode, source, sources: sources),
+                throwsA(
+                  isA<RuntimeError>().having(
+                    (error) => error.message,
+                    'message',
+                    contains(
+                      library == 'io'
+                          ? 'FilesystemPermission'
+                          : 'IsolatePermission',
+                    ),
+                  ),
+                ),
+              );
+              final granted = D4rt()
+                ..grant(FilesystemPermission.any)
+                ..grant(IsolatePermission.any);
+              expect(_executeEntry(granted, mode, source, sources: sources), 7);
+            }
+          });
+        }
+      }
+
+      for (final uri in [
+        'custom:io?audit=1',
+        'custom:isolate#audit',
+        'package:io?audit=1',
+        'package:isolate#audit',
+      ]) {
+        test('$mode keeps non-dart identity $uri', () {
+          expect(
+            _executeEntry(
+              D4rt(),
+              mode,
+              "import 'package:fixture/export.dart'; int main() => answer;",
+              sources: {
+                'package:fixture/export.dart': "export '$uri';",
+                uri: 'const answer = 9;',
+              },
+            ),
+            9,
+          );
+        });
+      }
+
+      test('$mode requires an exact bridge registration for missing modules',
+          () {
+        final interpreter = D4rt()
+          ..registerBridgedClass(
+            BridgedClass(
+              nativeType: Object,
+              name: 'NativeAnswer',
+              staticGetters: {'value': (visitor) => 42},
+            ),
+            'package:fixture/native.dart',
+          );
+        expect(
+          () => _executeEntry(
+            interpreter,
+            mode,
+            "import 'package:fixture/missing.dart'; int main() => 1;",
+          ),
+          throwsA(
+            isA<SourceCodeException>().having(
+              (error) => error.message,
+              'message',
+              contains('package:fixture/missing.dart'),
+            ),
+          ),
+        );
+        expect(
+          _executeEntry(
+            interpreter,
+            mode,
+            "import 'package:fixture/native.dart'; int main() => NativeAnswer.value;",
+          ),
+          42,
+        );
+      });
     }
   });
 

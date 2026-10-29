@@ -204,7 +204,7 @@ class D4rt {
       basePath: basePath,
       allowFileSystemImports: allowFileSystemImports,
       deadline: deadline,
-      rootMaxSteps: configureLoadedRoot ? maxSteps : null,
+      maxSteps: maxSteps,
       rootOnPrint: configureLoadedRoot ? onPrint ?? this.onPrint : null,
     );
     _visitor = configureLoadedRoot
@@ -213,7 +213,7 @@ class D4rt {
             globalEnvironment: moduleLoader.globalEnvironment,
             moduleLoader: moduleLoader,
             deadline: deadline,
-            maxSteps: maxSteps,
+            steps: moduleLoader.steps,
             onPrint: onPrint ?? this.onPrint,
           );
     Stdlib(moduleLoader.globalEnvironment).register();
@@ -449,7 +449,6 @@ class D4rt {
       libraryUri: script.uri,
       basePath: script.basePath,
       allowFileSystemImports: allowFileSystemImports,
-      maxSteps: maxSteps,
       deadline: deadline,
       onPrint: onPrint ?? this.onPrint,
     );
@@ -597,7 +596,6 @@ class D4rt {
       libraryUri: null,
       basePath: basePath,
       allowFileSystemImports: allowFileSystemImports,
-      maxSteps: maxSteps,
       deadline: deadline,
       onPrint: onPrint ?? this.onPrint,
     );
@@ -631,7 +629,6 @@ class D4rt {
     Uri? libraryUri,
     String? basePath,
     bool allowFileSystemImports = false,
-    int? maxSteps,
     void Function(String)? onPrint,
   }) {
     final Environment executionEnvironment =
@@ -651,7 +648,7 @@ class D4rt {
                 ? basePathDirectoryUri(basePath)
                 : null),
         deadline: deadline,
-        maxSteps: maxSteps,
+        steps: moduleLoader.steps,
         onPrint: onPrint ?? this.onPrint);
     try {
       Logger.debug(" [execute] Starting Pass 2: Interpretation");
@@ -678,17 +675,20 @@ class D4rt {
 
       // Pre-process extensions first so they are available for all other code
       Logger.debug(" [execute] Pre-processing extensions...");
-      for (final declaration in compilationUnit.declarations) {
-        if (declaration is ExtensionDeclaration) {
-          try {
-            declaration.accept<Object?>(visitor);
-          } catch (e) {
-            if (deadline?.expired ?? false) throw deadline!.exception;
-            Logger.warn(
-                " [execute] Warning while processing extension '${declaration.name}': $e");
+      visitor.runCollectionInvocation(() {
+        for (final declaration in compilationUnit.declarations) {
+          if (declaration is ExtensionDeclaration) {
+            try {
+              declaration.accept<Object?>(visitor);
+            } catch (e) {
+              if (deadline?.expired ?? false) throw deadline!.exception;
+              if (e is ExecutionLimitException) rethrow;
+              Logger.warn(
+                  " [execute] Warning while processing extension '${declaration.name}': $e");
+            }
           }
         }
-      }
+      });
       Logger.debug(" [execute] Finished pre-processing extensions");
 
       // Process all other declarations

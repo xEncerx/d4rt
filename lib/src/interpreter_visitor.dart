@@ -7,6 +7,7 @@ import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:d4rt/d4rt.dart';
 import 'package:d4rt/src/catch_clause_matcher.dart';
 import 'package:d4rt/src/invocation_deadline.dart';
+import 'package:d4rt/src/invocation_steps.dart';
 import 'package:d4rt/src/module_loader.dart';
 import 'package:d4rt/src/native_collection_types.dart';
 import 'package:d4rt/src/stdlib/core.dart';
@@ -245,16 +246,15 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   Duration? get timeout => deadline?.timeout;
 
   /// Maximum allowed execution steps (if any).
-  final int? maxSteps;
+  int? get maxSteps => _steps.maxSteps;
 
   /// True even when the timeout timer has not yet been serviced.
   bool get executionTimedOut => deadline?.expired ?? false;
 
-  /// Total number of execution steps performed so far.
-  int _stepCount = 0;
+  final InvocationSteps _steps;
 
-  /// Returns the current execution step count.
-  int get stepCount => _stepCount;
+  /// Returns the invocation's aggregate execution step count.
+  int get stepCount => _steps.count;
 
   /// Optional callback to intercept print output.
   final void Function(String)? onPrint;
@@ -268,11 +268,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     Uri? initiallibrary, // New: Optional URI for the initial source
     Duration? timeout,
     InvocationDeadline? deadline,
-    this.maxSteps,
+    int? maxSteps,
+    InvocationSteps? steps,
     this.onPrint,
   })  : currentLibrary = initiallibrary,
         deadline =
             deadline ?? (timeout == null ? null : InvocationDeadline(timeout)),
+        _steps = steps ?? InvocationSteps(maxSteps),
         environment = globalEnvironment,
         _localDeclarationNames = globalEnvironment.values.keys.toSet() {
     if (initiallibrary != null) {
@@ -368,17 +370,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   /// Throws [ExecutionLimitException] or [ExecutionTimeoutException] if limits are exceeded.
   void checkExecutionLimits() {
     checkDeadline();
-    if (maxSteps != null) {
-      _stepCount++;
-      if (_stepCount > maxSteps!) {
-        throw ExecutionLimitException(
-          'Execution step limit of $maxSteps steps exceeded.',
-          maxSteps: maxSteps,
-        );
-      }
-    } else if (timeout != null) {
-      _stepCount++;
-    }
+    _steps.charge(hasDeadline: deadline != null);
   }
 
   /// Create a minimal InterpretedClass for representing Invocation objects
@@ -3421,6 +3413,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             return e.value;
           } on RuntimeError catch (e) {
+            if (e is ExecutionLimitException ||
+                e is ExecutionTimeoutException) {
+              rethrow;
+            }
             throw RuntimeError(
                 "Error during named constructor '$methodName' for class '${targetValue.name}': ${e.message}");
           }
@@ -3519,6 +3515,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             }
             return _bridgeConstructorResult(bridgedClass, nativeObject);
           } on RuntimeError catch (e) {
+            if (e is ExecutionLimitException ||
+                e is ExecutionTimeoutException) {
+              rethrow;
+            }
             // Relaunch the adapter error
             throw RuntimeError(
                 "Error during bridged constructor '$methodName' for class '${bridgedClass.name}': ${e.message}");
@@ -3550,6 +3550,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
               return result;
             } on RuntimeError catch (e) {
+              if (e is ExecutionLimitException ||
+                  e is ExecutionTimeoutException) {
+                rethrow;
+              }
               throw RuntimeError(
                   "Error during static bridged method call '$methodName' on ${bridgedClass.name}: ${e.message}");
             } on UnsupportedError {
@@ -3768,6 +3772,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
           return _bridgeConstructorResult(bridgedClass, nativeObject);
         } on RuntimeError catch (e) {
+          if (e is ExecutionLimitException || e is ExecutionTimeoutException) {
+            rethrow;
+          }
           throw RuntimeError(
               "Error during default bridged constructor for '${bridgedClass.name}': ${e.message}");
         } catch (e, s) {
@@ -10767,6 +10774,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             try {
               value = variable.initializer!.accept<Object?>(this);
             } catch (e) {
+              if (e is ExecutionLimitException ||
+                  e is ExecutionTimeoutException) {
+                rethrow;
+              }
               throw RuntimeError(
                   "Error evaluating static initializer for extension field '$fieldName': $e");
             }

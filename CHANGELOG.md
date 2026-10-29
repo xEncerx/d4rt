@@ -5,6 +5,8 @@
 
 ### Fixed
 - Fix permission comparison and revocation, scoped access checks, and filesystem path matching.
+- Enforce dangerous Dart library import permissions even with URI queries or fragments, without treating custom/package URIs as standard libraries.
+- Share each invocation's step budget across imported top-level and class-like initialization, native callbacks, async continuations, and entry-function execution for source, compiled, and library entrypoints. Preserve independent reentrant limits and terminal deadlines.
 
 ## 0.4.1
 - Isolate recursive synchronous calls and synchronous generator bodies from their async caller's continuation state while preserving exactly-once awaited operands, receivers, and arguments. Avoid extra iteration and repeated effects when delegating generator yields.

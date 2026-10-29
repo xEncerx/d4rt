@@ -4,6 +4,7 @@ import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:d4rt/d4rt.dart';
 import 'package:d4rt/src/invocation_deadline.dart';
+import 'package:d4rt/src/invocation_steps.dart';
 import 'package:d4rt/src/stdlib/collection.dart';
 import 'package:d4rt/src/stdlib/convert.dart';
 import 'package:d4rt/src/stdlib/developer.dart';
@@ -57,7 +58,7 @@ class ModuleLoader {
   final List<Map<String, BridgedClass>> bridgedClases;
   final D4rt? d4rt; // Reference to D4rt instance for permission checking
   final InvocationDeadline? deadline;
-  final int? _rootMaxSteps;
+  final InvocationSteps steps;
   final void Function(String)? _rootOnPrint;
 
   ModuleLoader(this.globalEnvironment, this.sources,
@@ -66,9 +67,9 @@ class ModuleLoader {
       this.basePath,
       this.allowFileSystemImports = false,
       this.deadline,
-      int? rootMaxSteps,
+      int? maxSteps,
       void Function(String)? rootOnPrint})
-      : _rootMaxSteps = rootMaxSteps,
+      : steps = InvocationSteps(maxSteps),
         _rootOnPrint = rootOnPrint {
     Logger.debug(
         "[ModuleLoader] Initialized with ${sources.length} preloaded sources.");
@@ -80,16 +81,15 @@ class ModuleLoader {
   void _checkModulePermissions(Uri uri) {
     if (d4rt == null) return; // No permission checking if no D4rt instance
 
-    final uriString = uri.toString();
-
-    // Define dangerous modules that require permissions
-    if (uriString == 'dart:io') {
+    // Match the same scheme/path identity used by standard-library loading.
+    if (uri.scheme != 'dart') return;
+    if (uri.path == 'io') {
       if (!d4rt!
           .checkPermission({'type': 'filesystem', 'pathAgnostic': true})) {
         throw RuntimeError('Access to dart:io requires FilesystemPermission. '
             'Use d4rt.grant(FilesystemPermission.any) to allow filesystem access.');
       }
-    } else if (uriString == 'dart:isolate') {
+    } else if (uri.path == 'isolate') {
       if (!d4rt!.checkPermission({'type': 'isolate'})) {
         throw RuntimeError('Access to dart:isolate requires IsolatePermission. '
             'Use d4rt.grant(IsolatePermission.any) to allow isolate operations.');
@@ -387,7 +387,7 @@ class ModuleLoader {
         moduleLoader: this, // Pass the current loader
         initiallibrary: uri, // The URI of the module being interpreted
         deadline: deadline,
-        maxSteps: isRootModule ? _rootMaxSteps : null,
+        steps: steps,
         onPrint: isRootModule ? _rootOnPrint : null,
       );
 
