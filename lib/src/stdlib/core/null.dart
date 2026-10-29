@@ -6,12 +6,10 @@ class NullCore {
         name: 'Null',
         typeParameterCount: 0,
         methods: {
-          'toString': (visitor, target, positionalArgs, namedArgs) {
-            return (target as Null).toString();
-          },
+          'toString': (_, _, _, _) => null.toString(),
         },
         getters: {
-          'hashCode': (visitor, target) => (target as Null).hashCode,
+          'hashCode': (_, _) => null.hashCode,
         },
       );
 }

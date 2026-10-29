@@ -296,18 +296,18 @@ final class _InterpretedList<T> extends InterpretedInstance
   T firstWhere(bool Function(T) test, {T Function()? orElse}) =>
       _collectionMethod(
           'firstWhere', [test], () => super.firstWhere(test, orElse: orElse),
-          named: {if (orElse != null) 'orElse': orElse}) as T;
+          named: {'orElse': ?orElse}) as T;
   @override
   T lastWhere(bool Function(T) test, {T Function()? orElse}) =>
       _collectionMethod(
           'lastWhere', [test], () => super.lastWhere(test, orElse: orElse),
-          named: {if (orElse != null) 'orElse': orElse}) as T;
+          named: {'orElse': ?orElse}) as T;
   @override
   T singleWhere(bool Function(T) test,
           {T Function()? orElse}) =>
       _collectionMethod(
           'singleWhere', [test], () => super.singleWhere(test, orElse: orElse),
-          named: {if (orElse != null) 'orElse': orElse}) as T;
+          named: {'orElse': ?orElse}) as T;
   @override
   Iterable<T> skip(int count) =>
       (_collectionMethod('skip', [count], () => super.skip(count)) as Iterable)
@@ -422,7 +422,7 @@ final class _InterpretedMap<K, V> extends InterpretedInstance
     final method = klass.findInstanceMethod('update');
     if (method != null) {
       return _callOverride(method, [key, update],
-          {if (ifAbsent != null) 'ifAbsent': ifAbsent}) as V;
+          {'ifAbsent': ?ifAbsent}) as V;
     }
     return _source.update(key, (value) => update(value as V),
         ifAbsent: ifAbsent) as V;
