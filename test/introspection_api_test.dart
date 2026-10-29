@@ -12,6 +12,303 @@ void main() {
       d4rt = D4rt();
     });
 
+    group('Metadata-only analysis', () {
+      test('never realizes root or transitive declaration values', () {
+        var effects = 0;
+        final printed = <String>[];
+        d4rt = D4rt(onPrint: printed.add);
+        d4rt.registertopLevelFunction('touch', (visitor, args, named, types) {
+          effects++;
+          throw StateError('initializer executed');
+        });
+        d4rt.registerBridgedClass(
+          BridgedClass(
+            nativeType: Object,
+            name: 'NativeProbe',
+            constructors: {
+              '': (visitor, args, named) {
+                effects++;
+                return Object();
+              },
+            },
+            staticGetters: {
+              'value': (visitor) {
+                effects++;
+                return 1;
+              },
+            },
+            getters: {
+              'value': (visitor, target) {
+                effects++;
+                return 1;
+              },
+            },
+          ),
+          'package:fixture/native.dart',
+        );
+        final result = d4rt.analyze(
+          source: '''
+          import 'package:fixture/native.dart';
+          import 'package:fixture/dependency.dart';
+          export 'package:fixture/exported.dart';
+          final direct = touch();
+          final _ = touch();
+          int get computed => touch();
+          final getter = computed;
+          final nativeStatic = NativeProbe.value;
+          final nativeInstance = NativeProbe().value;
+          final callback = [1].map((value) => touch()).toList();
+          final lazy = [1].map((value) => touch());
+          class Sample<T> {
+            static final field = touch();
+            final instance = touch();
+            Sample() { touch(); }
+            Sample.named();
+            int get value => touch();
+          }
+          mixin Shared { static final field = touch(); void run() {} }
+          extension Extra on int { static final field = touch(); void run() {} }
+          extension on String { static final field = touch(); void run() {} }
+          extension type Wrapped(int value) {
+            static final field = touch();
+            void run() {}
+          }
+          enum Choice {
+            second(touch()), first(touch());
+            const Choice(int value);
+            static final marker = print('FORBIDDEN_EFFECT');
+            void run() {}
+          }
+          T transform<T extends NativeProbe>(T input,
+              int Function(int) callback, {int value = 1}) => input;
+        ''',
+          sources: {
+            'package:fixture/dependency.dart': '''
+            import 'package:fixture/transitive.dart';
+            final imported = touch();
+            class Dependency { static final field = touch(); }
+          ''',
+            'package:fixture/transitive.dart': 'final hiddenImport = touch();',
+            'package:fixture/exported.dart': '''
+            export 'package:fixture/transitive.dart';
+            enum Exported { one; static final field = touch(); }
+          ''',
+          },
+        );
+
+        expect(effects, 0);
+        expect(printed, isEmpty);
+        expect(result.contains('imported'), isTrue);
+        expect(result.contains('hiddenImport'), isTrue);
+        expect(result.contains('Exported'), isTrue);
+        expect(result.contains('_'), isFalse);
+        final choice = result.getByName('Choice') as EnumInfo;
+        expect(choice.values, ['second', 'first']);
+        expect(choice.methods, contains('run'));
+        final sample = result.getByName('Sample') as ClassInfo;
+        expect(sample.fields, containsAll(['field', 'instance']));
+        expect(sample.constructors, containsAll(['Sample', 'named']));
+        expect(sample.methods, contains('value'));
+        expect((result.getByName('Wrapped') as ExtensionInfo).onType, 'int');
+        final transform = result.getByName('transform') as FunctionInfo;
+        expect(transform.returnType, 'T');
+        expect(transform.parameterNames, ['input', 'callback']);
+        expect(transform.namedParameterNames, ['value']);
+        result.toMap();
+        result.toJson();
+        result.toString();
+        expect(effects, 0);
+        expect(printed, isEmpty);
+      });
+
+      test(
+        'keeps binding metadata through filtered diamond imports and exports',
+        () {
+          final result = d4rt.analyze(
+            source: '''
+          import 'package:fixture/left.dart' show shared, typed, Local;
+          import 'package:fixture/right.dart' hide hidden;
+          import 'package:fixture/leaf.dart' as leaf;
+          import 'package:fixture/prefixed.dart' as prefix;
+          export 'package:fixture/leaf.dart' show Exposed;
+          String Local = 'root';
+          int own = 1;
+          _Private localPrivate;
+          prefix.Model prefixedValue;
+        ''',
+            sources: {
+              'package:fixture/left.dart': '''
+            import 'package:fixture/leaf.dart';
+            export 'package:fixture/leaf.dart';
+            final left = 1;
+          ''',
+              'package:fixture/right.dart': '''
+            export 'package:fixture/leaf.dart';
+            final hidden = 1;
+          ''',
+              'package:fixture/leaf.dart': '''
+            class Local {}
+            class Exposed {}
+            class _Private {}
+            final shared = 1;
+            List<String> typed = [];
+          ''',
+              'package:fixture/prefixed.dart': 'class Model {}',
+            },
+          );
+          expect(
+            (result.getByName('Local') as VariableInfo).declaredType,
+            'String',
+          );
+          expect(
+            (result.getByName('typed') as VariableInfo).declaredType,
+            'List<String>',
+          );
+          expect(
+            (result.getByName('localPrivate') as VariableInfo).declaredType,
+            '_Private',
+          );
+          expect(
+            (result.getByName('prefixedValue') as VariableInfo).declaredType,
+            'prefix.Model',
+          );
+          expect(result.contains('Model'), isFalse);
+          expect(result.contains('Exposed'), isTrue);
+          expect(result.contains('_Private'), isFalse);
+          expect(result.contains('hidden'), isFalse);
+          expect(result.contains('left'), isFalse);
+          expect(
+            result.all.where((item) => item.name == 'shared'),
+            hasLength(1),
+          );
+        },
+      );
+
+      test(
+        'preserves active eval, instance and callback contexts on all exits',
+        () {
+          d4rt.registertopLevelFunction(
+            'activeKeep',
+            (visitor, args, named, types) =>
+                visitor.globalEnvironment.get('keep'),
+          );
+          d4rt.execute(
+            source: '''
+          int keep = 7;
+          int callback() => activeKeep();
+          class Sample { int read() => activeKeep(); }
+          main() => Sample();
+        ''',
+          );
+          final callback = d4rt.eval('callback') as InterpretedFunction;
+          void expectContext() {
+            expect(d4rt.eval('keep'), 7);
+            expect(d4rt.invoke('read', []), 7);
+            expect(d4rt.invokeInterpretedFunction(callback, []), 7);
+          }
+
+          d4rt.analyze(source: 'int keep = 99;');
+          expectContext();
+          expect(
+            () => d4rt.analyze(source: 'int broken = ;'),
+            throwsA(isA<SourceCodeException>()),
+          );
+          expectContext();
+          expect(
+            () => d4rt.analyze(
+              source: "import 'package:fixture/broken.dart';",
+              sources: {'package:fixture/broken.dart': 'int broken = ;'},
+            ),
+            throwsA(isA<SourceCodeException>()),
+          );
+          expectContext();
+          expect(
+            () =>
+                d4rt.analyze(source: "import 'package:fixture/missing.dart';"),
+            throwsA(isA<SourceCodeException>()),
+          );
+          expectContext();
+        },
+      );
+
+      test('does not establish execution eligibility', () {
+        d4rt.analyze(source: 'int keep = 7;');
+        expect(() => d4rt.eval('keep'), throwsA(isA<RuntimeError>()));
+      });
+
+      test('reports import, reexport, cycle and permission failures', () {
+        expect(
+          () => d4rt.analyze(source: "export 'package:fixture/missing.dart';"),
+          throwsA(isA<SourceCodeException>()),
+        );
+        expect(
+          () => d4rt.analyze(
+            source: "import 'package:fixture/a.dart';",
+            sources: {
+              'package:fixture/a.dart': "export 'package:fixture/b.dart';",
+              'package:fixture/b.dart': "import 'package:fixture/a.dart';",
+            },
+          ),
+          throwsA(isA<SourceCodeException>()),
+        );
+        expect(
+          () => d4rt.analyze(source: "import 'dart:io';"),
+          throwsA(isA<RuntimeError>()),
+        );
+      });
+
+      for (final mode in ['source', 'compiled', 'library']) {
+        test(
+          'analysis does not affect $mode initialization or lexical constants',
+          () {
+            var effects = 0;
+            d4rt.registertopLevelFunction('touch', (
+              visitor,
+              args,
+              named,
+              types,
+            ) {
+              effects++;
+              return 5;
+            });
+            const uri = 'package:fixture/dependency.dart';
+            d4rt.analyze(
+              source: "import '$uri';",
+              sources: {uri: 'final value = touch(); const seed = 99;'},
+            );
+            expect(effects, 0);
+            const source = '''
+            import 'package:fixture/dependency.dart';
+            int main() {
+              const seed = 100;
+              return value + readSeed();
+            }
+          ''';
+            final sources = {
+              uri: '''
+              const seed = 7;
+              final value = touch();
+              int readSeed() => seed;
+            ''',
+            };
+            final result = switch (mode) {
+              'source' => d4rt.execute(source: source, sources: sources),
+              'compiled' => d4rt.executeCompiled(
+                  d4rt.compile(source: source),
+                  sources: sources,
+                ),
+              _ => d4rt.execute(
+                  library: 'package:fixture/main.dart',
+                  sources: {'package:fixture/main.dart': source, ...sources},
+                ),
+            };
+            expect(result, 12);
+            expect(effects, 1);
+          },
+        );
+      }
+    });
+
     group('Function Analysis', () {
       test('should detect simple function declarations', () {
         final result = d4rt.analyze(source: '''
@@ -32,9 +329,9 @@ void main() {
         ''');
 
         final func = result.functions.firstWhere((f) => f.name == 'process');
-        // Note: Current implementation extracts parameter count but not names from analyze()
-        // This is a limitation that could be improved
-        expect(func.arity, greaterThanOrEqualTo(0));
+        expect(func.arity, 2);
+        expect(func.parameterNames, ['a', 'b']);
+        expect(func.namedParameterNames, ['c', 'd']);
       });
 
       test('should extract function return types', () {

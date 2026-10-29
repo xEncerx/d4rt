@@ -2,6 +2,7 @@ import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/error/error.dart';
+import 'package:d4rt/src/analysis_metadata.dart';
 import 'package:d4rt/src/bridge/bridge_registry_manager.dart';
 import 'package:d4rt/src/bridge/bridged_enum.dart';
 import 'package:d4rt/src/bridge/bridged_types.dart';
@@ -188,13 +189,16 @@ class D4rt {
     bridgeManager.clear();
   }
 
-  ModuleLoader _initModule(Map<String, String>? sources,
-      {String? basePath,
-      bool allowFileSystemImports = false,
-      InvocationDeadline? deadline,
-      int? maxSteps,
-      void Function(String)? onPrint,
-      bool configureLoadedRoot = false}) {
+  ModuleLoader _initModule(
+    Map<String, String>? sources, {
+    String? basePath,
+    bool allowFileSystemImports = false,
+    InvocationDeadline? deadline,
+    int? maxSteps,
+    void Function(String)? onPrint,
+    bool configureLoadedRoot = false,
+    bool metadataOnly = false,
+  }) {
     final moduleLoader = ModuleLoader(
       Environment(),
       sources ?? {},
@@ -206,16 +210,19 @@ class D4rt {
       deadline: deadline,
       maxSteps: maxSteps,
       rootOnPrint: configureLoadedRoot ? onPrint ?? this.onPrint : null,
+      metadataOnly: metadataOnly,
     );
-    _visitor = configureLoadedRoot
-        ? null
-        : InterpreterVisitor(
-            globalEnvironment: moduleLoader.globalEnvironment,
-            moduleLoader: moduleLoader,
-            deadline: deadline,
-            steps: moduleLoader.steps,
-            onPrint: onPrint ?? this.onPrint,
-          );
+    if (!metadataOnly) {
+      _visitor = configureLoadedRoot
+          ? null
+          : InterpreterVisitor(
+              globalEnvironment: moduleLoader.globalEnvironment,
+              moduleLoader: moduleLoader,
+              deadline: deadline,
+              steps: moduleLoader.steps,
+              onPrint: onPrint ?? this.onPrint,
+            );
+    }
     Stdlib(moduleLoader.globalEnvironment).register();
     for (final function in _nativeFunctions) {
       moduleLoader.globalEnvironment.defineFunction(function.name, function);
@@ -815,8 +822,9 @@ class D4rt {
   /// Analyzes the given source code and returns introspection information
   /// about all declared functions, classes, variables, enums, and extensions.
   ///
-  /// This method parses and processes the source code without executing any function,
-  /// allowing you to inspect what declarations are available.
+  /// This method loads declaration metadata without evaluating initializers,
+  /// constructors, getters, or function bodies. Runtime variable values and types
+  /// are unavailable. Existing execution and invocation contexts remain intact.
   ///
   /// [source] The source code to analyze.
   ///
@@ -851,54 +859,32 @@ class D4rt {
   }) {
     Logger.debug("[D4rt.analyze] Starting analysis...");
 
-    _moduleLoader = _initModule(sources);
-
-    final parseResult = parseString(
-      content: source,
-      throwIfDiagnostics: false,
-      featureSet: FeatureSet.latestLanguageVersion(),
-    );
-
-    final errors = parseResult.errors
-        .where((e) => e.diagnosticCode.severity == DiagnosticSeverity.ERROR)
-        .toList();
-    if (errors.isNotEmpty) {
-      final errorMessages = errors.map((e) {
-        final location = parseResult.lineInfo.getLocation(e.offset);
-        return "- ${e.message} (line ${location.lineNumber}, column ${location.columnNumber})";
-      }).join("\n");
-      throw SourceCodeException('Parsing errors:\n$errorMessages');
+    // Keep the complete analysis graph invocation-local. Neither success nor a
+    // parse/import failure may replace the active executable context.
+    var root = Uri.parse('d4rt-analysis:root');
+    var rootId = 0;
+    while (sources?.containsKey(root.toString()) ?? false) {
+      root = Uri.parse('d4rt-analysis:root${++rootId}');
     }
-
-    final compilationUnit = parseResult.unit;
-    final Environment executionEnvironment = _moduleLoader.globalEnvironment;
-
-    // Pass 1: Declaration
-    final declarationVisitor = DeclarationVisitor(executionEnvironment);
-    for (final declaration in compilationUnit.declarations) {
-      declaration.accept<void>(declarationVisitor);
-    }
-
-    // Pass 2: Process imports and interpret declarations (for variable values)
-    _visitor = InterpreterVisitor(
-        globalEnvironment: executionEnvironment, moduleLoader: _moduleLoader);
-
-    for (final directive in compilationUnit.directives) {
-      if (directive is ImportDirective) {
-        _visitor!.visitImportDirective(directive);
+    final loader = _initModule({
+      ...?sources,
+      root.toString(): source,
+    }, metadataOnly: true);
+    final module = loader.loadModule(root);
+    final metadata = Environment();
+    metadata.values.addAll(module.exportedEnvironment.values);
+    metadata.values.addAll(module.environment.values);
+    if (includeBuiltins) {
+      for (final entry in loader.globalEnvironment.values.entries) {
+        metadata.values.putIfAbsent(
+          entry.key,
+          () => AnalysisMetadata.describeBinding(entry.key, entry.value),
+        );
       }
     }
 
-    for (final declaration in compilationUnit.declarations) {
-      declaration.accept<Object?>(_visitor!);
-    }
-
     Logger.debug("[D4rt.analyze] Analysis complete.");
-    return IntrospectionBuilder.buildFromEnvironment(
-      executionEnvironment,
-      includeBuiltins: includeBuiltins,
-      compilationUnit: compilationUnit,
-    );
+    return AnalysisMetadata.buildResult(metadata);
   }
 
   /// Evaluates an expression or statement in the context of previously executed code.

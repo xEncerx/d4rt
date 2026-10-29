@@ -152,11 +152,15 @@ class VariableInfo extends DeclarationInfo {
   /// The declared type of the variable, if available.
   final String? declaredType;
 
-  /// The current runtime type of the value.
+  /// The current runtime type, or `unavailable` when not computed by analysis.
   final String valueType;
 
   /// The current value (may be the actual value or a string representation).
   final Object? value;
+
+  /// Whether [value] and [valueType] describe a computed runtime value.
+  /// Analysis leaves values unavailable, including literal null initializers.
+  final bool isValueAvailable;
 
   /// Whether the variable is final.
   final bool isFinal;
@@ -172,6 +176,7 @@ class VariableInfo extends DeclarationInfo {
     this.declaredType,
     required this.valueType,
     this.value,
+    this.isValueAvailable = true,
     this.isFinal = false,
     this.isConst = false,
     this.isLate = false,
@@ -191,7 +196,8 @@ class VariableInfo extends DeclarationInfo {
         'declarationType': declarationType,
         if (declaredType != null) 'declaredType': declaredType,
         'valueType': valueType,
-        'value': value?.toString(),
+        'isValueAvailable': isValueAvailable,
+        'value': isValueAvailable ? value?.toString() : null,
         'isFinal': isFinal,
         'isConst': isConst,
         'isLate': isLate,
@@ -200,7 +206,7 @@ class VariableInfo extends DeclarationInfo {
   @override
   String toString() {
     final typeStr = declaredType ?? valueType;
-    return '$declarationType $name: $typeStr = $value';
+    return '$declarationType $name: $typeStr = ${isValueAvailable ? value : '<unavailable>'}';
   }
 }
 

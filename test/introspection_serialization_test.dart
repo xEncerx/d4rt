@@ -51,5 +51,50 @@ void main() {
       expect(extNames, contains('StringExt'));
       expect(varNames, contains('appVersion'));
     });
+
+    test('analysis distinguishes unavailable values from computed null', () {
+      var effects = 0;
+      final d4rt = D4rt();
+      d4rt.registertopLevelFunction('touch', (visitor, args, named, types) {
+        effects++;
+        return null;
+      });
+      final result = d4rt.analyze(
+        source: '''
+          final Object? empty = null;
+          const int count = 42;
+          late String pending;
+          final nativeValue = touch();
+        ''',
+        includeBuiltins: true,
+      );
+      for (final name in ['empty', 'count', 'pending', 'nativeValue']) {
+        final variable = result.getByName(name) as VariableInfo;
+        expect(variable.isValueAvailable, isFalse);
+        expect(variable.value, isNull);
+        expect(variable.valueType, 'unavailable');
+        expect(variable.toMap()['isValueAvailable'], isFalse);
+        expect(jsonDecode(variable.toJson())['value'], isNull);
+        expect(variable.toString(), contains('<unavailable>'));
+      }
+      expect((result.getByName('empty') as VariableInfo).isFinal, isTrue);
+      expect((result.getByName('count') as VariableInfo).isConst, isTrue);
+      expect((result.getByName('pending') as VariableInfo).isLate, isTrue);
+      result.toMap();
+      result.toJson();
+      result.toString();
+      expect(effects, 0);
+
+      final executed = IntrospectionBuilder.buildFromEnvironment(
+        Environment()..define('empty', null),
+      ).variables.single;
+      expect(executed.isValueAvailable, isTrue);
+      expect(executed.valueType, 'Null');
+      expect(executed.toString(), 'var empty: Null = null');
+      const manual = VariableInfo(name: 'empty', valueType: 'Null');
+      expect(manual.isValueAvailable, isTrue);
+      expect(manual.toMap()['isValueAvailable'], isTrue);
+      expect(manual.toString(), 'var empty: Null = null');
+    });
   });
 }

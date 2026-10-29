@@ -3,6 +3,7 @@ import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/analysis_metadata.dart';
 import 'package:d4rt/src/invocation_deadline.dart';
 import 'package:d4rt/src/invocation_steps.dart';
 import 'package:d4rt/src/stdlib/collection.dart';
@@ -60,16 +61,22 @@ class ModuleLoader {
   final InvocationDeadline? deadline;
   final InvocationSteps steps;
   final void Function(String)? _rootOnPrint;
+  final bool _metadataOnly;
 
-  ModuleLoader(this.globalEnvironment, this.sources,
-      this.bridgedEnumDefinitions, this.bridgedClases,
-      {this.d4rt,
-      this.basePath,
-      this.allowFileSystemImports = false,
-      this.deadline,
-      int? maxSteps,
-      void Function(String)? rootOnPrint})
-      : steps = InvocationSteps(maxSteps),
+  ModuleLoader(
+    this.globalEnvironment,
+    this.sources,
+    this.bridgedEnumDefinitions,
+    this.bridgedClases, {
+    this.d4rt,
+    this.basePath,
+    this.allowFileSystemImports = false,
+    this.deadline,
+    int? maxSteps,
+    void Function(String)? rootOnPrint,
+    bool metadataOnly = false,
+  })  : _metadataOnly = metadataOnly,
+        steps = InvocationSteps(maxSteps),
         _rootOnPrint = rootOnPrint {
     Logger.debug(
         "[ModuleLoader] Initialized with ${sources.length} preloaded sources.");
@@ -292,29 +299,33 @@ class ModuleLoader {
           _ModuleEnvironment(enclosing: globalEnvironment);
       String sourceCode = _fetchModuleSource(uri, moduleEnvironment);
       CompilationUnit ast = _parseSource(uri, sourceCode);
-      final DeclarationVisitor declarationVisitor =
-          DeclarationVisitor(moduleEnvironment);
-      // Declare local names before imports while deferring function metadata
-      // until imported types are available.
-      for (var declaration in ast.declarations) {
-        if (declaration is FunctionDeclaration) {
-          final functionName = declaration.name.lexeme;
-          if (!moduleEnvironment.isDefinedLocally(functionName)) {
-            moduleEnvironment.define(functionName, null);
+      if (_metadataOnly) {
+        AnalysisMetadata.declare(ast, moduleEnvironment);
+      } else {
+        final DeclarationVisitor declarationVisitor =
+            DeclarationVisitor(moduleEnvironment);
+        // Declare local names before imports while deferring function metadata
+        // until imported types are available.
+        for (var declaration in ast.declarations) {
+          if (declaration is FunctionDeclaration) {
+            final functionName = declaration.name.lexeme;
+            if (!moduleEnvironment.isDefinedLocally(functionName)) {
+              moduleEnvironment.define(functionName, null);
+            }
+          } else {
+            declaration.accept(declarationVisitor);
           }
-        } else {
-          declaration.accept(declarationVisitor);
-        }
-        if (declaration is ExtensionDeclaration) {
-          final extensionName = declaration.name?.lexeme;
-          if (extensionName != null &&
-              !moduleEnvironment.isDefinedLocally(extensionName)) {
-            moduleEnvironment.define(extensionName, null);
-          }
-        } else if (declaration is ExtensionTypeDeclaration) {
-          final extensionTypeName = declaration.namePart.typeName.lexeme;
-          if (!moduleEnvironment.isDefinedLocally(extensionTypeName)) {
-            moduleEnvironment.define(extensionTypeName, null);
+          if (declaration is ExtensionDeclaration) {
+            final extensionName = declaration.name?.lexeme;
+            if (extensionName != null &&
+                !moduleEnvironment.isDefinedLocally(extensionName)) {
+              moduleEnvironment.define(extensionName, null);
+            }
+          } else if (declaration is ExtensionTypeDeclaration) {
+            final extensionTypeName = declaration.namePart.typeName.lexeme;
+            if (!moduleEnvironment.isDefinedLocally(extensionTypeName)) {
+              moduleEnvironment.define(extensionTypeName, null);
+            }
           }
         }
       }
@@ -378,6 +389,8 @@ class ModuleLoader {
       Logger.debug(
           "[ModuleLoader loadModule for $uri] Finished processing import directives.");
 
+      // Metadata mode shares loading and namespace rules, but never dispatches
+      // declarations to the executable visitor.
       // Populate local declarations only after imported types and values are
       // visible in the module environment.
       final isRootModule = _moduleLoadStack.length == 1;
@@ -393,93 +406,95 @@ class ModuleLoader {
 
       // Functions resolve against the post-import namespace and must be
       // callable before class-like declarations evaluate static initializers.
-      for (final declaration in ast.declarations) {
-        if (declaration is FunctionDeclaration) {
-          declaration.accept(moduleInterpreter);
-          final functionName = declaration.name.lexeme;
-          if (_isPublicName(functionName)) {
-            exportedEnvironment.defineFunction(functionName,
-                moduleEnvironment.values[functionName] as Callable);
+      if (!_metadataOnly) {
+        for (final declaration in ast.declarations) {
+          if (declaration is FunctionDeclaration) {
+            declaration.accept(moduleInterpreter);
+            final functionName = declaration.name.lexeme;
+            if (_isPublicName(functionName)) {
+              exportedEnvironment.defineFunction(functionName,
+                  moduleEnvironment.values[functionName] as Callable);
+            }
           }
         }
-      }
 
-      // Class-like declarations can execute static initializers, including
-      // native iteration that invokes interpreted callbacks.
-      moduleInterpreter.runCollectionInvocation(() {
-        Logger.debug(
-            "[ModuleLoader loadModule for $uri] Processing class/mixin declarations to populate constructors...");
-        // First process all mixin declarations to ensure they're fully initialized
-        // before classes try to use them
-        for (final declaration in ast.declarations) {
-          if (declaration is MixinDeclaration) {
-            declaration.accept(moduleInterpreter);
-          }
-        }
-        // Then process all class declarations now that mixins are ready
-        for (final declaration in ast.declarations) {
-          if (declaration is ClassDeclaration) {
-            declaration.accept(moduleInterpreter);
-          }
-        }
-        // Then populate enums, whose class-like members can depend on local
-        // classes and mixins.
-        for (final declaration in ast.declarations) {
-          if (declaration is EnumDeclaration) {
-            declaration.accept(moduleInterpreter);
-          }
-        }
-        // Finally process all extension declarations and extension types.
-        for (final declaration in ast.declarations) {
-          if (declaration is ExtensionDeclaration) {
-            declaration.accept<Object?>(moduleInterpreter);
-            final extensionName = declaration.name?.lexeme;
-            final extension = extensionName == null
-                ? moduleEnvironment._takeLastDeclaredUnnamedExtension()
-                : moduleEnvironment.values[extensionName];
-            if (extension is! InterpretedExtension) {
-              throw RuntimeError(
-                  "Extension '${declaration.name?.lexeme ?? '<unnamed>'}' was not populated.");
-            }
-            if (extensionName == null) {
-              exportedEnvironment.addUnnamedExtension(extension);
-            } else if (_isPublicName(extensionName)) {
-              exportedEnvironment.assign(extensionName, extension);
+        // Class-like declarations can execute static initializers, including
+        // native iteration that invokes interpreted callbacks.
+        moduleInterpreter.runCollectionInvocation(() {
+          Logger.debug(
+              "[ModuleLoader loadModule for $uri] Processing class/mixin declarations to populate constructors...");
+          // First process all mixin declarations to ensure they're fully initialized
+          // before classes try to use them
+          for (final declaration in ast.declarations) {
+            if (declaration is MixinDeclaration) {
+              declaration.accept(moduleInterpreter);
             }
           }
-        }
-        for (final declaration in ast.declarations) {
-          if (declaration is ExtensionTypeDeclaration) {
-            declaration.accept(moduleInterpreter);
-            final extensionTypeName = declaration.namePart.typeName.lexeme;
-            if (_isPublicName(extensionTypeName)) {
-              exportedEnvironment.assign(extensionTypeName,
-                  moduleEnvironment.values[extensionTypeName]);
+          // Then process all class declarations now that mixins are ready
+          for (final declaration in ast.declarations) {
+            if (declaration is ClassDeclaration) {
+              declaration.accept(moduleInterpreter);
             }
           }
-        }
-        Logger.debug(
-            "[ModuleLoader loadModule for $uri] Finished processing class/mixin/extension declarations.");
-      });
-
-      Logger.debug(
-          "[ModuleLoader loadModule for $uri] Executing InterpreterVisitor pass for initializers...");
-      moduleInterpreter.runCollectionInvocation(() {
-        for (final declaration in ast.declarations) {
-          if (declaration is TopLevelVariableDeclaration) {
-            declaration.accept(moduleInterpreter);
-            for (final variable in declaration.variables.variables) {
-              final variableName = variable.name.lexeme;
-              if (variableName != '_' && _isPublicName(variableName)) {
-                exportedEnvironment.assign(
-                    variableName, moduleEnvironment.values[variableName]);
+          // Then populate enums, whose class-like members can depend on local
+          // classes and mixins.
+          for (final declaration in ast.declarations) {
+            if (declaration is EnumDeclaration) {
+              declaration.accept(moduleInterpreter);
+            }
+          }
+          // Finally process all extension declarations and extension types.
+          for (final declaration in ast.declarations) {
+            if (declaration is ExtensionDeclaration) {
+              declaration.accept<Object?>(moduleInterpreter);
+              final extensionName = declaration.name?.lexeme;
+              final extension = extensionName == null
+                  ? moduleEnvironment._takeLastDeclaredUnnamedExtension()
+                  : moduleEnvironment.values[extensionName];
+              if (extension is! InterpretedExtension) {
+                throw RuntimeError(
+                    "Extension '${declaration.name?.lexeme ?? '<unnamed>'}' was not populated.");
+              }
+              if (extensionName == null) {
+                exportedEnvironment.addUnnamedExtension(extension);
+              } else if (_isPublicName(extensionName)) {
+                exportedEnvironment.assign(extensionName, extension);
               }
             }
           }
-        }
-      });
-      Logger.debug(
-          "[ModuleLoader loadModule for $uri] Finished InterpreterVisitor pass for initializers.");
+          for (final declaration in ast.declarations) {
+            if (declaration is ExtensionTypeDeclaration) {
+              declaration.accept(moduleInterpreter);
+              final extensionTypeName = declaration.namePart.typeName.lexeme;
+              if (_isPublicName(extensionTypeName)) {
+                exportedEnvironment.assign(extensionTypeName,
+                    moduleEnvironment.values[extensionTypeName]);
+              }
+            }
+          }
+          Logger.debug(
+              "[ModuleLoader loadModule for $uri] Finished processing class/mixin/extension declarations.");
+        });
+
+        Logger.debug(
+            "[ModuleLoader loadModule for $uri] Executing InterpreterVisitor pass for initializers...");
+        moduleInterpreter.runCollectionInvocation(() {
+          for (final declaration in ast.declarations) {
+            if (declaration is TopLevelVariableDeclaration) {
+              declaration.accept(moduleInterpreter);
+              for (final variable in declaration.variables.variables) {
+                final variableName = variable.name.lexeme;
+                if (variableName != '_' && _isPublicName(variableName)) {
+                  exportedEnvironment.assign(
+                      variableName, moduleEnvironment.values[variableName]);
+                }
+              }
+            }
+          }
+        });
+        Logger.debug(
+            "[ModuleLoader loadModule for $uri] Finished InterpreterVisitor pass for initializers.");
+      }
 
       // Process the export directives of this module to populate its exportedEnvironment
       Logger.debug(
@@ -628,16 +643,34 @@ class ModuleLoader {
       final definition = registration[uriString];
       if (definition == null) continue;
       registered = true;
-      namespace.defineBridge(definition);
-      globalEnvironment.registerBridgedClassDiscovery(definition);
+      if (_metadataOnly) {
+        namespace.define(
+          definition.name,
+          AnalysisMetadata.describeBinding(definition.name, definition),
+        );
+      } else {
+        namespace.defineBridge(definition);
+        globalEnvironment.registerBridgedClassDiscovery(definition);
+      }
     }
     for (final registration in bridgedEnumDefinitions) {
       final definition = registration[uriString];
       if (definition == null) continue;
       registered = true;
-      final bridgedEnum = definition.buildBridgedEnum(environment: namespace);
-      namespace.defineBridgedEnum(bridgedEnum);
-      globalEnvironment.registerBridgedEnumDiscovery(bridgedEnum);
+      if (_metadataOnly) {
+        namespace.define(
+          definition.name,
+          EnumInfo(
+            name: definition.name,
+            values: [for (final value in definition.values) value.name],
+            methods: definition.methods.keys.toList(),
+          ),
+        );
+      } else {
+        final bridgedEnum = definition.buildBridgedEnum(environment: namespace);
+        namespace.defineBridgedEnum(bridgedEnum);
+        globalEnvironment.registerBridgedEnumDiscovery(bridgedEnum);
+      }
     }
     if (registered) return '';
 

@@ -131,25 +131,30 @@ Note that it is possible to pass `InterpretedFunction` as argumento to `invokeIn
 
 ### Code Introspection
 
-Analyze Dart code structure without execution:
+Analyze declarations without running initializers, constructors, getters, or function bodies.
+Imported sources can be supplied through `sources`. Analysis does not change an existing
+execution context.
 
 ```dart
-final interpreter = D4rt();
+import 'package:d4rt/d4rt.dart';
 
-final analysis = interpreter.analyze('''
-  class User {
-    String name;
-    int age;
-    User(this.name, this.age);
-  }
-  
-  int getAge(User user) => user.age;
-''');
+void main() {
+  final analysis = D4rt().analyze(source: '''
+    int count = 42;
+    int add(int left, int right) => left + right;
+  ''');
 
-// Access metadata about functions, classes, variables, etc.
-print(analysis.functions['getAge']?.parameters);
-print(analysis.classes['User']?.constructors);
+  print(analysis.functions.first.parameterNames); // [left, right]
+  final count = analysis.variables.first;
+  print(count.declaredType); // int
+  print(count.isValueAvailable); // false
+}
 ```
+
+Analysis reports declared types, not inferred runtime values. Variable values and
+runtime types remain unavailable (`isValueAvailable == false`, `value == null`,
+`valueType == 'unavailable'`), even for literal initializers. `toMap()` and `toJson()`
+include the availability flag; text output displays `<unavailable>`.
 
 ### Dynamic Code Evaluation
 
