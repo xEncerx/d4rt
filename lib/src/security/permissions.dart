@@ -29,6 +29,8 @@ library;
 
 import 'package:path/path.dart' as p;
 
+import 'network_host.dart';
+
 final _drivePrefix = RegExp(r'^[A-Za-z]:');
 
 // Normalize lexically, without requiring the target to exist or resolving links.
@@ -205,7 +207,7 @@ class NetworkPermission extends Permission {
     this._connect,
     this._listen,
     this._bind,
-  ) : _host = host?.toLowerCase();
+  ) : _host = host == null ? null : normalizeNetworkHost(host);
 
   /// Allows connecting to any host/port.
   static final NetworkPermission connect = NetworkPermission._(
@@ -309,7 +311,8 @@ class NetworkPermission extends Permission {
     }
 
     // Check host/port restrictions
-    if (_host != null && (opHost is! String || opHost.toLowerCase() != _host)) {
+    if (_host != null &&
+        (opHost is! String || normalizeNetworkHost(opHost) != _host)) {
       return false;
     }
     if (_port != null && (opPort is! int || opPort != _port)) {

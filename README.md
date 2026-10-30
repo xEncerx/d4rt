@@ -278,6 +278,8 @@ void main() {
   - `NetworkPermission.connect` - Allow connections to any host/port
   - `NetworkPermission.connectTo('api.example.com')` - Allow connections to a specific host
   - `NetworkPermission.connectToPort('api.example.com', 443)` - Restrict both host and port
+  - `NetworkPermission.listen` - Allow TCP/HTTP listeners on any port
+  - `NetworkPermission.bind` - Allow UDP binding (not sending)
   - `NetworkPermission.listenOn(8080)` - Allow listening on a specific port
 
 - **`ProcessRunPermission`**: Controls process execution
@@ -305,6 +307,18 @@ final hasReadAccess =
     interpreter.hasPermission(FilesystemPermission.readPath('data'));
 interpreter.revoke(FilesystemPermission.readPath('data'));
 ```
+
+### Scoped Network Access
+
+Grant access to a specific endpoint:
+
+```dart
+final interpreter = D4rt()
+  ..grant(FilesystemPermission.any)
+  ..grant(NetworkPermission.connectToPort('example.com', 443));
+```
+
+Use `response.redirect()` to follow HTTP redirects with scoped permissions.
 
 ### Filesystem Module Imports
 

@@ -460,6 +460,152 @@ void main() {
         isFalse,
       );
     });
+
+    test(
+      'literal IPv6 scopes normalize and revoke by value without DNS aliases',
+      () {
+        final permission = NetworkPermission.connectToPort(
+          '[0:0:0:0:0:0:0:1]',
+          80,
+        );
+        final interpreter = D4rt()..grant(permission);
+        expect(
+          interpreter.checkPermission({
+            'type': 'network',
+            'connect': true,
+            'host': '::1',
+            'port': 80,
+          }),
+          true,
+        );
+        interpreter.revoke(NetworkPermission.connectToPort('::1', 80));
+        expect(
+          interpreter.checkPermission({
+            'type': 'network',
+            'connect': true,
+            'host': '::1',
+            'port': 80,
+          }),
+          false,
+        );
+        expect(
+          allows(NetworkPermission.connectTo('localhost'), {
+            'type': 'network',
+            'connect': true,
+            'host': '127.0.0.1',
+          }),
+          false,
+        );
+        expect(
+          allows(NetworkPermission.listenOn(0), {
+            'type': 'network',
+            'listen': true,
+            'port': 12345,
+          }),
+          false,
+        );
+        expect(
+          allows(NetworkPermission.connectToPort('239.1.2.3', 80), {
+            'type': 'network',
+            'connect': true,
+            'host': '239.1.2.3',
+          }),
+          false,
+        );
+      },
+    );
+
+    test(
+      'IPv6 zones stay distinct across equality, matching and revocation',
+      () {
+        final first = NetworkPermission.connectToPort('fe80::1%1', 80);
+        final equivalent = NetworkPermission.connectToPort(
+          '[FE80:0:0:0:0:0:0:1%1]',
+          80,
+        );
+        final other = NetworkPermission.connectToPort('fe80::1%2', 80);
+        expect(first, equivalent);
+        expect(first, isNot(other));
+        final interpreter = D4rt()
+          ..grant(first)
+          ..grant(other);
+        for (final address in [
+          'fe80::1%1',
+          io.InternetAddress('FE80:0:0:0:0:0:0:1%1').address,
+        ]) {
+          expect(
+            interpreter.checkPermission({
+              'type': 'network',
+              'connect': true,
+              'host': address,
+              'port': 80,
+            }),
+            true,
+          );
+        }
+        interpreter.revoke(equivalent);
+        expect(interpreter.hasPermission(other), true);
+        expect(
+          interpreter.checkPermission({
+            'type': 'network',
+            'connect': true,
+            'host': io.InternetAddress('fe80::1%1').address,
+            'port': 80,
+          }),
+          false,
+        );
+        expect(
+          interpreter.checkPermission({
+            'type': 'network',
+            'connect': true,
+            'host': 'fe80::1%2',
+            'port': 80,
+          }),
+          true,
+        );
+        expect(
+          allows(first, {
+            'type': 'network',
+            'connect': true,
+            'host': 'fe80::1%2',
+            'port': 80,
+          }),
+          false,
+        );
+        expect(
+          allows(first, {
+            'type': 'network',
+            'connect': true,
+            'host': 'fe80::1',
+            'port': 80,
+          }),
+          false,
+        );
+      },
+    );
+
+    test(
+      'permission and native address identities do not decode String transport escapes',
+      () {
+        final raw = NetworkPermission.connectTo('fe80::1%252');
+        final decoded = NetworkPermission.connectTo('fe80::1%2');
+        expect(raw, isNot(decoded));
+        expect(
+          raw,
+          NetworkPermission.connectTo(
+            io.InternetAddress('fe80::1%252').address,
+          ),
+        );
+        final interpreter = D4rt()
+          ..grant(raw)
+          ..grant(decoded);
+        interpreter.revoke(
+          NetworkPermission.connectTo('FE80:0:0:0:0:0:0:1%252'),
+        );
+        expect(interpreter.hasPermission(raw), false);
+        expect(interpreter.hasPermission(decoded), true);
+      },
+    );
   });
 
   group('Process scopes', () {
