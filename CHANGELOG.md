@@ -3,6 +3,8 @@
 ### Changed
 - Require Dart SDK 3.11 or later.
 - Expose value availability in introspection metadata.
+- Require explicit native process execution, signal, and developer-tools grants.
+- Separate native isolate spawning/control from communication; require code-evaluation authority for spawnUri.
 
 ### Fixed
 - Fix permission comparison and revocation, scoped access checks, and filesystem path matching.
@@ -12,6 +14,9 @@
 - Enforce network permissions for HTTP, sockets, UDP, DNS, and interface access.
 - Prevent unauthorized HTTP redirects and proxy connections.
 - Apply revoked network permissions to new operations.
+- Recheck native capability operations and developer extension callbacks after revocation.
+- Authorize and launch processes with the same executable and arguments.
+- Enforce shell authority for Windows batch launches and communication authority for converter and generator stream consumption.
 
 ## 0.4.1
 - Isolate recursive synchronous calls and synchronous generator bodies from their async caller's continuation state while preserving exactly-once awaited operands, receivers, and arguments. Avoid extra iteration and repeated effects when delegating generator yields.

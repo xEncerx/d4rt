@@ -2,6 +2,13 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
 import 'package:d4rt/d4rt.dart';
+import 'package:path/path.dart' as p;
+import '../native_permissions.dart';
+
+// Windows can dispatch batch executables through cmd.exe even with the native
+// runInShell option disabled. Include DOS trailing-dot/space spelling variants.
+final _windowsBatchCommand =
+    RegExp(r'\.(?:bat|cmd)[ .]*"?[ ]*$', caseSensitive: false);
 
 /// Bridged implementation of dart:io Process functionality
 class ProcessIo {
@@ -10,29 +17,19 @@ class ProcessIo {
         name: 'Process',
         typeParameterCount: 0,
         staticMethods: {
-          'start': (visitor, positionalArgs, namedArgs) {
-            _checkProcessPermission(visitor,
-                positionalArgs.isNotEmpty ? positionalArgs[0].toString() : '');
-            return _start(positionalArgs, namedArgs);
-          },
-          'run': (visitor, positionalArgs, namedArgs) {
-            _checkProcessPermission(visitor,
-                positionalArgs.isNotEmpty ? positionalArgs[0].toString() : '');
-            return _run(positionalArgs, namedArgs);
-          },
-          'runSync': (visitor, positionalArgs, namedArgs) {
-            _checkProcessPermission(visitor,
-                positionalArgs.isNotEmpty ? positionalArgs[0].toString() : '');
-            return _runSync(positionalArgs, namedArgs);
-          },
+          'start': _start,
+          'run': _run,
+          'runSync': _runSync,
           'killPid': (visitor, positionalArgs, namedArgs) {
-            _checkProcessPermission(visitor, 'kill');
+            _checkSignals(visitor);
             return _killPid(positionalArgs, namedArgs);
           },
         },
         methods: {
-          'kill': (visitor, target, positionalArgs, namedArgs) =>
-              _kill(target, positionalArgs, namedArgs),
+          'kill': (visitor, target, positionalArgs, namedArgs) {
+            _checkSignals(visitor);
+            return _kill(target, positionalArgs, namedArgs);
+          },
         },
         getters: {
           'exitCode': (visitor, target) => (target as Process).exitCode,
@@ -44,101 +41,62 @@ class ProcessIo {
       );
 
   static Future<Process> _start(
-      List<dynamic> positionalArgs, Map<String, dynamic> namedArgs) async {
-    if (positionalArgs.isEmpty) {
-      throw ArgumentError('Process.start requires executable path');
-    }
-
-    final executable = positionalArgs[0].toString();
-    final arguments = positionalArgs.length > 1
-        ? (positionalArgs[1] as List).map((e) => e.toString()).toList()
-        : <String>[];
-
-    final workingDirectory = namedArgs['workingDirectory']?.toString();
-    final environment = namedArgs['environment'] as Map?;
-    final includeParentEnvironment =
-        namedArgs['includeParentEnvironment'] as bool? ?? true;
-    final runInShell = namedArgs['runInShell'] as bool? ?? false;
-    final mode = namedArgs['mode'] ?? ProcessStartMode.normal;
-
-    return await Process.start(
-      executable,
-      arguments,
-      workingDirectory: workingDirectory,
-      environment: environment?.cast(),
-      includeParentEnvironment: includeParentEnvironment,
-      runInShell: runInShell,
-      mode: mode,
+    InterpreterVisitor visitor,
+    List<dynamic> positionalArgs,
+    Map<String, dynamic> namedArgs,
+  ) {
+    final input = _ProcessInput(positionalArgs, namedArgs);
+    input.authorize(visitor);
+    return Process.start(
+      input.executable,
+      input.arguments,
+      workingDirectory: input.workingDirectory,
+      environment: input.environment,
+      includeParentEnvironment: input.includeParentEnvironment,
+      runInShell: input.runInShell,
+      mode: namedArgs['mode'] as ProcessStartMode? ?? ProcessStartMode.normal,
     );
   }
 
   static Future<ProcessResult> _run(
-      List<dynamic> positionalArgs, Map<String, dynamic> namedArgs) async {
-    if (positionalArgs.isEmpty) {
-      throw ArgumentError('Process.run requires executable path');
-    }
-
-    final executable = positionalArgs[0].toString();
-    final arguments = positionalArgs.length > 1
-        ? (positionalArgs[1] as List).map((e) => e.toString()).toList()
-        : <String>[];
-
-    final workingDirectory = namedArgs['workingDirectory']?.toString();
-    final environment = namedArgs['environment'] as Map?;
-    final includeParentEnvironment =
-        namedArgs['includeParentEnvironment'] as bool? ?? true;
-    final runInShell = namedArgs['runInShell'] as bool? ?? false;
-    final stdoutEncoding =
-        namedArgs['stdoutEncoding'] as Encoding? ?? systemEncoding;
-    final stderrEncoding =
-        namedArgs['stderrEncoding'] as Encoding? ?? systemEncoding;
-
-    return await Process.run(
-      executable,
-      arguments,
-      workingDirectory: workingDirectory,
-      environment: environment?.cast(),
-      includeParentEnvironment: includeParentEnvironment,
-      runInShell: runInShell,
-      stdoutEncoding: stdoutEncoding,
-      stderrEncoding: stderrEncoding,
+    InterpreterVisitor visitor,
+    List<dynamic> positionalArgs,
+    Map<String, dynamic> namedArgs,
+  ) {
+    final input = _ProcessInput(positionalArgs, namedArgs);
+    input.authorize(visitor);
+    return Process.run(
+      input.executable,
+      input.arguments,
+      workingDirectory: input.workingDirectory,
+      environment: input.environment,
+      includeParentEnvironment: input.includeParentEnvironment,
+      runInShell: input.runInShell,
+      stdoutEncoding:
+          namedArgs['stdoutEncoding'] as Encoding? ?? systemEncoding,
+      stderrEncoding:
+          namedArgs['stderrEncoding'] as Encoding? ?? systemEncoding,
     );
   }
 
   static ProcessResult _runSync(
-      List<dynamic> positionalArgs, Map<String, dynamic> namedArgs) {
-    if (positionalArgs.isEmpty) {
-      throw ArgumentError('Process.runSync requires executable path');
-    }
-
-    // Check process permission
-    final executable = positionalArgs[0].toString();
-    final arguments = positionalArgs.length > 1
-        ? (positionalArgs[1] as List).map((e) => e.toString()).toList()
-        : <String>[];
-
-    // Note: We can't get visitor here, so we need to modify the approach
-    // The permission check should be done in the static methods wrapper
-
-    final workingDirectory = namedArgs['workingDirectory']?.toString();
-    final environment = namedArgs['environment'] as Map?;
-    final includeParentEnvironment =
-        namedArgs['includeParentEnvironment'] as bool? ?? true;
-    final runInShell = namedArgs['runInShell'] as bool? ?? false;
-    final stdoutEncoding =
-        namedArgs['stdoutEncoding'] as Encoding? ?? systemEncoding;
-    final stderrEncoding =
-        namedArgs['stderrEncoding'] as Encoding? ?? systemEncoding;
-
+    InterpreterVisitor visitor,
+    List<dynamic> positionalArgs,
+    Map<String, dynamic> namedArgs,
+  ) {
+    final input = _ProcessInput(positionalArgs, namedArgs);
+    input.authorize(visitor);
     return Process.runSync(
-      executable,
-      arguments,
-      workingDirectory: workingDirectory,
-      environment: environment?.cast(),
-      includeParentEnvironment: includeParentEnvironment,
-      runInShell: runInShell,
-      stdoutEncoding: stdoutEncoding,
-      stderrEncoding: stderrEncoding,
+      input.executable,
+      input.arguments,
+      workingDirectory: input.workingDirectory,
+      environment: input.environment,
+      includeParentEnvironment: input.includeParentEnvironment,
+      runInShell: input.runInShell,
+      stdoutEncoding:
+          namedArgs['stdoutEncoding'] as Encoding? ?? systemEncoding,
+      stderrEncoding:
+          namedArgs['stderrEncoding'] as Encoding? ?? systemEncoding,
     );
   }
 
@@ -149,7 +107,9 @@ class ProcessIo {
     }
 
     final pid = positionalArgs[0] as int;
-    final signal = namedArgs['signal'] ?? ProcessSignal.sigterm;
+    final signal = positionalArgs.length > 1
+        ? positionalArgs[1] as ProcessSignal
+        : namedArgs['signal'] as ProcessSignal? ?? ProcessSignal.sigterm;
 
     return Process.killPid(pid, signal);
   }
@@ -160,21 +120,74 @@ class ProcessIo {
       throw ArgumentError('Invalid process instance');
     }
 
-    final signal = namedArgs['signal'] ?? ProcessSignal.sigterm;
+    final signal = positionalArgs.isNotEmpty
+        ? positionalArgs[0] as ProcessSignal
+        : namedArgs['signal'] as ProcessSignal? ?? ProcessSignal.sigterm;
     return instance.kill(signal);
   }
 
-  /// Helper method to check if ProcessRunPermission is granted
-  static void _checkProcessPermission(
-      InterpreterVisitor visitor, String command) {
-    final d4rt = visitor.moduleLoader.d4rt;
-    if (d4rt == null) return;
+  static void _checkSignals(InterpreterVisitor? visitor) =>
+      requireNativePermission(
+          visitor,
+          {
+            'type': 'dangerous',
+            'operation': 'process signals',
+          },
+          'DangerousPermission.processSignals');
+}
 
-    // Check for ProcessRunPermission
-    if (!d4rt.checkPermission({'type': 'process'})) {
-      throw RuntimeError('Process execution requires ProcessRunPermission. '
-          'Use d4rt.grant(ProcessRunPermission.any) to allow process execution.');
+// One immutable input snapshot owns both authorization and native launch.
+class _ProcessInput {
+  late final String executable;
+  late final List<String> arguments;
+  late final String workingDirectory;
+  late final Map<String, String>? environment;
+  late final bool includeParentEnvironment;
+  late final bool runInShell;
+
+  _ProcessInput(List<dynamic> positional, Map<String, dynamic> named) {
+    if (positional.isEmpty) {
+      throw ArgumentError('Process execution requires executable path');
     }
+    final command = positional[0].toString();
+    arguments = positional.length > 1
+        ? (positional[1] as List).map((arg) => arg.toString()).toList()
+        : <String>[];
+    final directory = named['workingDirectory']?.toString();
+    environment = (named['environment'] as Map?)?.cast<String, String>();
+    includeParentEnvironment =
+        named['includeParentEnvironment'] as bool? ?? true;
+    runInShell = named['runInShell'] as bool? ?? false;
+    // Freeze cwd as well as strings. Relative qualified executables resolve
+    // against the effective child cwd on every host; bare names remain bare.
+    workingDirectory = p.normalize(
+      p.absolute(directory ?? Directory.current.path),
+    );
+    executable = ProcessRunPermission.resolveExecutable(
+      command,
+      workingDirectory,
+    );
+  }
+
+  void authorize(InterpreterVisitor? visitor) {
+    final usesShell = runInShell ||
+        (Platform.isWindows && _windowsBatchCommand.hasMatch(executable));
+    requireNativePermission(
+        visitor,
+        {
+          'type': 'process',
+          'command': executable,
+          'args': arguments,
+          'shell': usesShell,
+        },
+        'ProcessRunPermission${usesShell ? ".any for shell execution" : ""}');
+    requireNativePermission(
+        visitor,
+        {
+          'type': 'dangerous',
+          'operation': 'process execution',
+        },
+        'DangerousPermission.processExecution');
   }
 }
 
@@ -237,8 +250,10 @@ class ProcessSignalIo {
           'hashCode': (visitor, target) => (target as ProcessSignal).hashCode,
         },
         methods: {
-          'watch': (visitor, target, positionalArgs, namedArgs) =>
-              (target as ProcessSignal).watch(),
+          'watch': (visitor, target, positionalArgs, namedArgs) {
+            ProcessIo._checkSignals(visitor);
+            return (target as ProcessSignal).watch();
+          },
           'toString': (visitor, target, positionalArgs, namedArgs) =>
               (target as ProcessSignal).toString(),
         },

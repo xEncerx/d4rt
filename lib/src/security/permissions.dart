@@ -18,6 +18,7 @@
 ///
 /// // Grant process execution
 /// interpreter.grant(ProcessRunPermission.any);
+/// interpreter.grant(DangerousPermission.processExecution);
 ///
 /// // Execute code with restricted permissions
 /// final result = interpreter.execute(source: '''
@@ -357,6 +358,16 @@ class ProcessRunPermission extends Permission {
     List<String> args,
   ) => ProcessRunPermission._(command, args);
 
+  /// Whether this grant permits arbitrary executable and shell command input.
+  bool get isUnrestricted => _command == null && _allowedArgs == null;
+
+  /// Resolves a path-qualified executable against the effective child cwd.
+  /// Bare names stay bare and therefore cannot acquire path-scoped authority.
+  static String resolveExecutable(String command, String workingDirectory) =>
+      _isPathQualifiedCommand(command)
+      ? p.normalize(p.absolute(p.join(workingDirectory, command)))
+      : command;
+
   static bool _sameArgs(List<String> expected, List<dynamic> actual) {
     if (actual.length != expected.length) return false;
     for (var i = 0; i < expected.length; i++) {
@@ -401,6 +412,7 @@ class ProcessRunPermission extends Permission {
     final opArgs = operation['args'];
 
     if (opType != 'process') return false;
+    if (operation['shell'] == true && !isUnrestricted) return false;
 
     // Check command restrictions
     if (_command != null) {
@@ -438,7 +450,7 @@ class IsolatePermission extends Permission {
 
   IsolatePermission._(this._spawn, this._communicate);
 
-  /// Allows spawning new isolates.
+  /// Allows spawning and controlling native isolates (not communication).
   static final IsolatePermission spawn = IsolatePermission._(true, false);
 
   /// Allows communicating with isolates (send/receive messages).
@@ -499,6 +511,21 @@ class DangerousPermission extends Permission {
   /// Allows loading and executing native plugins/libraries.
   static final DangerousPermission nativePlugins = DangerousPermission._(
     'native plugins',
+  );
+
+  /// Allows native child execution outside the interpreter sandbox.
+  static final DangerousPermission processExecution = DangerousPermission._(
+    'process execution',
+  );
+
+  /// Allows watching native signals and terminating processes, including PIDs.
+  static final DangerousPermission processSignals = DangerousPermission._(
+    'process signals',
+  );
+
+  /// Allows VM developer tooling, including registered extension invocation.
+  static final DangerousPermission developerTools = DangerousPermission._(
+    'developer tools',
   );
 
   /// Allows all dangerous operations.

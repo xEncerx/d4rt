@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:d4rt/d4rt.dart';
+import '../native_permissions.dart';
 
 /// Thrown when an isolate cannot be created.
 class IsolateSpawnExceptionIsolate {
@@ -43,6 +44,7 @@ class IsolateIsolate {
         isSubtypeOfFunc: (value) => value is Isolate,
         constructors: {
           '': (visitor, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true, communicate: true);
             final controlPort = positionalArgs[0] as SendPort;
             final pauseCapability =
                 namedArgs.get<Capability?>('pauseCapability');
@@ -55,8 +57,14 @@ class IsolateIsolate {
         },
         staticMethods: {
           'run': (visitor, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true);
             final computation = positionalArgs[0];
             final debugName = namedArgs.get<String?>('debugName');
+            // Native computations must not capture the interpreter in the
+            // closure sent to the child isolate.
+            if (computation is FutureOr<Object?> Function()) {
+              return Isolate.run(computation, debugName: debugName);
+            }
             return Isolate.run(() {
               if (computation is InterpretedFunction) {
                 return computation.call(visitor, []);
@@ -70,6 +78,7 @@ class IsolateIsolate {
             }, debugName: debugName);
           },
           'spawn': (visitor, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true);
             final entryPoint = positionalArgs[0];
             positionalArgs[1]; // message (ignored in this stub implementation)
             if (entryPoint is! InterpretedFunction &&
@@ -81,8 +90,21 @@ class IsolateIsolate {
             throw RuntimeError('Isolate.spawn not fully implemented in D4rt');
           },
           'spawnUri': (visitor, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true);
+            requireNativePermission(
+                visitor,
+                {
+                  'type': 'dangerous',
+                  'operation': 'code evaluation',
+                },
+                'DangerousPermission.codeEvaluation');
+            if (positionalArgs.get<Object?>(2) != null ||
+                namedArgs['onExit'] != null ||
+                namedArgs['onError'] != null) {
+              requireIsolatePermission(visitor, communicate: true);
+            }
             final uri = positionalArgs[0] as Uri;
-            final args = positionalArgs[1] as List<String>;
+            final args = List<String>.from(positionalArgs[1] as List);
             final message = positionalArgs[2];
             final paused = namedArgs.get<bool?>('paused') ?? false;
             final onExit = namedArgs.get<SendPort?>('onExit');
@@ -115,6 +137,11 @@ class IsolateIsolate {
           'exit': (visitor, positionalArgs, namedArgs) {
             final finalMessagePort = positionalArgs.get<SendPort?>(0);
             final message = positionalArgs.get<Object?>(1);
+            requireIsolatePermission(
+              visitor,
+              control: true,
+              communicate: finalMessagePort != null,
+            );
             Isolate.exit(finalMessagePort, message);
           },
           'resolvePackageUri': (visitor, positionalArgs, namedArgs) {
@@ -127,34 +154,50 @@ class IsolateIsolate {
           },
         },
         staticGetters: {
-          'current': (visitor) => Isolate.current,
+          'current': (visitor) {
+            requireIsolatePermission(visitor, control: true);
+            return Isolate.current;
+          },
           'packageConfig': (visitor) => Isolate.packageConfig,
           'packageConfigSync': (visitor) => Isolate.packageConfigSync,
           'immediate': (visitor) => Isolate.immediate,
           'beforeNextEvent': (visitor) => Isolate.beforeNextEvent,
         },
         getters: {
-          'controlPort': (visitor, target) => (target as Isolate).controlPort,
-          'pauseCapability': (visitor, target) =>
-              (target as Isolate).pauseCapability,
-          'terminateCapability': (visitor, target) =>
-              (target as Isolate).terminateCapability,
+          'controlPort': (visitor, target) {
+            requireIsolatePermission(visitor, control: true, communicate: true);
+            return (target as Isolate).controlPort;
+          },
+          'pauseCapability': (visitor, target) {
+            requireIsolatePermission(visitor, control: true);
+            return (target as Isolate).pauseCapability;
+          },
+          'terminateCapability': (visitor, target) {
+            requireIsolatePermission(visitor, control: true);
+            return (target as Isolate).terminateCapability;
+          },
           'debugName': (visitor, target) => (target as Isolate).debugName,
-          'errors': (visitor, target) => (target as Isolate).errors,
+          'errors': (visitor, target) {
+            requireIsolatePermission(visitor, control: true, communicate: true);
+            return (target as Isolate).errors;
+          },
           'hashCode': (visitor, target) => (target as Isolate).hashCode,
           'runtimeType': (visitor, target) => (target as Isolate).runtimeType,
         },
         methods: {
           'pause': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true);
             final resumeCapability = positionalArgs.get<Capability?>(0);
             return (target as Isolate).pause(resumeCapability);
           },
           'resume': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true);
             final resumeCapability = positionalArgs[0] as Capability;
             (target as Isolate).resume(resumeCapability);
             return null;
           },
           'addOnExitListener': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true, communicate: true);
             final responsePort = positionalArgs[0] as SendPort;
             final response = namedArgs.get<Object?>('response');
             (target as Isolate)
@@ -162,22 +205,26 @@ class IsolateIsolate {
             return null;
           },
           'removeOnExitListener': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true, communicate: true);
             final responsePort = positionalArgs[0] as SendPort;
             (target as Isolate).removeOnExitListener(responsePort);
             return null;
           },
           'setErrorsFatal': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true);
             final errorsAreFatal = positionalArgs[0] as bool;
             (target as Isolate).setErrorsFatal(errorsAreFatal);
             return null;
           },
           'kill': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true);
             final priority =
                 namedArgs.get<int?>('priority') ?? Isolate.beforeNextEvent;
             (target as Isolate).kill(priority: priority);
             return null;
           },
           'ping': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true, communicate: true);
             final responsePort = positionalArgs[0] as SendPort;
             final response = namedArgs.get<Object?>('response');
             final priority =
@@ -187,11 +234,13 @@ class IsolateIsolate {
             return null;
           },
           'addErrorListener': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true, communicate: true);
             final port = positionalArgs[0] as SendPort;
             (target as Isolate).addErrorListener(port);
             return null;
           },
           'removeErrorListener': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, control: true, communicate: true);
             final port = positionalArgs[0] as SendPort;
             (target as Isolate).removeErrorListener(port);
             return null;
@@ -209,6 +258,7 @@ class SendPortIsolate {
         isSubtypeOfFunc: (value) => value is SendPort,
         methods: {
           'send': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             final message = positionalArgs[0];
             (target as SendPort).send(message);
             return null;
@@ -230,28 +280,52 @@ class ReceivePortIsolate {
         isSubtypeOfFunc: (value) => value is ReceivePort || value is Stream,
         constructors: {
           '': (visitor, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             final debugName = positionalArgs.get<String>(0) ?? '';
             return ReceivePort(debugName);
           },
           'fromRawReceivePort': (visitor, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             final rawPort = positionalArgs[0] as RawReceivePort;
             return ReceivePort.fromRawReceivePort(rawPort);
           },
         },
         getters: {
-          'sendPort': (visitor, target) => (target as ReceivePort).sendPort,
-          'isBroadcast': (visitor, target) => (target as Stream).isBroadcast,
-          'isEmpty': (visitor, target) => (target as Stream).isEmpty,
-          'length': (visitor, target) => (target as Stream).length,
-          'first': (visitor, target) => (target as Stream).first,
-          'last': (visitor, target) => (target as Stream).last,
-          'single': (visitor, target) => (target as Stream).single,
+          'sendPort': (visitor, target) {
+            requireIsolatePermission(visitor, communicate: true);
+            return (target as ReceivePort).sendPort;
+          },
+          'isBroadcast': (visitor, target) {
+            requireIsolatePermission(visitor, communicate: true);
+            return (target as Stream).isBroadcast;
+          },
+          'isEmpty': (visitor, target) {
+            requireIsolatePermission(visitor, communicate: true);
+            return (target as Stream).isEmpty;
+          },
+          'length': (visitor, target) {
+            requireIsolatePermission(visitor, communicate: true);
+            return (target as Stream).length;
+          },
+          'first': (visitor, target) {
+            requireIsolatePermission(visitor, communicate: true);
+            return (target as Stream).first;
+          },
+          'last': (visitor, target) {
+            requireIsolatePermission(visitor, communicate: true);
+            return (target as Stream).last;
+          },
+          'single': (visitor, target) {
+            requireIsolatePermission(visitor, communicate: true);
+            return (target as Stream).single;
+          },
           'hashCode': (visitor, target) => (target as ReceivePort).hashCode,
           'runtimeType': (visitor, target) =>
               (target as ReceivePort).runtimeType,
         },
         methods: {
           'listen': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             final onData = positionalArgs.get<dynamic>(0);
             final onError = namedArgs['onError'];
             final onDone = namedArgs['onDone'];
@@ -301,11 +375,13 @@ class ReceivePortIsolate {
             );
           },
           'close': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             (target as ReceivePort).close();
             return null;
           },
           // Stream methods
           'map': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             final transform = positionalArgs[0];
             if (transform is! InterpretedFunction &&
                 transform is! Callable &&
@@ -324,6 +400,7 @@ class ReceivePortIsolate {
             });
           },
           'where': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             final test = positionalArgs[0];
             if (test is! InterpretedFunction &&
                 test is! Callable &&
@@ -342,10 +419,12 @@ class ReceivePortIsolate {
             });
           },
           'take': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             final count = positionalArgs[0] as int;
             return (target as Stream).take(count);
           },
           'skip': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             final count = positionalArgs[0] as int;
             return (target as Stream).skip(count);
           },
@@ -362,6 +441,7 @@ class RawReceivePortIsolate {
         isSubtypeOfFunc: (value) => value is RawReceivePort,
         constructors: {
           '': (visitor, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             final handler = positionalArgs.get<dynamic>(0);
             final debugName = positionalArgs.get<String>(1) ?? '';
             final rawPort = RawReceivePort(null, debugName);
@@ -380,15 +460,21 @@ class RawReceivePortIsolate {
           },
         },
         getters: {
-          'sendPort': (visitor, target) => (target as RawReceivePort).sendPort,
-          'keepIsolateAlive': (visitor, target) =>
-              (target as RawReceivePort).keepIsolateAlive,
+          'sendPort': (visitor, target) {
+            requireIsolatePermission(visitor, communicate: true);
+            return (target as RawReceivePort).sendPort;
+          },
+          'keepIsolateAlive': (visitor, target) {
+            requireIsolatePermission(visitor, communicate: true);
+            return (target as RawReceivePort).keepIsolateAlive;
+          },
           'hashCode': (visitor, target) => (target as RawReceivePort).hashCode,
           'runtimeType': (visitor, target) =>
               (target as RawReceivePort).runtimeType,
         },
         setters: {
           'handler': (visitor, target, value) {
+            requireIsolatePermission(visitor, communicate: true);
             if (value == null) {
               (target as RawReceivePort).handler = null;
             } else {
@@ -404,11 +490,13 @@ class RawReceivePortIsolate {
             }
           },
           'keepIsolateAlive': (visitor, target, value) {
+            requireIsolatePermission(visitor, communicate: true);
             (target as RawReceivePort).keepIsolateAlive = value as bool;
           },
         },
         methods: {
           'close': (visitor, target, positionalArgs, namedArgs) {
+            requireIsolatePermission(visitor, communicate: true);
             (target as RawReceivePort).close();
             return null;
           },

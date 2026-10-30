@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:d4rt/d4rt.dart';
+import '../native_permissions.dart';
 
 // Helper function for running interpreted functions
 FutureOr<T> _runAction<T>(
@@ -89,6 +90,7 @@ class StreamControllerAsync {
               throw RuntimeError(
                   'StreamController.addStream requires a Stream argument.');
             }
+            requireReceivePortCommunication(visitor, positionalArgs[0]);
             final cancelOnError = namedArgs['cancelOnError'] as bool?;
             return (target as StreamController).addStream(
               positionalArgs[0] as Stream,

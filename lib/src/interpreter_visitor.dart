@@ -11,6 +11,7 @@ import 'package:d4rt/src/invocation_steps.dart';
 import 'package:d4rt/src/module_loader.dart';
 import 'package:d4rt/src/native_collection_types.dart';
 import 'package:d4rt/src/stdlib/core.dart';
+import 'package:d4rt/src/stdlib/native_permissions.dart';
 import 'package:d4rt/src/type_annotation_utils.dart';
 
 part 'enum_declaration_interpreter.dart';
@@ -432,6 +433,32 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     if (value is BridgedEnumValue && propertyName == 'runtimeType') {
       return value.get(propertyName, this);
     }
+    if ((propertyName == 'hashCode' || propertyName == 'runtimeType') &&
+        value != null &&
+        value is! InterpretedInstance &&
+        value is! RuntimeType) {
+      final nativeValue = value is BridgedInstance ? value.nativeObject : value;
+      // Literal collection metadata remains authoritative over native erasure.
+      if (propertyName == 'runtimeType' &&
+          nativeValue is List &&
+          isInterpreterOwnedCollection(nativeValue)) {
+        final annotated = environment.getAnnotatedRuntimeType(nativeValue);
+        if (annotated != null) return annotated;
+      }
+      BridgedClass? bridge;
+      if (value is BridgedInstance) {
+        bridge = value.bridgedClass;
+      } else {
+        try {
+          bridge = globalEnvironment.toBridgedClass(value);
+        } on RuntimeError {
+          // Unregistered native values retain ordinary Object fallback.
+        }
+      }
+      final getter = bridge?.findInstanceGetterAdapter(propertyName);
+      // Explicit getters (and their denials) are authoritative, never fallback.
+      if (getter != null) return getter(this, nativeValue);
+    }
     if (propertyName == 'hashCode') {
       // For InterpretedInstance, check if there's a custom hashCode getter
       if (value is InterpretedInstance) {
@@ -485,13 +512,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         return className;
       }
 
-      // Interpreter-owned literals retain generic metadata; host collections
-      // always report their actual native reified type.
       final nativeValue = value is BridgedInstance ? value.nativeObject : value;
-      if (nativeValue is List && isInterpreterOwnedCollection(nativeValue)) {
-        final annotated = environment.getAnnotatedRuntimeType(nativeValue);
-        if (annotated != null) return annotated;
-      }
       return nativeValue?.runtimeType;
     }
     return null;
@@ -1374,8 +1395,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final methodAdapter =
           bridgedInstance.bridgedClass.findInstanceMethodAdapter(memberName);
       if (methodAdapter != null) {
-        return BridgedMethodCallable(bridgedInstance, methodAdapter, memberName)
-            .call(this, [], {});
+        return BridgedMethodCallable(
+            bridgedInstance, methodAdapter, memberName);
       }
 
       // No adapter found, try extension methods/getters
@@ -4883,6 +4904,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       AstNode loopVariableOrIdentifier,
       Stream<Object?> stream,
       Statement body) async {
+    requireReceivePortCommunication(this, stream);
     // Convert stream to list
     final List<Object?> items = await stream.toList();
 
@@ -5042,6 +5064,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   Future<Object?> _convertStreamAndProcessForInPattern(
       DartPattern pattern, Stream<Object?> stream, Statement body) async {
+    requireReceivePortCommunication(this, stream);
     final List<Object?> elements = await stream.toList();
     for (final element in elements) {
       checkExecutionLimits();
@@ -5258,6 +5281,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       return null;
     }
     if (value is Stream) {
+      requireReceivePortCommunication(this, value);
       final done = Completer<void>();
       late final StreamSubscription<dynamic> subscription;
       subscription = value.listen(

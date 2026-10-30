@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:d4rt/d4rt.dart';
+import '../native_permissions.dart';
 
 class ConverterConvert {
   static BridgedClass get definition => BridgedClass(
@@ -24,6 +25,7 @@ class ConverterConvert {
             if (positionalArgs.length != 1 || positionalArgs[0] is! Stream) {
               throw RuntimeError('bind requires one Stream argument.');
             }
+            requireReceivePortCommunication(visitor, positionalArgs[0]);
             return (target as Converter).bind(positionalArgs[0] as Stream);
           },
           'fuse': (visitor, target, positionalArgs, namedArgs) {

@@ -5,6 +5,7 @@ import 'package:analyzer/dart/ast/token.dart';
 import 'package:d4rt/d4rt.dart';
 import 'package:d4rt/src/catch_clause_matcher.dart';
 import 'package:d4rt/src/native_collection_types.dart';
+import 'package:d4rt/src/stdlib/native_permissions.dart';
 import 'package:d4rt/src/type_annotation_utils.dart';
 
 /// Enters a public host invocation without inheriting a different root's limits.
@@ -1814,6 +1815,7 @@ class InterpretedFunction implements Callable {
                 }
 
                 if (streamValue is Stream) {
+                  requireReceivePortCommunication(visitor, streamValue);
                   // Create a suspension request to convert stream to list
                   lastResult = AsyncSuspensionRequest(
                     streamValue.toList(),
@@ -4370,7 +4372,7 @@ class InterpretedFunction implements Callable {
                     bodyToExecute.expression.accept<Object?>(visitor);
                 if (result is YieldValue) {
                   if (result.isYieldStar) {
-                    await _handleYieldStar(result.value, controller);
+                    await _handleYieldStar(visitor, result.value, controller);
                   } else {
                     controller.add(result.value);
                   }
@@ -4455,9 +4457,10 @@ class InterpretedFunction implements Callable {
   }
 
   // Handle yield* expressions
-  Future<void> _handleYieldStar(
-      Object? value, StreamController<Object?> controller) async {
+  Future<void> _handleYieldStar(InterpreterVisitor visitor, Object? value,
+      StreamController<Object?> controller) async {
     if (value is Stream) {
+      requireReceivePortCommunication(visitor, value);
       await for (final item in value) {
         controller.add(item);
       }

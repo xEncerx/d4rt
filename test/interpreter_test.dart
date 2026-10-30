@@ -13,6 +13,9 @@ dynamic execute(String source, {List<Object?>? args}) {
   d4rt.grant(NetworkPermission.any);
   d4rt.grant(ProcessRunPermission.any);
   d4rt.grant(IsolatePermission.any);
+  d4rt.grant(DangerousPermission.processExecution);
+  d4rt.grant(DangerousPermission.processSignals);
+  d4rt.grant(DangerousPermission.developerTools);
   return d4rt.execute(
       library: 'package:test/main.dart',
       positionalArgs: args,
@@ -27,6 +30,9 @@ Future<dynamic> executeAsync(String source, {List<Object?>? args}) async {
   d4rt.grant(NetworkPermission.any);
   d4rt.grant(ProcessRunPermission.any);
   d4rt.grant(IsolatePermission.any);
+  d4rt.grant(DangerousPermission.processExecution);
+  d4rt.grant(DangerousPermission.processSignals);
+  d4rt.grant(DangerousPermission.developerTools);
   final result = d4rt.execute(
       library: 'package:test/main.dart',
       positionalArgs: args,
@@ -157,7 +163,7 @@ void main() {
       final result = execute(
         source,
         args: [
-          ['arg1', 'test', 'more']
+          ['arg1', 'test', 'more'],
         ], // Pass arguments
       );
       expect(result, equals('3:arg1')); // Length 3, first argument 'arg1'
@@ -1933,14 +1939,15 @@ void main() {
         }
       ''';
       expect(
-          execute(code),
-          equals([
-            true, true, true, true, true,
-            true, // int, double, String, bool, List, Null
-            true, true, // i is num, d is num
-            false, false, // i is String, n is Object (n is null)
-            true // s is Object
-          ]));
+        execute(code),
+        equals([
+          true, true, true, true, true,
+          true, // int, double, String, bool, List, Null
+          true, true, // i is num, d is num
+          false, false, // i is String, n is Object (n is null)
+          true, // s is Object
+        ]),
+      );
     });
 
     test('is! negation with built-in types', () {
@@ -2885,11 +2892,14 @@ void main() {
               'main() { var s1 = {1}; var m1 = {"b":2}; return {...m1, ...s1}; }'),
           throwsA(isA<RuntimeError>()));
 
-      expect(execute('main() { var s1 = {1, 2}; return <int>{...s1}; }'),
-          equals({1, 2}));
       expect(
-          execute('main() { var m1 = {"a":1}; return <String, int>{...m1}; }'),
-          equals({'a': 1}));
+        execute('main() { var s1 = {1, 2}; return <int>{...s1}; }'),
+        equals({1, 2}),
+      );
+      expect(
+        execute('main() { var m1 = {"a":1}; return <String, int>{...m1}; }'),
+        equals({'a': 1}),
+      );
     });
   });
 

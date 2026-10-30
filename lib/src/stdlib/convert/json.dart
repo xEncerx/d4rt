@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:d4rt/d4rt.dart';
+import '../native_permissions.dart';
 
 Object? Function(Object? nonEncodable)? wrapJsonToEncodable(
     InterpreterVisitor visitor, Object? toEncodableArg) {
@@ -172,6 +173,7 @@ class JsonEncoderConvert {
                 positionalArgs[0] is! Stream<dynamic>) {
               throw RuntimeError('bind requires a Stream<dynamic> argument.');
             }
+            requireReceivePortCommunication(visitor, positionalArgs[0]);
             return (target as JsonEncoder)
                 .bind(positionalArgs[0] as Stream<dynamic>);
           },

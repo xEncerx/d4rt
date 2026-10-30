@@ -3,10 +3,12 @@ import 'dart:developer';
 import 'package:d4rt/src/environment.dart';
 import 'package:d4rt/src/callable.dart';
 import 'package:d4rt/src/exceptions.dart';
+import 'package:d4rt/src/bridge/bridged_types.dart';
 import 'developer/timeline.dart';
 import 'developer/user_tag.dart';
 import 'developer/service.dart';
 import 'developer/flow.dart';
+import 'native_permissions.dart';
 
 export 'package:d4rt/src/environment.dart';
 export 'developer/timeline.dart';
@@ -29,6 +31,7 @@ class DeveloperStdlib {
     environment.defineFunction(
         'log',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
+          requireDeveloperPermission(visitor);
           if (arguments.isEmpty || arguments[0] is! String) {
             throw RuntimeError(
                 "log requires at least one String message argument.");
@@ -58,6 +61,7 @@ class DeveloperStdlib {
     environment.defineFunction(
         'debugger',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
+          requireDeveloperPermission(visitor);
           final when = namedArguments['when'] as bool? ?? true;
           final message = namedArguments['message'] as String?;
           return debugger(when: when, message: message);
@@ -66,6 +70,7 @@ class DeveloperStdlib {
     environment.defineFunction(
         'inspect',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
+          requireDeveloperPermission(visitor);
           if (arguments.isEmpty) {
             throw RuntimeError("inspect requires one object argument.");
           }
@@ -75,6 +80,7 @@ class DeveloperStdlib {
     environment.defineFunction(
         'postEvent',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
+          requireDeveloperPermission(visitor);
           if (arguments.length < 2 ||
               arguments[0] is! String ||
               arguments[1] is! Map) {
@@ -90,6 +96,7 @@ class DeveloperStdlib {
     environment.defineFunction(
         'registerExtension',
         NativeFunction((visitor, arguments, namedArguments, typeArguments) {
+          requireDeveloperPermission(visitor);
           if (arguments.length < 2 || arguments[0] is! String) {
             throw RuntimeError(
                 "registerExtension requires a String method and a function handler.");
@@ -97,20 +104,32 @@ class DeveloperStdlib {
           final method = arguments[0] as String;
           final handler = arguments[1];
           registerExtension(method, (methodName, parameters) async {
-            Object? result;
-            if (handler is InterpretedFunction) {
-              result = handler.call(visitor, [methodName, parameters]);
-            } else if (handler is Callable) {
-              result = handler.call(visitor, [methodName, parameters], {});
-            } else if (handler is Function) {
-              result = (handler as dynamic)(methodName, parameters);
+            try {
+              requireDeveloperPermission(visitor);
+              Object? result;
+              if (handler is InterpretedFunction) {
+                result = handler.call(visitor, [methodName, parameters]);
+              } else if (handler is Callable) {
+                result = handler.call(visitor, [methodName, parameters], {});
+              } else if (handler is Function) {
+                result = (handler as dynamic)(methodName, parameters);
+              }
+              final resolved = result is Future ? await result : result;
+              final response = resolved is BridgedInstance
+                  ? resolved.nativeObject
+                  : resolved;
+              if (response is ServiceExtensionResponse) return response;
+              throw RuntimeError(
+                "Service extension handler must return a ServiceExtensionResponse.",
+              );
+            } catch (error, stack) {
+              // Return the native RPC error form inside the registration zone.
+              // An error Future cannot cross a different error-zone boundary.
+              return ServiceExtensionResponse.error(
+                ServiceExtensionResponse.extensionError,
+                '$error\n$stack',
+              );
             }
-            final resolvedResult = result is Future ? await result : result;
-            if (resolvedResult is ServiceExtensionResponse) {
-              return resolvedResult;
-            }
-            throw RuntimeError(
-                "Service extension handler must return a ServiceExtensionResponse.");
           });
           return null;
         }, arity: 2, name: 'registerExtension'));

@@ -13,7 +13,7 @@ void main() {
       'output.txt',
       'config.json',
       'log.txt',
-      'temp_data.txt'
+      'temp_data.txt',
     ];
     for (final fileName in testFiles) {
       final file = io.File(fileName);
@@ -252,18 +252,24 @@ void main() {
   });
 
   group('Real Process Execution', () {
-    test('Running echo command with permission', () {
+    test('Running owned Dart command with permission', () {
       final interpreter = D4rt();
       interpreter.grant(ProcessRunPermission.any);
+      interpreter.grant(DangerousPermission.processExecution);
       interpreter.grant(FilesystemPermission.any);
 
       final result = interpreter.execute(source: '''
         import 'dart:io';
-        String main() {
-          var process = Process.runSync('echo', ['Hello Process']);
+        String main(String executable, String fixture) {
+          var process = Process.runSync(executable, [fixture, 'echo', 'Hello Process']);
           return process.stdout.toString().trim();
         }
-      ''');
+      ''',
+        positionalArgs: [
+          io.Platform.resolvedExecutable,
+          io.File('test/fixtures/native_process.dart').absolute.path,
+        ],
+      );
 
       expect(result, contains('Hello Process'));
     });
@@ -485,7 +491,7 @@ void main() {
             String readData(String filename) {
               return File(filename).readAsStringSync();
             }
-          '''
+          ''',
         },
         library: 'package:app/main.dart',
       );
@@ -538,7 +544,7 @@ void main() {
             int calculateSum(List<int> numbers) {
               return numbers.fold(0, (sum, n) => sum + n);
             }
-          '''
+          ''',
         },
         library: 'package:stats/main.dart',
       );
@@ -720,31 +726,43 @@ void main() {
         final interpreter = D4rt();
         interpreter.grant(FilesystemPermission.any);
         interpreter.grant(ProcessRunPermission.any);
+        interpreter.grant(DangerousPermission.processExecution);
 
         final result = interpreter.execute(source: '''
         import 'dart:io';
-        String main() {
-          var proc = Process.runSync('echo', ['Hello', 'World']);
+        String main(String executable, String fixture) {
+          var proc = Process.runSync(executable, [fixture, 'echo', 'Hello', 'World']);
           return proc.stdout.toString().trim();
         }
-      ''');
+      ''',
+          positionalArgs: [
+            io.Platform.resolvedExecutable,
+            io.File('test/fixtures/native_process.dart').absolute.path,
+          ],
+        );
 
         expect(result, contains('Hello'));
         expect(result, contains('World'));
       });
 
-      test('pwd command', () {
+      test('owned Dart child cwd', () {
         final interpreter = D4rt();
         interpreter.grant(FilesystemPermission.any);
         interpreter.grant(ProcessRunPermission.any);
+        interpreter.grant(DangerousPermission.processExecution);
 
         final result = interpreter.execute(source: '''
         import 'dart:io';
-        String main() {
-          var proc = Process.runSync('pwd', []);
+        String main(String executable, String fixture) {
+          var proc = Process.runSync(executable, [fixture, 'cwd']);
           return proc.stdout.toString().trim();
         }
-      ''');
+      ''',
+          positionalArgs: [
+            io.Platform.resolvedExecutable,
+            io.File('test/fixtures/native_process.dart').absolute.path,
+          ],
+        );
 
         expect(result, isNotEmpty);
         expect(result, contains(io.Platform.pathSeparator));

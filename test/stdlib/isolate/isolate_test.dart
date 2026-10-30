@@ -89,24 +89,6 @@ void main() {
     });
   });
 
-  group('Isolate.run Tests', () {
-    // Note: Ces tests sont simplifiés car Isolate.run nécessite un vrai isolate
-    // et ne peut pas fonctionner correctement dans l'interpréteur D4rt
-    test('should have Isolate.run method available', () {
-      final code = '''
-        import 'dart:isolate';
-        
-        main() {
-          // Test que la méthode existe (même si elle ne peut pas s'exécuter complètement)
-          return 'Isolate.run method exists';
-        }
-      ''';
-
-      final result = execute(code);
-      expect(result, equals('Isolate.run method exists'));
-    });
-  });
-
   group('ReceivePort and SendPort Tests', () {
     test('should create ReceivePort and access sendPort', () {
       final code = '''

@@ -86,23 +86,38 @@ class ModuleLoader {
 
   /// Checks if the given URI requires special permissions and verifies they are granted.
   void _checkModulePermissions(Uri uri) {
-    if (d4rt == null) return; // No permission checking if no D4rt instance
-
     // Match the same scheme/path identity used by standard-library loading.
     if (uri.scheme != 'dart') return;
     if (uri.path == 'io') {
-      if (!d4rt!
-          .checkPermission({'type': 'filesystem', 'pathAgnostic': true})) {
-        throw RuntimeError('Access to dart:io requires FilesystemPermission. '
-            'Use d4rt.grant(FilesystemPermission.any) to allow filesystem access.');
+      if (!(d4rt?.checkPermission({
+            'type': 'filesystem',
+            'pathAgnostic': true,
+          }) ??
+          false)) {
+        throw RuntimeError(
+          'Access to dart:io requires FilesystemPermission. '
+          'Use d4rt.grant(FilesystemPermission.any) to allow filesystem access.',
+        );
       }
     } else if (uri.path == 'isolate') {
-      if (!d4rt!.checkPermission({'type': 'isolate'})) {
-        throw RuntimeError('Access to dart:isolate requires IsolatePermission. '
-            'Use d4rt.grant(IsolatePermission.any) to allow isolate operations.');
+      if (!(d4rt?.checkPermission({'type': 'isolate'}) ?? false)) {
+        throw RuntimeError(
+          'Access to dart:isolate requires IsolatePermission. '
+          'Use d4rt.grant(IsolatePermission.any) to allow isolate operations.',
+        );
+      }
+    } else if (uri.path == 'developer') {
+      if (!(d4rt?.checkPermission({
+            'type': 'dangerous',
+            'operation': 'developer tools',
+          }) ??
+          false)) {
+        throw RuntimeError(
+          'Access to dart:developer requires '
+          'DangerousPermission.developerTools.',
+        );
       }
     }
-    // Add more dangerous modules as needed
   }
 
   SourceCodeException _buildCircularDependencyError(Uri uri) {
@@ -597,7 +612,7 @@ class ModuleLoader {
         'collection',
         'typed_data',
         'isolate',
-        'developer'
+        'developer',
       ];
       if (knownStdlibDartLibs.contains(uri.path)) {
         if (uri.path == 'convert') {

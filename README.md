@@ -246,7 +246,7 @@ Goodbye!
 
 ## Security Sandboxing
 
-Access to `dart:io` and `dart:isolate` requires permissions.
+Access to `dart:io`, `dart:isolate`, and `dart:developer` requires permissions.
 
 ### Granting Permissions
 
@@ -258,6 +258,7 @@ void main() {
     ..grant(FilesystemPermission.any)
     ..grant(NetworkPermission.any)
     ..grant(ProcessRunPermission.any)
+    ..grant(DangerousPermission.processExecution)
     ..grant(IsolatePermission.any);
 }
 ```
@@ -289,13 +290,38 @@ void main() {
 
 - **`IsolatePermission`**: Controls isolate creation and communication
   - `IsolatePermission.any` - Allow all isolate operations
-  - `IsolatePermission.spawn` - Allow spawning, not communication
-  - `IsolatePermission.communicate` - Allow communication, not spawning
+  - `IsolatePermission.spawn` - Allow native spawning and control, not communication
+  - `IsolatePermission.communicate` - Allow communication, not spawning or control
 
 - **`DangerousPermission`**: Controls explicitly requested dangerous operations
   - `DangerousPermission.codeEvaluation` - Allow code evaluation, not native plugins
   - `DangerousPermission.nativePlugins` - Allow native plugins, not code evaluation
+  - `DangerousPermission.processExecution` - Allow native child execution (also requires a matching `ProcessRunPermission`)
+  - `DangerousPermission.processSignals` - Allow signal watching and process termination, including arbitrary PIDs
+  - `DangerousPermission.developerTools` - Allow `dart:developer` import, members, and service-extension invocation
   - `DangerousPermission.any` - Allow all dangerous operations
+
+### Native Capabilities
+
+```dart
+final interpreter = D4rt()
+  ..grant(FilesystemPermission.any) // Required to import dart:io.
+  ..grant(ProcessRunPermission.commandWithArgs('dart', ['--version']))
+  ..grant(DangerousPermission.processExecution);
+```
+
+Shell execution additionally requires `ProcessRunPermission.any`, including Windows
+`.bat`/`.cmd` launches even when `runInShell` is false. Bare executable names and
+paths are distinct grants; relative executable paths resolve against the
+effective child working directory. `Isolate.spawnUri` also requires
+`DangerousPermission.codeEvaluation`, and communication authority when passing
+messages or notification ports. `Isolate.spawn` remains unsupported.
+
+Native child processes and native Dart isolates execute outside the interpreter's
+filesystem/network sandbox. Revocation protects subsequent adapter operations,
+including saved objects/tearoffs and developer extension invocations; it does
+not terminate children or cancel already-issued native ports, streams, listeners,
+or callbacks. Hosts must own their cleanup. Custom native bridges remain trusted.
 
 ### Permission Management
 

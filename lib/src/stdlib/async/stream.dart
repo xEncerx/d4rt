@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'package:d4rt/d4rt.dart';
+import '../native_permissions.dart';
 
 // Admission is shared with generated and other retained native callbacks.
 FutureOr<T> _runAction<T>(InterpretedFunction func, List<dynamic> args) =>
     InterpreterVisitor.invokeCallback(func, args) as FutureOr<T>;
 
 class StreamAsync {
-  static BridgedClass get definition => BridgedClass(
+  static BridgedClass get definition => guardReceivePortStream(BridgedClass(
         nativeType: Stream,
         name: 'Stream',
         typeParameterCount: 1,
@@ -115,6 +116,7 @@ class StreamAsync {
                   'Stream.eventTransformed requires source and mapSink.');
             }
             final source = positionalArgs[0] as Stream;
+            requireReceivePortCommunication(visitor, source);
             final mapSink = positionalArgs[1] as InterpretedFunction;
             return Stream.eventTransformed(
               source,
@@ -128,6 +130,7 @@ class StreamAsync {
             if (positionalArgs.isEmpty) {
               throw RuntimeError('Stream.castFrom requires a source stream.');
             }
+            requireReceivePortCommunication(visitor, positionalArgs[0]);
             return Stream.castFrom(positionalArgs[0] as Stream);
           },
         },
@@ -369,7 +372,11 @@ class StreamAsync {
             return (target as Stream).asyncExpand<dynamic>(
               (event) {
                 final result = _runAction(convert, [event]);
-                return result is Stream ? result : Stream.empty();
+                final source =
+                    result is BridgedInstance ? result.nativeObject : result;
+                requireReceivePortCommunication(
+                    InterpreterVisitor.currentCollectionVisitor, source);
+                return source is Stream ? source : Stream.empty();
               },
             );
           },
@@ -483,7 +490,7 @@ class StreamAsync {
           'hashCode': (visitor, target) => (target as Stream).hashCode,
           'runtimeType': (visitor, target) => (target as Stream).runtimeType,
         },
-      );
+      ));
 }
 
 class StreamSubscriptionAsync {
@@ -630,7 +637,14 @@ class StreamTransformerAsync {
             }
             final bind = positionalArgs[0] as InterpretedFunction;
             return StreamTransformer.fromBind(
-              (stream) => _runAction<Stream>(bind, [stream]) as Stream,
+              (stream) {
+                final result = _runAction<dynamic>(bind, [stream]);
+                final source =
+                    result is BridgedInstance ? result.nativeObject : result;
+                requireReceivePortCommunication(
+                    InterpreterVisitor.currentCollectionVisitor, source);
+                return source as Stream;
+              },
             );
           },
           'castFrom': (visitor, positionalArgs, namedArgs) {
@@ -649,6 +663,7 @@ class StreamTransformerAsync {
               throw RuntimeError(
                   'StreamTransformer.bind requires a Stream argument.');
             }
+            requireReceivePortCommunication(visitor, positionalArgs[0]);
             return (target as StreamTransformer)
                 .bind(positionalArgs[0] as Stream);
           },
@@ -671,6 +686,7 @@ class StreamIteratorAsync {
               throw RuntimeError(
                   'StreamIterator constructor requires a Stream argument.');
             }
+            requireReceivePortCommunication(visitor, positionalArgs[0]);
             return StreamIterator(positionalArgs[0] as Stream);
           },
         },
@@ -752,6 +768,7 @@ class MultiStreamControllerAsync {
               throw RuntimeError(
                   'MultiStreamController.addStream requires a Stream argument.');
             }
+            requireReceivePortCommunication(visitor, positionalArgs[0]);
             return (target as MultiStreamController)
                 .addStream(positionalArgs[0] as Stream);
           },
