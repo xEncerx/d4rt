@@ -334,6 +334,21 @@ final hasReadAccess =
 interpreter.revoke(FilesystemPermission.readPath('data'));
 ```
 
+### Scoped Filesystem Access
+
+```dart
+final interpreter = D4rt()
+  ..grant(FilesystemPermission.readPath('data'))
+  ..grant(FilesystemPermission.writePath('data/output'));
+```
+
+Relative grants stay anchored to their original working directory. Filesystem
+scopes check effective paths, including symbolic links, metadata, directory
+results, and watch events. Creating or updating a link requires write access to
+its entry and parent plus read access to its target; inspecting its target
+requires both entry and target read access. Readable/writable file handles need
+both read and write grants.
+
 ### Scoped Network Access
 
 Grant access to a specific endpoint:

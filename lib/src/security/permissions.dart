@@ -31,6 +31,7 @@ library;
 import 'package:path/path.dart' as p;
 
 import 'network_host.dart';
+import 'permission_path.dart';
 
 final _drivePrefix = RegExp(r'^[A-Za-z]:');
 
@@ -124,13 +125,32 @@ class FilesystemPermission extends Permission {
   factory FilesystemPermission.path(String path) =>
       FilesystemPermission._(path, true, true, true);
 
-  static bool _isPathWithinScope(String allowedPath, String requestedPath) {
-    final canonicalRequested = _canonicalizePermissionPath(requestedPath);
-    final prefix = allowedPath.endsWith(p.separator)
-        ? allowedPath
-        : '$allowedPath${p.separator}';
-    return canonicalRequested == allowedPath ||
-        canonicalRequested.startsWith(prefix);
+  static bool _isPathWithinScope(
+    String allowedPath,
+    String requested, {
+    required bool followLinks,
+  }) {
+    bool contains(String scope, String request) {
+      if (p.separator == '\\') {
+        scope = scope.toLowerCase();
+        request = request.toLowerCase();
+      }
+      return p.equals(scope, request) || p.isWithin(scope, request);
+    }
+
+    try {
+      if (!followLinks &&
+          contains(
+            resolvePermissionPath(allowedPath, followLinks: false),
+            requested,
+          )) {
+        return true;
+      }
+      return contains(resolvePermissionPath(allowedPath), requested);
+    } on Object {
+      // Resolution failure must never become lexical authorization.
+      return false;
+    }
   }
 
   @override
@@ -177,12 +197,26 @@ class FilesystemPermission extends Permission {
       return false;
     }
 
+    if (operation['pathAgnostic'] == true) return true;
+    String? resolvedPath;
+    if (opPath is String) {
+      try {
+        resolvedPath = resolvePermissionPath(
+          opPath,
+          followLinks: operation['followLinks'] != false,
+        );
+      } on Object {
+        return false;
+      }
+    }
     // Check path restrictions
     if (_path != null) {
-      if (operation['pathAgnostic'] == true) {
-        return true;
-      }
-      if (opPath is! String || !_isPathWithinScope(_path, opPath)) {
+      if (resolvedPath == null ||
+          !_isPathWithinScope(
+            _path,
+            resolvedPath,
+            followLinks: operation['followLinks'] != false,
+          )) {
         return false;
       }
     }

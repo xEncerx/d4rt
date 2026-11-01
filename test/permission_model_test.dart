@@ -247,16 +247,15 @@ void main() {
       final drive = FilesystemPermission.readPath(r'C:\');
       expect(allows(drive, filesystem(r'c:\synthetic\file', 'read')), isTrue);
       expect(allows(drive, filesystem(r'D:\synthetic\file', 'read')), isFalse);
+      // UNC identity is lexical; authorization additionally requires a
+      // reachable share and must not mistake network failures for absence.
       final share = FilesystemPermission.readPath(r'\\server\share\');
+      expect(share, FilesystemPermission.readPath(r'\\server\share\.'));
       expect(
-        allows(share, filesystem(r'\\server\share\nested\file', 'read')),
-        isTrue,
+        share,
+        isNot(FilesystemPermission.readPath(r'\\server\share_sibling\')),
       );
-      expect(
-        allows(share, filesystem(r'\\server\share_sibling\file', 'read')),
-        isFalse,
-      );
-      expect(allows(share, filesystem(r'\\other\share\file', 'read')), isFalse);
+      expect(share, isNot(FilesystemPermission.readPath(r'\\other\share\')));
     }, skip: !io.Platform.isWindows);
 
     test('POSIX backslashes do not turn outside names into descendants', () {

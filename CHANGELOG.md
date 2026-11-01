@@ -17,6 +17,11 @@
 - Recheck native capability operations and developer extension callbacks after revocation.
 - Authorize and launch processes with the same executable and arguments.
 - Enforce shell authority for Windows batch launches and communication authority for converter and generator stream consumption.
+- Enforce filesystem scopes for metadata, ambient directories, link targets, listings, watches, and readable file handles.
+- Prevent symbolic-link scope escapes and unsafe temporary-directory prefixes.
+- Prevent mutable raw paths and recursive creation from escaping filesystem scopes.
+- Keep deferred filesystem operations on their authorized paths while preserving relative-path results.
+- Reject empty filesystem operation paths and preserve watch event path spelling.
 
 ## 0.4.1
 - Isolate recursive synchronous calls and synchronous generator bodies from their async caller's continuation state while preserving exactly-once awaited operands, receivers, and arguments. Avoid extra iteration and repeated effects when delegating generator yields.
