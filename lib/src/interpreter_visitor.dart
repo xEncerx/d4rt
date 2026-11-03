@@ -618,7 +618,20 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
   @override
   Object? visitBlock(Block node) {
-    return executeBlock(node.statements, Environment(enclosing: environment));
+    // Only direct statements that cannot introduce bindings may share a scope.
+    final canReuseEnvironment = node.statements.every(
+      (statement) =>
+          statement is ExpressionStatement ||
+          statement is ReturnStatement ||
+          statement is BreakStatement ||
+          statement is ContinueStatement ||
+          statement is AssertStatement ||
+          statement is EmptyStatement,
+    );
+    return executeBlock(
+      node.statements,
+      canReuseEnvironment ? environment : Environment(enclosing: environment),
+    );
   }
 
   Object? executeBlock(
@@ -1943,6 +1956,17 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       return rightOperandValue;
     }
 
+    final rawNumericOperands =
+        leftOperandValue is num && rightOperandValue is num;
+    if (rawNumericOperands) {
+      final result = _numericBinaryResult(
+        leftOperandValue,
+        rightOperandValue,
+        operator,
+      );
+      if (result != null) return result;
+    }
+
     final leftBridgedInstance = toBridgedInstance(leftOperandValue);
     final left = leftBridgedInstance.$2
         ? leftBridgedInstance.$1!.nativeObject
@@ -1956,35 +1980,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         ? rightOperandValue.call(this, [])
         : rightOperandValue;
 
-    if (left is num && right is num) {
-      switch (operator) {
-        case TokenType.PLUS:
-          return left + right;
-        case TokenType.MINUS:
-          return left - right;
-        case TokenType.STAR:
-          return left * right;
-        case TokenType.SLASH:
-          // For doubles, division by zero returns Infinity/NaN (IEEE 754)
-          // For ints, we should probably also return double Infinity
-          return left.toDouble() / right.toDouble();
-        case TokenType.GT:
-          return left > right;
-        case TokenType.LT:
-          return left < right;
-        case TokenType.GT_EQ:
-          return left >= right;
-        case TokenType.LT_EQ:
-          return left <= right;
-        case TokenType.PERCENT:
-          if (right == 0) throw RuntimeError("Modulo par zéro.");
-          return left % right;
-        case TokenType.TILDE_SLASH:
-          if (right == 0) throw RuntimeError("Division entière par zéro.");
-          return left ~/ right;
-        default:
-          break;
-      }
+    if (!rawNumericOperands && left is num && right is num) {
+      final result = _numericBinaryResult(left, right, operator);
+      if (result != null) return result;
     }
 
     // Moved this block BEFORE standard ==, !=, <, <=, >, >= checks
@@ -2259,6 +2257,36 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     throw RuntimeError(
       'Unsupported operator ($operator) for types ${leftOperandValue?.runtimeType} and ${rightOperandValue?.runtimeType}',
     );
+  }
+
+  // Null means this operator must retain custom/bridge/extension dispatch.
+  Object? _numericBinaryResult(num left, num right, TokenType operator) {
+    switch (operator) {
+      case TokenType.PLUS:
+        return left + right;
+      case TokenType.MINUS:
+        return left - right;
+      case TokenType.STAR:
+        return left * right;
+      case TokenType.SLASH:
+        return left.toDouble() / right.toDouble();
+      case TokenType.GT:
+        return left > right;
+      case TokenType.LT:
+        return left < right;
+      case TokenType.GT_EQ:
+        return left >= right;
+      case TokenType.LT_EQ:
+        return left <= right;
+      case TokenType.PERCENT:
+        if (right == 0) throw RuntimeError("Modulo par zéro.");
+        return left % right;
+      case TokenType.TILDE_SLASH:
+        if (right == 0) throw RuntimeError("Division entière par zéro.");
+        return left ~/ right;
+      default:
+        return null;
+    }
   }
 
   @override
@@ -5407,18 +5435,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             if (guardValue is AsyncSuspensionRequest) {
               return guardValue;
             }
-            // Convert guard value to boolean
-            final bridgedGuard = toBridgedInstance(guardValue);
-            if (guardValue is bool) {
-              guardPassed = guardValue;
-            } else if (bridgedGuard.$2 &&
-                bridgedGuard.$1?.nativeObject is bool) {
-              guardPassed = bridgedGuard.$1!.nativeObject as bool;
-            } else {
-              throw RuntimeError(
-                "Guard condition must be a boolean, but was ${guardValue?.runtimeType}.",
-              );
-            }
+            guardPassed = _conditionValue(guardValue, 'Guard condition');
           } finally {
             environment = originalEnv;
           }
@@ -5466,17 +5483,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     }
 
     // Synchronous logic (if no suspension occurred)
-    bool conditionResult;
-    final bridgedInstance = toBridgedInstance(conditionValue);
-    if (conditionValue is bool) {
-      conditionResult = conditionValue;
-    } else if (bridgedInstance.$2 && bridgedInstance.$1?.nativeObject is bool) {
-      conditionResult = bridgedInstance.$1!.nativeObject as bool;
-    } else {
-      throw RuntimeError(
-        "The condition of an 'if' must be a boolean, but was ${conditionValue?.runtimeType}.",
-      );
-    }
+    final conditionResult = _conditionValue(
+      conditionValue,
+      "The condition of an 'if'",
+    );
 
     if (conditionResult) {
       node.thenStatement.accept<Object?>(this);
@@ -5493,18 +5503,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       checkExecutionLimits();
       // Handle condition being BridgedInstance<bool>
       final conditionValue = node.condition.accept<Object?>(this);
-      bool conditionResult;
-      final bridgedInstance = toBridgedInstance(conditionValue);
-      if (conditionValue is bool) {
-        conditionResult = conditionValue;
-      } else if (bridgedInstance.$2 &&
-          bridgedInstance.$1?.nativeObject is bool) {
-        conditionResult = bridgedInstance.$1!.nativeObject as bool;
-      } else {
-        throw RuntimeError(
-          "The condition of a 'while' loop must be a boolean, but was ${conditionValue?.runtimeType}.",
-        );
-      }
+      final conditionResult = _conditionValue(
+        conditionValue,
+        "The condition of a 'while' loop",
+      );
 
       if (!conditionResult) {
         break;
@@ -5609,23 +5611,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           "[DoWhile] Condition value: ${describeDebugValue(conditionValue)}",
         );
       }
-      bool conditionResult;
-      final bridgedInstance = toBridgedInstance(conditionValue);
-      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-        Logger.debug(
-          "[DoWhile] Bridged instance: ${describeDebugValue(bridgedInstance)}",
-        );
-      }
-      if (conditionValue is bool) {
-        conditionResult = conditionValue;
-      } else if (bridgedInstance.$2 &&
-          bridgedInstance.$1?.nativeObject is bool) {
-        conditionResult = bridgedInstance.$1!.nativeObject as bool;
-      } else {
-        throw RuntimeError(
-          "The condition of a 'do-while' loop must be a boolean, but was ${conditionValue?.runtimeType}.",
-        );
-      }
+      final conditionResult = _conditionValue(
+        conditionValue,
+        "The condition of a 'do-while' loop",
+      );
 
       if (!conditionResult) {
         break;
@@ -5727,17 +5716,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         bool conditionResult = true; // Default to true if no condition
         if (condition != null) {
           final evalResult = condition.accept<Object?>(this);
-          final bridgedInstance = toBridgedInstance(evalResult);
-          if (evalResult is bool) {
-            conditionResult = evalResult;
-          } else if (bridgedInstance.$2 &&
-              bridgedInstance.$1?.nativeObject is bool) {
-            conditionResult = bridgedInstance.$1!.nativeObject as bool;
-          } else {
-            throw RuntimeError(
-              "The condition of a 'for' loop must be a boolean, but was ${evalResult?.runtimeType}.",
-            );
-          }
+          conditionResult = _conditionValue(
+            evalResult,
+            "The condition of a 'for' loop",
+          );
         }
 
         if (!conditionResult) {
@@ -7191,7 +7173,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           if (conditionValue is AsyncSuspensionRequest) {
             return conditionValue;
           }
-          final conditionResult = _collectionConditionValue(
+          final conditionResult = _conditionValue(
             conditionValue,
             "Condition in collection 'if'",
           );
@@ -7234,10 +7216,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 if (guardValue is AsyncSuspensionRequest) {
                   return guardValue;
                 }
-                guardPassed = _collectionConditionValue(
-                  guardValue,
-                  'Guard condition',
-                );
+                guardPassed = _conditionValue(guardValue, 'Guard condition');
               } finally {
                 environment = previousEnvironment;
               }
@@ -7278,7 +7257,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     }
   }
 
-  bool _collectionConditionValue(Object? value, String description) {
+  bool _conditionValue(Object? value, String description) {
     if (value is bool) {
       return value;
     }
@@ -7411,7 +7390,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 if (result is AsyncSuspensionRequest) {
                   return result;
                 }
-                conditionPassed = _collectionConditionValue(
+                conditionPassed = _conditionValue(
                   result,
                   "The condition of a 'for' loop",
                 );
@@ -7813,17 +7792,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     if (conditionValue is AsyncSuspensionRequest) {
       return conditionValue;
     }
-    bool conditionResult;
-    final bridgedInstance = toBridgedInstance(conditionValue);
-    if (conditionValue is bool) {
-      conditionResult = conditionValue;
-    } else if (bridgedInstance.$2 && bridgedInstance.$1?.nativeObject is bool) {
-      conditionResult = bridgedInstance.$1!.nativeObject as bool;
-    } else {
-      throw RuntimeError(
-        "The condition of a conditional expression must be a boolean, but was ${conditionValue?.runtimeType}.",
-      );
-    }
+    final conditionResult = _conditionValue(
+      conditionValue,
+      'The condition of a conditional expression',
+    );
 
     if (conditionResult) {
       return _evaluateContinuedExpression(node, node.thenExpression);
@@ -7851,10 +7823,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     if (operandValue is AsyncSuspensionRequest) {
       return operandValue;
     }
-    final bridgedInstance = toBridgedInstance(operandValue);
-    final operand = bridgedInstance.$2
-        ? bridgedInstance.$1!.nativeObject
-        : operandValue;
+    Object? operand = operandValue;
+    if (operand is! num && operand is! bool && operand is! BigInt) {
+      final bridgedInstance = toBridgedInstance(operandValue);
+      if (bridgedInstance.$2) operand = bridgedInstance.$1!.nativeObject;
+    }
 
     switch (operatorType) {
       case TokenType.BANG: // Logical NOT
@@ -8868,17 +8841,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     // Assertions are always enabled in this interpreter for now.
     final conditionValue = node.condition.accept<Object?>(this);
 
-    final bridgedInstance = toBridgedInstance(conditionValue);
-    bool conditionResult;
-    if (conditionValue is bool) {
-      conditionResult = conditionValue;
-    } else if (bridgedInstance.$2 && bridgedInstance.$1?.nativeObject is bool) {
-      conditionResult = bridgedInstance.$1!.nativeObject as bool;
-    } else {
-      throw RuntimeError(
-        "Assertion condition must be a boolean, but was ${conditionValue?.runtimeType}.",
-      );
-    }
+    final conditionResult = _conditionValue(
+      conditionValue,
+      'Assertion condition',
+    );
 
     if (!conditionResult) {
       // Condition is false, evaluate the message and throw.

@@ -8,6 +8,7 @@
 - Default CLI execution to scoped read-only filesystem access with explicit capability opt-ins; preserve script arguments after the target boundary.
 - Require current code-evaluation authority for host `eval()` calls; explicitly grant it for CLI eval and REPL, retaining selected policy on reset.
 - Avoid disabled and level-filtered debug diagnostic work and redundant runtime lookups while preserving native bridge and live collection dispatch.
+- Reduce primitive arithmetic, condition, unary operation, and binding-free block overhead while preserving operator dispatch and lexical scopes.
 
 ### Fixed
 - Fix permission comparison and revocation, scoped access checks, and filesystem path matching.
