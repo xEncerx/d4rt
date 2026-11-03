@@ -50,6 +50,7 @@ export 'package:d4rt/src/runtime_interfaces.dart';
 export 'package:d4rt/src/runtime_types.dart';
 export 'package:d4rt/src/script.dart';
 export 'package:d4rt/src/security/permissions.dart';
+export 'package:d4rt/src/source_inspection.dart';
 export 'package:d4rt/src/stdlib/stdlib.dart';
 export 'package:d4rt/src/utils/extensions/iterable.dart';
 export 'package:d4rt/src/utils/extensions/list.dart';

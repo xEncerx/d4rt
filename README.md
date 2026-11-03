@@ -129,6 +129,28 @@ print( nativeFn(1,2) ); // 3
 
 Note that it is possible to pass `InterpretedFunction` as argumento to `invokeInterpretedFunction`, but pass a native function it is not currently supported.
 
+### Source Inspection
+
+Inspect declared syntax without loading imports or executing code:
+
+```dart
+import 'package:d4rt/d4rt.dart';
+
+void main() {
+  final syntax = inspectSource(source: '''
+    import 'package:unavailable/library.dart';
+    final class Example {
+      String greet(int count) => 'hello';
+    }
+  ''');
+  if (syntax.hasErrors) throw FormatException(syntax.diagnostics.first.message);
+  final owner = syntax.declarations.single as SourceTypeDeclaration;
+  final method = owner.members.single as SourceCallable;
+  print(method.returnType?.canonicalName); // String
+  print(method.parameters.single.type?.canonicalName); // int
+}
+```
+
 ### Code Introspection
 
 Analyze declarations without running initializers, constructors, getters, or function bodies.
