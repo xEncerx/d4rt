@@ -36,7 +36,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  d4rt: # latest version
+  d4rt: ^0.5.0
 ```
 
 Then run:
@@ -454,11 +454,11 @@ d4rt provides a powerful bridging system that allows you to automate the process
 
 ### Automated Bridge Generation (Recommended)
 
-1. **Add `build_runner` and `d4rt` dev dependencies:**
+1. **Add `build_runner` to your dev dependencies:**
 
    ```yaml
    dev_dependencies:
-     build_runner: ^2.4.0
+     build_runner: ^2.16.1
    ```
 
 2. **Annotate your classes or enums with `@D4rtBridge()`:**

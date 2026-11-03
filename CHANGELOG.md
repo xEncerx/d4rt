@@ -2,6 +2,7 @@
 
 ### Changed
 - Require Dart SDK 3.11 or later.
+- Use analyzer `^13.3.0`, build `^4.0.10`, source_gen `^4.2.4`, and build_runner `^2.16.1` for bridge generation.
 - Expose value availability in introspection metadata.
 - Require explicit native process execution, signal, and developer-tools grants.
 - Separate native isolate spawning/control from communication; require code-evaluation authority for spawnUri.

@@ -68,9 +68,9 @@ d4rt includes a code generator that automates the tedious task of writing bridge
 1.  **Add dependencies** to your `pubspec.yaml`:
     ```yaml
     dependencies:
-      d4rt: ^0.2.0
+      d4rt: ^0.5.0
     dev_dependencies:
-      build_runner: ^2.4.0
+      build_runner: ^2.16.1
     ```
 
 2.  **Annotate your code**:
