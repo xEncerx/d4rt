@@ -972,7 +972,7 @@ void main() {
     test(
       'unmatched errors complete once and run finally without a side channel',
       () async {
-        final d4rt = D4rt();
+        final d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
         final sideChannelErrors = <Object>[];
         Object? completedError;
         var errorCompletions = 0;
@@ -1446,7 +1446,7 @@ void main() {
     test(
       'yield await reports the original imported error on the stream',
       () async {
-        final d4rt = D4rt();
+        final d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
         final result = d4rt.execute(
           library: 'package:probe/dispatcher.dart',
           sources: _sources,
@@ -1563,7 +1563,7 @@ void main() {
     test(
       'cancelling an async generator stops after await and runs finally once',
       () async {
-        final d4rt = D4rt();
+        final d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
         final result = d4rt.execute(
           library: 'package:probe/dispatcher.dart',
           sources: _sources,
@@ -1606,7 +1606,7 @@ void main() {
     test(
       'cancelling yield star detaches its stream and runs finalizers once',
       () async {
-        final d4rt = D4rt();
+        final d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
         final result = d4rt.execute(
           library: 'package:probe/dispatcher.dart',
           sources: _sources,
@@ -1651,7 +1651,7 @@ void main() {
     test(
       'public compiled, eval, and direct invocation paths return Futures',
       () async {
-        final d4rt = D4rt();
+        final d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
         final function =
             d4rt.execute(
                   source: '''

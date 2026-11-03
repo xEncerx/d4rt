@@ -5,6 +5,8 @@
 - Expose value availability in introspection metadata.
 - Require explicit native process execution, signal, and developer-tools grants.
 - Separate native isolate spawning/control from communication; require code-evaluation authority for spawnUri.
+- Default CLI execution to scoped read-only filesystem access with explicit capability opt-ins; preserve script arguments after the target boundary.
+- Require current code-evaluation authority for host `eval()` calls; explicitly grant it for CLI eval and REPL, retaining selected policy on reset.
 
 ### Fixed
 - Fix permission comparison and revocation, scoped access checks, and filesystem path matching.

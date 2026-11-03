@@ -187,6 +187,7 @@ void main() {
       test(
         'preserves active eval, instance and callback contexts on all exits',
         () {
+          d4rt.grant(DangerousPermission.codeEvaluation);
           d4rt.registertopLevelFunction(
             'activeKeep',
             (visitor, args, named, types) =>
@@ -232,8 +233,18 @@ void main() {
       );
 
       test('does not establish execution eligibility', () {
+        d4rt.grant(DangerousPermission.codeEvaluation);
         d4rt.analyze(source: 'int keep = 7;');
-        expect(() => d4rt.eval('keep'), throwsA(isA<RuntimeError>()));
+        expect(
+          () => d4rt.eval('keep'),
+          throwsA(
+            isA<RuntimeError>().having(
+              (error) => error.message,
+              'message',
+              contains('existing execution context'),
+            ),
+          ),
+        );
       });
 
       test('reports import, reexport, cycle and permission failures', () {

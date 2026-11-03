@@ -921,14 +921,15 @@ class D4rt {
   /// This method allows you to execute additional code in the same environment
   /// as a previous `execute()` call, similar to a REPL experience.
   ///
-  /// **Important**: You must call `execute()` at least once before calling `eval()`
-  /// to establish the execution context.
+  /// **Important**: Grant [DangerousPermission.codeEvaluation] (or
+  /// [DangerousPermission.any]) and call `execute()` at least once before calling
+  /// `eval()`. Authority is checked on every call, before parsing or effects.
   ///
   /// [expression] The Dart expression or statement to evaluate.
   ///
   /// ## Example:
   /// ```dart
-  /// final d4rt = D4rt();
+  /// final d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
   ///
   /// // First, set up the context
   /// d4rt.execute(source: '''
@@ -952,6 +953,13 @@ class D4rt {
     int? maxSteps,
     void Function(String)? onPrint,
   }) {
+    if (!checkPermission({
+      'type': 'dangerous',
+      'operation': 'code evaluation',
+    })) {
+      throw RuntimeError('eval() requires DangerousPermission.codeEvaluation.');
+    }
+
     if (_visitor == null || !_hasExecutedOnce) {
       throw RuntimeError(
         'eval() requires an existing execution context. Call execute() first.',

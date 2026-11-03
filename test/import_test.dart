@@ -553,7 +553,7 @@ String main() => initializedReport +
 ''',
         };
 
-        final d4rt = D4rt();
+        final d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
         final printedMessages = <String>[];
         final result = d4rt.execute(
           library: 'd4rt-mem:/inheritance_main.dart',

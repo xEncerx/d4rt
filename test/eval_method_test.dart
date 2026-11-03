@@ -4,11 +4,46 @@ import 'package:d4rt/d4rt.dart';
 /// Tests for eval() method
 /// This feature allows executing code in the context established by execute()
 void main() {
+  group('eval authority', () {
+    test('denial has no effects, any authorizes, revocation is immediate', () {
+      final prints = <String>[];
+      final d4rt = D4rt(onPrint: prints.add);
+      expect(d4rt.execute(source: 'int count = 0; int main() => count;'), 0);
+      final denied = throwsA(
+        isA<RuntimeError>().having(
+          (error) => error.message,
+          'required grant',
+          contains('DangerousPermission.codeEvaluation'),
+        ),
+      );
+      expect(() => d4rt.eval('count = 99;'), denied);
+      expect(
+        () => d4rt.eval('print("denied");', onPrint: (_) => fail('effect')),
+        denied,
+      );
+      expect(() => d4rt.eval('int injected = 99;'), denied);
+      expect(() => d4rt.eval('not valid Dart ?'), denied);
+      d4rt.grant(DangerousPermission.nativePlugins);
+      expect(() => d4rt.eval('count++'), denied);
+      d4rt.grant(DangerousPermission.any);
+      expect(d4rt.eval('count'), 0);
+      expect(() => d4rt.eval('injected'), throwsA(isA<RuntimeError>()));
+      d4rt.eval('print("original callback");');
+      expect(prints, ['original callback']);
+      d4rt.revoke(DangerousPermission.any);
+      expect(() => d4rt.eval('count++'), denied);
+      d4rt.grant(DangerousPermission.codeEvaluation);
+      expect(d4rt.eval('++count'), 1);
+      d4rt.revoke(DangerousPermission.codeEvaluation);
+      expect(() => d4rt.eval('count++'), denied);
+    });
+  });
+
   group('eval() method', () {
     late D4rt d4rt;
 
     setUp(() {
-      d4rt = D4rt();
+      d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
     });
 
     group('Basic expressions', () {
@@ -572,9 +607,18 @@ void main() {
 
     group('Error handling', () {
       test('should throw error when called before execute', () {
-        final freshD4rt = D4rt();
+        final freshD4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
 
-        expect(() => freshD4rt.eval('1 + 1'), throwsA(isA<RuntimeError>()));
+        expect(
+          () => freshD4rt.eval('1 + 1'),
+          throwsA(
+            isA<RuntimeError>().having(
+              (error) => error.message,
+              'message',
+              contains('existing execution context'),
+            ),
+          ),
+        );
       });
 
       test('should throw error for undefined variables', () {
@@ -701,8 +745,8 @@ void main() {
 
     group('Multiple D4rt instances', () {
       test('eval contexts should be independent', () {
-        final d4rt1 = D4rt();
-        final d4rt2 = D4rt();
+        final d4rt1 = D4rt()..grant(DangerousPermission.codeEvaluation);
+        final d4rt2 = D4rt()..grant(DangerousPermission.codeEvaluation);
 
         d4rt1.execute(
           source: '''

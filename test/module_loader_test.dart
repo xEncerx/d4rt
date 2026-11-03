@@ -61,7 +61,7 @@ main() => RetryChild().recoveredMethod();
   });
 
   test('extension declaration visitation retains its null return contract', () {
-    final d4rt = D4rt();
+    final d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
     d4rt.execute(source: 'void main() {}');
     final extension =
         parseString(

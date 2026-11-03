@@ -158,10 +158,13 @@ include the availability flag; text output displays `<unavailable>`.
 
 ### Dynamic Code Evaluation
 
-Execute code dynamically while preserving execution state:
+Execute code dynamically while preserving execution state. Each `eval()` call
+requires `DangerousPermission.codeEvaluation` (or `DangerousPermission.any`);
+revoking that authority blocks subsequent calls. Ordinary `execute()` does not
+require it.
 
 ```dart
-final interpreter = D4rt();
+final interpreter = D4rt()..grant(DangerousPermission.codeEvaluation);
 
 interpreter.execute(source: 'int x = 10;');
 final result = interpreter.eval('x + 5'); // Returns 15
@@ -229,10 +232,42 @@ dart run d4rt repl
 dart run d4rt
 ```
 
+CLI defaults allow **read-only access to the script's directory subtree**.
+Eval (`-e CODE`) and REPL use the current working directory subtree and explicitly
+enable code evaluation. Writes, outside-subtree reads, network access, native
+process execution, isolates, and other dangerous operations require opt-in:
+
+| Option | Additional authority |
+| --- | --- |
+| `--allow-fs` | `FilesystemPermission.any` |
+| `--allow-net` | `NetworkPermission.any` |
+| `--allow-process` | `ProcessRunPermission.any` + `DangerousPermission.processExecution` (not signals) |
+| `--allow-isolate` | `IsolatePermission.any` |
+| `--allow-dangerous` | `DangerousPermission.any` (does not itself grant process/isolate permission) |
+| `--allow-all` | All grants above |
+
+Place CLI options **before** the script, `repl`, or `-e CODE` target. Every argument
+after a script path is delivered unchanged, including `--help` and `--allow-all`.
+Code is a single opaque operand; extra operands to eval, introspection, or REPL
+are errors. Use `--` before an option-like script filename:
+
+```sh
+dart run d4rt --allow-net path/to/script.dart --script-option
+dart run d4rt -e "2 + 3"
+dart run d4rt --allow-fs repl
+dart run d4rt -- -script.dart --help
+```
+
+`:clear` resets REPL state without changing its selected grants or read root.
+Introspection (`-i` / `--json-introspection`) remains metadata-only.
+These interpreter permissions are **not an OS-grade sandbox for hostile code**:
+unrestricted filesystem, native processes, native isolate code, dangerous
+operations, and custom bridges can expose host authority.
+
 Inside the REPL:
 ```text
 ==============================================
-  d4rt v0.2.2 - Interactive Dart REPL
+  d4rt v0.5.0 - Interactive Dart REPL
   Type :help for help, :exit or Ctrl+C to quit
 ==============================================
 
