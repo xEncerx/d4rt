@@ -21,23 +21,26 @@ void main() {
 
   group('HashSet Tests', () {
     test('HashSet() constructor and basic properties', () {
-      final result = d4rt.execute(
-        source: '''
+      final result =
+          d4rt.execute(
+                source: '''
           import 'dart:collection';
           main() {
             final set = HashSet();
             return [set.length, set.isEmpty, set.isNotEmpty];
           }
         ''',
-      ) as List;
+              )
+              as List;
       expect(result[0], 0);
       expect(result[1], true);
       expect(result[2], false);
     });
 
     test('HashSet() constructor, add, length, contains', () {
-      final result = d4rt.execute(
-        source: '''
+      final result =
+          d4rt.execute(
+                source: '''
           import 'dart:collection';
           main() {
             final set = HashSet();
@@ -47,7 +50,8 @@ void main() {
             return [set.length, set.contains(10), set.contains(30), r1, r2, r3, set.toList()];
           }
         ''',
-      ) as List;
+              )
+              as List;
       expect(result[0], 2, reason: "Length after adds");
       expect(result[1], true, reason: "Contains 10");
       expect(result[2], false, reason: "Does not contain 30");
@@ -58,8 +62,9 @@ void main() {
     });
 
     test('HashSet.from() constructor', () {
-      final result = d4rt.execute(
-        source: '''
+      final result =
+          d4rt.execute(
+                source: '''
           import 'dart:collection';
           main() {
             final sourceList = [1, 2, 2, 3, 4, 4, 4];
@@ -67,21 +72,27 @@ void main() {
             return [set.length, set.contains(1), set.contains(5), set.toList()];
           }
         ''',
-      ) as List;
+              )
+              as List;
       expect(result[0], 4, reason: "Length from list with duplicates");
       expect(result[1], true, reason: "Contains 1 from list");
       expect(result[2], false, reason: "Does not contain 5");
-      expect(result[3], unorderedEquals([1, 2, 3, 4]),
-          reason: "toList from list with duplicates");
+      expect(
+        result[3],
+        unorderedEquals([1, 2, 3, 4]),
+        reason: "toList from list with duplicates",
+      );
     });
 
     test('HashSet.identity() returns a native identity set', () {
-      final nativeSet = d4rt.execute(
-        source: '''
+      final nativeSet =
+          d4rt.execute(
+                source: '''
           import 'dart:collection';
           main() => HashSet.identity();
         ''',
-      ) as HashSet<dynamic>;
+              )
+              as HashSet<dynamic>;
       final first = _EqualHostObject(1);
       final second = _EqualHostObject(1);
 
@@ -102,7 +113,8 @@ void main() {
       ]) {
         expect(
           () => d4rt.execute(
-            source: '''
+            source:
+                '''
               import 'dart:collection';
               main() => $invocation;
             ''',
@@ -119,8 +131,9 @@ void main() {
     });
 
     test('clear() and isEmpty', () {
-      final result = d4rt.execute(
-        source: '''
+      final result =
+          d4rt.execute(
+                source: '''
           import 'dart:collection';
           main() {
             final set = HashSet.from([1, 2, 3]);
@@ -129,15 +142,17 @@ void main() {
             return [initialLength, set.length, set.isEmpty];
           }
         ''',
-      ) as List;
+              )
+              as List;
       expect(result[0], 3, reason: "Initial length");
       expect(result[1], 0, reason: "Length after clear");
       expect(result[2], true, reason: "isEmpty after clear");
     });
 
     test('addAll(), remove(), removeAll(), retainAll(), containsAll()', () {
-      final result = d4rt.execute(
-        source: '''
+      final result =
+          d4rt.execute(
+                source: '''
           import 'dart:collection';
           main() {
             final set = HashSet<int>.from([1, 2, 3]);
@@ -173,7 +188,8 @@ void main() {
             ];
           }
         ''',
-      ) as List;
+              )
+              as List;
 
       expect(result[0], 5, reason: "lengthAfterAddAll");
       expect(result[1], true, reason: "contains3 after addAll");
@@ -191,8 +207,9 @@ void main() {
     });
 
     test('first, last, single getters', () {
-      final result = d4rt.execute(
-        source: '''
+      final result =
+          d4rt.execute(
+                source: '''
           import 'dart:collection';
           main() {
             final set1 = HashSet.from([10]);
@@ -227,22 +244,27 @@ void main() {
             ];
           }
         ''',
-      ) as List;
+              )
+              as List;
       expect(result[0], 10, reason: "first1");
       expect(result[1], 10, reason: "last1");
       expect(result[2], 10, reason: "single1");
       expect(result[3], true, reason: "first2 is one of the elements");
       expect(result[4], true, reason: "last2 is one of the elements");
-      expect(result[5], true,
-          reason: "single2_error (set has multiple elements)");
+      expect(
+        result[5],
+        true,
+        reason: "single2_error (set has multiple elements)",
+      );
       expect(result[6], true, reason: "first_empty_error");
       expect(result[7], true, reason: "last_empty_error");
       expect(result[8], true, reason: "single_empty_error");
     });
 
     test('iterator basics and forEach', () {
-      final result = d4rt.execute(
-        source: '''
+      final result =
+          d4rt.execute(
+                source: '''
           import 'dart:collection';
           main() {
             final set = HashSet.from([1, 'hello', true]);
@@ -264,19 +286,27 @@ void main() {
             return [iteratedElements, forEachElements, emptyIterHasNext];
           }
         ''',
-      ) as List;
+              )
+              as List;
 
       // Since HashSet is unordered, we check for unordered equality
-      expect(result[0], unorderedEquals([1, 'hello', true]),
-          reason: "iteratedElements");
-      expect(result[1], unorderedEquals([1, 'hello', true]),
-          reason: "forEachElements");
+      expect(
+        result[0],
+        unorderedEquals([1, 'hello', true]),
+        reason: "iteratedElements",
+      );
+      expect(
+        result[1],
+        unorderedEquals([1, 'hello', true]),
+        reason: "forEachElements",
+      );
       expect(result[2], false, reason: "emptyIterHasNext");
     });
 
     test('toList() and toSet()', () {
-      final result = d4rt.execute(
-        source: '''
+      final result =
+          d4rt.execute(
+                source: '''
           import 'dart:collection';
           main() {
             final set = HashSet.from([10, 20, 5]);
@@ -297,12 +327,19 @@ void main() {
             return [list, nonGrowableError, newSet.contains(15), newSet.length, set.length ];
           }
         ''',
-      ) as List;
+              )
+              as List;
 
-      expect(result[0], unorderedEquals([10, 20, 5, 30]),
-          reason: "list (growable)");
-      expect(result[1], true,
-          reason: "nonGrowableError when adding to non-growable list");
+      expect(
+        result[0],
+        unorderedEquals([10, 20, 5, 30]),
+        reason: "list (growable)",
+      );
+      expect(
+        result[1],
+        true,
+        reason: "nonGrowableError when adding to non-growable list",
+      );
       expect(result[2], true, reason: "newSet contains 15");
       expect(result[3], 4, reason: "newSet length");
       expect(result[4], 3, reason: "original set length unchanged");

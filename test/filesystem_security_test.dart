@@ -4,6 +4,31 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 void main() {
+  test('descriptor filesystem boundary and native parity', () async {
+    final result = await Process.run(Platform.resolvedExecutable, [
+      '--packages=${p.absolute('.dart_tool/package_config.json')}',
+      p.absolute('test/fixtures/filesystem_descriptors.dart'),
+    ]);
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    for (final marker in [
+      'FILESYSTEM_BACKEND',
+      'FILESYSTEM_ALLOWED_OPERATIONS_PASS',
+      'FILESYSTEM_NATIVE_PARITY_PASS',
+      'FILESYSTEM_RESOURCE_OWNERSHIP_PASS',
+      'LISTED_ENTRY_SEMANTICS_PASS',
+      'FILESYSTEM_LINK_DESCENT_PARITY_PASS',
+      'FILESYSTEM_MISSING_QUERY_PARITY_PASS',
+      'FILESYSTEM_MODE_AUTHORITY_PASS',
+      'FILESYSTEM_PUBLIC_ERROR_PATHS_PASS',
+      'FILESYSTEM_RELATIVE_DIAGNOSTICS_PASS',
+      'FILESYSTEM_ASYNC_RESPONSIVENESS_PASS',
+      'FILESYSTEM_DESCRIPTOR_EDGES_PASS',
+      'FILESYSTEM_OUTSIDE_NON_EFFECTS_PASS',
+      'FILESYSTEM_DESCRIPTOR_CONTRACT_PASS',
+    ]) {
+      expect(result.stdout, contains(marker));
+    }
+  }, timeout: const Timeout(Duration(minutes: 2)));
   test('scoped filesystem production bridges and cwd isolation', () async {
     final result = await Process.run(Platform.resolvedExecutable, [
       '--packages=${p.absolute('.dart_tool/package_config.json')}',

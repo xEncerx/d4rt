@@ -21,7 +21,9 @@ void main() {
     });
 
     test('HttpStatus constants are accessible', () {
-      final result = d4rt.execute(source: '''
+      final result =
+          d4rt.execute(
+                source: '''
         import 'dart:io';
 
         main() {
@@ -35,7 +37,9 @@ void main() {
             HttpStatus.internalServerError,
           ];
         }
-      ''') as List;
+      ''',
+              )
+              as List;
 
       expect(result[0], equals(200));
       expect(result[1], equals(201));
@@ -53,7 +57,10 @@ void main() {
       final linkPathSource = jsonEncode(linkPath);
       final targetPathSource = jsonEncode(targetFile.path);
 
-      final result = d4rt.execute(source: '''
+      final result =
+          d4rt.execute(
+                source:
+                    '''
         import 'dart:io';
 
         main() {
@@ -77,7 +84,9 @@ void main() {
             existsDeleted,
           ];
         }
-      ''') as List;
+      ''',
+              )
+              as List;
 
       expect(result[0], isFalse);
       expect(result[1], isTrue);

@@ -7,38 +7,40 @@ import '../native_permissions.dart';
 
 // Windows can dispatch batch executables through cmd.exe even with the native
 // runInShell option disabled. Include DOS trailing-dot/space spelling variants.
-final _windowsBatchCommand =
-    RegExp(r'\.(?:bat|cmd)[ .]*"?[ ]*$', caseSensitive: false);
+final _windowsBatchCommand = RegExp(
+  r'\.(?:bat|cmd)[ .]*"?[ ]*$',
+  caseSensitive: false,
+);
 
 /// Bridged implementation of dart:io Process functionality
 class ProcessIo {
   static BridgedClass get definition => BridgedClass(
-        nativeType: Process,
-        name: 'Process',
-        typeParameterCount: 0,
-        staticMethods: {
-          'start': _start,
-          'run': _run,
-          'runSync': _runSync,
-          'killPid': (visitor, positionalArgs, namedArgs) {
-            _checkSignals(visitor);
-            return _killPid(positionalArgs, namedArgs);
-          },
-        },
-        methods: {
-          'kill': (visitor, target, positionalArgs, namedArgs) {
-            _checkSignals(visitor);
-            return _kill(target, positionalArgs, namedArgs);
-          },
-        },
-        getters: {
-          'exitCode': (visitor, target) => (target as Process).exitCode,
-          'pid': (visitor, target) => (target as Process).pid,
-          'stdin': (visitor, target) => (target as Process).stdin,
-          'stdout': (visitor, target) => (target as Process).stdout,
-          'stderr': (visitor, target) => (target as Process).stderr,
-        },
-      );
+    nativeType: Process,
+    name: 'Process',
+    typeParameterCount: 0,
+    staticMethods: {
+      'start': _start,
+      'run': _run,
+      'runSync': _runSync,
+      'killPid': (visitor, positionalArgs, namedArgs) {
+        _checkSignals(visitor);
+        return _killPid(positionalArgs, namedArgs);
+      },
+    },
+    methods: {
+      'kill': (visitor, target, positionalArgs, namedArgs) {
+        _checkSignals(visitor);
+        return _kill(target, positionalArgs, namedArgs);
+      },
+    },
+    getters: {
+      'exitCode': (visitor, target) => (target as Process).exitCode,
+      'pid': (visitor, target) => (target as Process).pid,
+      'stdin': (visitor, target) => (target as Process).stdin,
+      'stdout': (visitor, target) => (target as Process).stdout,
+      'stderr': (visitor, target) => (target as Process).stderr,
+    },
+  );
 
   static Future<Process> _start(
     InterpreterVisitor visitor,
@@ -101,7 +103,9 @@ class ProcessIo {
   }
 
   static bool _killPid(
-      List<dynamic> positionalArgs, Map<String, dynamic> namedArgs) {
+    List<dynamic> positionalArgs,
+    Map<String, dynamic> namedArgs,
+  ) {
     if (positionalArgs.isEmpty) {
       throw ArgumentError('Process.killPid requires pid');
     }
@@ -114,8 +118,11 @@ class ProcessIo {
     return Process.killPid(pid, signal);
   }
 
-  static bool _kill(dynamic instance, List<dynamic> positionalArgs,
-      Map<String, dynamic> namedArgs) {
+  static bool _kill(
+    dynamic instance,
+    List<dynamic> positionalArgs,
+    Map<String, dynamic> namedArgs,
+  ) {
     if (instance is! Process) {
       throw ArgumentError('Invalid process instance');
     }
@@ -127,13 +134,10 @@ class ProcessIo {
   }
 
   static void _checkSignals(InterpreterVisitor? visitor) =>
-      requireNativePermission(
-          visitor,
-          {
-            'type': 'dangerous',
-            'operation': 'process signals',
-          },
-          'DangerousPermission.processSignals');
+      requireNativePermission(visitor, {
+        'type': 'dangerous',
+        'operation': 'process signals',
+      }, 'DangerousPermission.processSignals');
 }
 
 // One immutable input snapshot owns both authorization and native launch.
@@ -170,107 +174,101 @@ class _ProcessInput {
   }
 
   void authorize(InterpreterVisitor? visitor) {
-    final usesShell = runInShell ||
+    final usesShell =
+        runInShell ||
         (Platform.isWindows && _windowsBatchCommand.hasMatch(executable));
-    requireNativePermission(
-        visitor,
-        {
-          'type': 'process',
-          'command': executable,
-          'args': arguments,
-          'shell': usesShell,
-        },
-        'ProcessRunPermission${usesShell ? ".any for shell execution" : ""}');
-    requireNativePermission(
-        visitor,
-        {
-          'type': 'dangerous',
-          'operation': 'process execution',
-        },
-        'DangerousPermission.processExecution');
+    requireNativePermission(visitor, {
+      'type': 'process',
+      'command': executable,
+      'args': arguments,
+      'shell': usesShell,
+    }, 'ProcessRunPermission${usesShell ? ".any for shell execution" : ""}');
+    requireNativePermission(visitor, {
+      'type': 'dangerous',
+      'operation': 'process execution',
+    }, 'DangerousPermission.processExecution');
   }
 }
 
 /// Bridged implementation of ProcessResult
 class ProcessResultIo {
   static BridgedClass get definition => BridgedClass(
-        nativeType: ProcessResult,
-        name: 'ProcessResult',
-        typeParameterCount: 0,
-        getters: {
-          'exitCode': (visitor, target) => (target as ProcessResult).exitCode,
-          'pid': (visitor, target) => (target as ProcessResult).pid,
-          'stdout': (visitor, target) => (target as ProcessResult).stdout,
-          'stderr': (visitor, target) => (target as ProcessResult).stderr,
-        },
-      );
+    nativeType: ProcessResult,
+    name: 'ProcessResult',
+    typeParameterCount: 0,
+    getters: {
+      'exitCode': (visitor, target) => (target as ProcessResult).exitCode,
+      'pid': (visitor, target) => (target as ProcessResult).pid,
+      'stdout': (visitor, target) => (target as ProcessResult).stdout,
+      'stderr': (visitor, target) => (target as ProcessResult).stderr,
+    },
+  );
 }
 
 /// Bridged implementation of ProcessSignal
 class ProcessSignalIo {
   static BridgedClass get definition => BridgedClass(
-        nativeType: ProcessSignal,
-        name: 'ProcessSignal',
-        typeParameterCount: 0,
-        staticGetters: {
-          'sighup': (visitor) => ProcessSignal.sighup,
-          'sigint': (visitor) => ProcessSignal.sigint,
-          'sigquit': (visitor) => ProcessSignal.sigquit,
-          'sigill': (visitor) => ProcessSignal.sigill,
-          'sigtrap': (visitor) => ProcessSignal.sigtrap,
-          'sigabrt': (visitor) => ProcessSignal.sigabrt,
-          'sigbus': (visitor) => ProcessSignal.sigbus,
-          'sigfpe': (visitor) => ProcessSignal.sigfpe,
-          'sigkill': (visitor) => ProcessSignal.sigkill,
-          'sigusr1': (visitor) => ProcessSignal.sigusr1,
-          'sigsegv': (visitor) => ProcessSignal.sigsegv,
-          'sigusr2': (visitor) => ProcessSignal.sigusr2,
-          'sigpipe': (visitor) => ProcessSignal.sigpipe,
-          'sigalrm': (visitor) => ProcessSignal.sigalrm,
-          'sigterm': (visitor) => ProcessSignal.sigterm,
-          'sigchld': (visitor) => ProcessSignal.sigchld,
-          'sigcont': (visitor) => ProcessSignal.sigcont,
-          'sigstop': (visitor) => ProcessSignal.sigstop,
-          'sigtstp': (visitor) => ProcessSignal.sigtstp,
-          'sigttin': (visitor) => ProcessSignal.sigttin,
-          'sigttou': (visitor) => ProcessSignal.sigttou,
-          'sigurg': (visitor) => ProcessSignal.sigurg,
-          'sigxcpu': (visitor) => ProcessSignal.sigxcpu,
-          'sigxfsz': (visitor) => ProcessSignal.sigxfsz,
-          'sigvtalrm': (visitor) => ProcessSignal.sigvtalrm,
-          'sigprof': (visitor) => ProcessSignal.sigprof,
-          'sigwinch': (visitor) => ProcessSignal.sigwinch,
-          'sigpoll': (visitor) => ProcessSignal.sigpoll,
-          'sigsys': (visitor) => ProcessSignal.sigsys,
-        },
-        getters: {
-          'name': (visitor, target) => (target as ProcessSignal).name,
-          'runtimeType': (visitor, target) =>
-              (target as ProcessSignal).runtimeType,
-          'hashCode': (visitor, target) => (target as ProcessSignal).hashCode,
-        },
-        methods: {
-          'watch': (visitor, target, positionalArgs, namedArgs) {
-            ProcessIo._checkSignals(visitor);
-            return (target as ProcessSignal).watch();
-          },
-          'toString': (visitor, target, positionalArgs, namedArgs) =>
-              (target as ProcessSignal).toString(),
-        },
-      );
+    nativeType: ProcessSignal,
+    name: 'ProcessSignal',
+    typeParameterCount: 0,
+    staticGetters: {
+      'sighup': (visitor) => ProcessSignal.sighup,
+      'sigint': (visitor) => ProcessSignal.sigint,
+      'sigquit': (visitor) => ProcessSignal.sigquit,
+      'sigill': (visitor) => ProcessSignal.sigill,
+      'sigtrap': (visitor) => ProcessSignal.sigtrap,
+      'sigabrt': (visitor) => ProcessSignal.sigabrt,
+      'sigbus': (visitor) => ProcessSignal.sigbus,
+      'sigfpe': (visitor) => ProcessSignal.sigfpe,
+      'sigkill': (visitor) => ProcessSignal.sigkill,
+      'sigusr1': (visitor) => ProcessSignal.sigusr1,
+      'sigsegv': (visitor) => ProcessSignal.sigsegv,
+      'sigusr2': (visitor) => ProcessSignal.sigusr2,
+      'sigpipe': (visitor) => ProcessSignal.sigpipe,
+      'sigalrm': (visitor) => ProcessSignal.sigalrm,
+      'sigterm': (visitor) => ProcessSignal.sigterm,
+      'sigchld': (visitor) => ProcessSignal.sigchld,
+      'sigcont': (visitor) => ProcessSignal.sigcont,
+      'sigstop': (visitor) => ProcessSignal.sigstop,
+      'sigtstp': (visitor) => ProcessSignal.sigtstp,
+      'sigttin': (visitor) => ProcessSignal.sigttin,
+      'sigttou': (visitor) => ProcessSignal.sigttou,
+      'sigurg': (visitor) => ProcessSignal.sigurg,
+      'sigxcpu': (visitor) => ProcessSignal.sigxcpu,
+      'sigxfsz': (visitor) => ProcessSignal.sigxfsz,
+      'sigvtalrm': (visitor) => ProcessSignal.sigvtalrm,
+      'sigprof': (visitor) => ProcessSignal.sigprof,
+      'sigwinch': (visitor) => ProcessSignal.sigwinch,
+      'sigpoll': (visitor) => ProcessSignal.sigpoll,
+      'sigsys': (visitor) => ProcessSignal.sigsys,
+    },
+    getters: {
+      'name': (visitor, target) => (target as ProcessSignal).name,
+      'runtimeType': (visitor, target) => (target as ProcessSignal).runtimeType,
+      'hashCode': (visitor, target) => (target as ProcessSignal).hashCode,
+    },
+    methods: {
+      'watch': (visitor, target, positionalArgs, namedArgs) {
+        ProcessIo._checkSignals(visitor);
+        return (target as ProcessSignal).watch();
+      },
+      'toString': (visitor, target, positionalArgs, namedArgs) =>
+          (target as ProcessSignal).toString(),
+    },
+  );
 }
 
 /// Bridged implementation of ProcessStartMode
 class ProcessStartModeIo {
   static BridgedClass get definition => BridgedClass(
-        nativeType: ProcessStartMode,
-        name: 'ProcessStartMode',
-        typeParameterCount: 0,
-        staticGetters: {
-          'normal': (visitor) => ProcessStartMode.normal,
-          'inheritStdio': (visitor) => ProcessStartMode.inheritStdio,
-          'detached': (visitor) => ProcessStartMode.detached,
-          'detachedWithStdio': (visitor) => ProcessStartMode.detachedWithStdio,
-        },
-      );
+    nativeType: ProcessStartMode,
+    name: 'ProcessStartMode',
+    typeParameterCount: 0,
+    staticGetters: {
+      'normal': (visitor) => ProcessStartMode.normal,
+      'inheritStdio': (visitor) => ProcessStartMode.inheritStdio,
+      'detached': (visitor) => ProcessStartMode.detached,
+      'detachedWithStdio': (visitor) => ProcessStartMode.detachedWithStdio,
+    },
+  );
 }

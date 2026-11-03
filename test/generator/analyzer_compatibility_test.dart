@@ -29,8 +29,9 @@ enum Status {
 ''';
     const config = GeneratorConfig(inputPaths: [], outputPath: 'generated');
 
-    final metadata =
-        MetadataCollector(config: config).collectFromSource(source);
+    final metadata = MetadataCollector(
+      config: config,
+    ).collectFromSource(source);
 
     expect(metadata.warnings, isEmpty);
     final box = metadata.classes.singleWhere((item) => item.name == 'Box');
@@ -40,8 +41,9 @@ enum Status {
     expect(box.constructors.single.parameters.single.name, 'value');
     expect(box.constructors.single.parameters.single.defaultValue, '1');
 
-    final transform =
-        box.methods.singleWhere((item) => item.name == 'transform');
+    final transform = box.methods.singleWhere(
+      (item) => item.name == 'transform',
+    );
     expect(transform.parameters.first.name, 'callback');
     expect(transform.parameters.first.type.name, 'Function');
     expect(transform.parameters.last.name, 'count');
@@ -114,62 +116,74 @@ class NamedFieldKinds {
 ''';
     const config = GeneratorConfig(inputPaths: [], outputPath: 'generated');
 
-    final metadata =
-        MetadataCollector(config: config).collectFromSource(source);
+    final metadata = MetadataCollector(
+      config: config,
+    ).collectFromSource(source);
 
     expect(metadata.warnings, isEmpty);
-    final parameterKinds =
-        metadata.classes.singleWhere((item) => item.name == 'ParameterKinds');
+    final parameterKinds = metadata.classes.singleWhere(
+      (item) => item.name == 'ParameterKinds',
+    );
     final constructorParameters = parameterKinds.constructors.single.parameters;
     expect(constructorParameters[0].type.name, 'int');
     expect(constructorParameters[1].type.name, 'void');
     expect(constructorParameters[2].type.name, 'int');
     expect(constructorParameters[3].type.name, 'int');
 
-    final namedSuperParameterKinds = metadata.classes
-        .singleWhere((item) => item.name == 'NamedSuperParameterKinds');
+    final namedSuperParameterKinds = metadata.classes.singleWhere(
+      (item) => item.name == 'NamedSuperParameterKinds',
+    );
     final namedSuperParameters =
         namedSuperParameterKinds.constructors.single.parameters;
     expect(namedSuperParameters[0].type.name, 'int');
     expect(namedSuperParameters[1].type.name, 'int');
 
-    final requiredOrdinary = parameterKinds.methods
-        .singleWhere((item) => item.name == 'requiredOrdinary');
+    final requiredOrdinary = parameterKinds.methods.singleWhere(
+      (item) => item.name == 'requiredOrdinary',
+    );
     expect(requiredOrdinary.parameters.single.type.name, 'dynamic');
 
-    final optionalOrdinary = parameterKinds.methods
-        .singleWhere((item) => item.name == 'optionalOrdinary');
+    final optionalOrdinary = parameterKinds.methods.singleWhere(
+      (item) => item.name == 'optionalOrdinary',
+    );
     expect(optionalOrdinary.parameters.single.type.name, 'int');
 
-    final namedOrdinary = parameterKinds.methods
-        .singleWhere((item) => item.name == 'namedOrdinary');
+    final namedOrdinary = parameterKinds.methods.singleWhere(
+      (item) => item.name == 'namedOrdinary',
+    );
     expect(namedOrdinary.parameters.single.type.name, 'int');
 
-    final requiredNamedOrdinary = parameterKinds.methods
-        .singleWhere((item) => item.name == 'requiredNamedOrdinary');
+    final requiredNamedOrdinary = parameterKinds.methods.singleWhere(
+      (item) => item.name == 'requiredNamedOrdinary',
+    );
     expect(requiredNamedOrdinary.parameters.single.type.name, 'int');
 
-    final functionTyped = parameterKinds.methods
-        .singleWhere((item) => item.name == 'functionTyped');
+    final functionTyped = parameterKinds.methods.singleWhere(
+      (item) => item.name == 'functionTyped',
+    );
     expect(functionTyped.parameters.single.type.name, 'Function');
 
-    final optionalFunctionTyped = parameterKinds.methods
-        .singleWhere((item) => item.name == 'optionalFunctionTyped');
+    final optionalFunctionTyped = parameterKinds.methods.singleWhere(
+      (item) => item.name == 'optionalFunctionTyped',
+    );
     expect(optionalFunctionTyped.parameters.single.type.name, 'Function');
 
-    final namedFunctionTyped = parameterKinds.methods
-        .singleWhere((item) => item.name == 'namedFunctionTyped');
+    final namedFunctionTyped = parameterKinds.methods.singleWhere(
+      (item) => item.name == 'namedFunctionTyped',
+    );
     expect(namedFunctionTyped.parameters.single.type.name, 'Function');
 
-    final optionalFieldKinds = metadata.classes
-        .singleWhere((item) => item.name == 'OptionalFieldKinds');
+    final optionalFieldKinds = metadata.classes.singleWhere(
+      (item) => item.name == 'OptionalFieldKinds',
+    );
     expect(
       optionalFieldKinds.constructors.single.parameters.single.type.name,
       'int',
     );
 
-    final namedFieldKinds =
-        metadata.classes.singleWhere((item) => item.name == 'NamedFieldKinds');
+    final namedFieldKinds = metadata.classes.singleWhere(
+      (item) => item.name == 'NamedFieldKinds',
+    );
     expect(
       namedFieldKinds.constructors.single.parameters.single.type.name,
       'int',

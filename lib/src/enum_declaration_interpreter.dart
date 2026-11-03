@@ -8,10 +8,13 @@ class _EnumDeclarationInterpreter {
     if (!identical(InterpreterVisitor.currentCollectionVisitor, visitor)) {
       return visitor.runCollectionInvocation(() => populate(node));
     }
-    final enumType = visitor.environment.get(node.namePart.typeName.lexeme)
-        as InterpretedEnum;
+    final enumType =
+        visitor.environment.get(node.namePart.typeName.lexeme)
+            as InterpretedEnum;
     return enumType.populateDeclaration(
-        visitor, () => _populate(node, enumType));
+      visitor,
+      () => _populate(node, enumType),
+    );
   }
 
   Object? _populate(EnumDeclaration node, InterpretedEnum enumType) {
@@ -21,14 +24,16 @@ class _EnumDeclarationInterpreter {
     if (node.body.constants.isEmpty) {
       throw RuntimeError('An enum must declare at least one constant.');
     }
-    if (node.body.constants.any((constant) => const [
-          'values',
-          'index',
-          'hashCode',
-          'toString',
-          'runtimeType',
-          'noSuchMethod'
-        ].contains(constant.name.lexeme))) {
+    if (node.body.constants.any(
+      (constant) => const [
+        'values',
+        'index',
+        'hashCode',
+        'toString',
+        'runtimeType',
+        'noSuchMethod',
+      ].contains(constant.name.lexeme),
+    )) {
       throw RuntimeError('Enum constant conflicts with an inherited member.');
     }
     final scope = enumType.memberEnvironment();
@@ -40,15 +45,18 @@ class _EnumDeclarationInterpreter {
         in node.namePart.typeParameters?.typeParameters ?? const []) {
       enumType.typeParameterBounds[parameter.name.lexeme] =
           parameter.bound == null
-              ? null
-              : resolveRuntimeTypeArgument(parameter.bound!, typeScope);
+          ? null
+          : resolveRuntimeTypeArgument(parameter.bound!, typeScope);
     }
     for (final name in enumType.typeParameterNames) {
       typeScope.assign(
-          name, TypeParameter(name, bound: enumType.typeParameterBounds[name]));
+        name,
+        TypeParameter(name, bound: enumType.typeParameterBounds[name]),
+      );
     }
-    enumType.interfaceTypes
-        .addAll(node.implementsClause?.interfaces ?? const <NamedType>[]);
+    enumType.interfaceTypes.addAll(
+      node.implementsClause?.interfaces ?? const <NamedType>[],
+    );
     for (final annotation
         in node.withClause?.mixinTypes ?? const <NamedType>[]) {
       var type = resolveRuntimeTypeAnnotation(annotation, typeScope);
@@ -57,12 +65,17 @@ class _EnumDeclarationInterpreter {
         base.ensureEnumDependency(visitor);
         if (type is! AppliedRuntimeType && base.typeParameterNames.isNotEmpty) {
           type = AppliedRuntimeType(
-              base,
-              instantiateEnumTypeBounds(
-                  base.typeParameterNames, base.typeParameterBounds));
+            base,
+            instantiateEnumTypeBounds(
+              base.typeParameterNames,
+              base.typeParameterBounds,
+            ),
+          );
         }
         enumType.validateMixinArguments(
-            base, type is AppliedRuntimeType ? type.typeArguments : const []);
+          base,
+          type is AppliedRuntimeType ? type.typeArguments : const [],
+        );
         if (!base.isMixin || base.fieldDeclarations.any((f) => !f.isStatic)) {
           throw RuntimeError('Enum mixins cannot introduce instance fields.');
         }
@@ -74,22 +87,27 @@ class _EnumDeclarationInterpreter {
             throw RuntimeError('Forbidden enum mixin member $forbidden.');
           }
         }
-        final constraintEnv =
-            Environment(enclosing: base.classDefinitionEnvironment);
+        final constraintEnv = Environment(
+          enclosing: base.classDefinitionEnvironment,
+        );
         for (var i = 0; i < base.typeParameterNames.length; i++) {
           constraintEnv.define(
-              base.typeParameterNames[i],
-              type is AppliedRuntimeType
-                  ? type.typeArguments[i]
-                  : base.typeParameterBounds[base.typeParameterNames[i]] ??
-                      const NamedRuntimeType('dynamic'));
+            base.typeParameterNames[i],
+            type is AppliedRuntimeType
+                ? type.typeArguments[i]
+                : base.typeParameterBounds[base.typeParameterNames[i]] ??
+                      const NamedRuntimeType('dynamic'),
+          );
         }
         for (final constraint in base.onConstraintTypes) {
-          final expected =
-              resolveRuntimeTypeAnnotation(constraint, constraintEnv);
+          final expected = resolveRuntimeTypeAnnotation(
+            constraint,
+            constraintEnv,
+          );
           if (!enumType.satisfiesMixinConstraint(expected)) {
             throw RuntimeError(
-                'Enum ${enumType.name} does not satisfy mixin constraint ${expected.name}.');
+              'Enum ${enumType.name} does not satisfy mixin constraint ${expected.name}.',
+            );
           }
         }
       } else if (base is BridgedClass) {
@@ -104,19 +122,21 @@ class _EnumDeclarationInterpreter {
           final nativeTypes = metadata.typeMetadata.inEnvironment(typeScope);
           enumType.nativeMixinTypeMetadata[base] = nativeTypes;
           final arguments = nativeTypes.arguments(
-              type is AppliedRuntimeType ? type.typeArguments : null);
+            type is AppliedRuntimeType ? type.typeArguments : null,
+          );
           if (type is! AppliedRuntimeType && arguments.isNotEmpty) {
             type = AppliedRuntimeType(base, arguments);
           }
           final substitutions = {
             for (var i = 0; i < arguments.length; i++)
-              metadata.typeMetadata.typeParameters[i]: arguments[i]
+              metadata.typeMetadata.typeParameters[i]: arguments[i],
           };
           for (final constraint in metadata.constraints) {
             final expected = nativeTypes.parse(constraint, substitutions);
             if (!enumType.satisfiesMixinConstraint(expected)) {
               throw RuntimeError(
-                  'Unsatisfied native enum mixin constraint ${expected.name}.');
+                'Unsatisfied native enum mixin constraint ${expected.name}.',
+              );
             }
           }
         }
@@ -125,7 +145,8 @@ class _EnumDeclarationInterpreter {
               base.methods.containsKey(forbidden) ||
               base.setters.containsKey(forbidden)) {
             throw RuntimeError(
-                'Forbidden native enum mixin member $forbidden.');
+              'Forbidden native enum mixin member $forbidden.',
+            );
           }
         }
       } else {
@@ -140,44 +161,60 @@ class _EnumDeclarationInterpreter {
         if (name == 'values' ||
             const ['index', 'hashCode', '=='].contains(name) ||
             (member.isStatic &&
-                const ['toString', 'runtimeType', 'noSuchMethod']
-                    .contains(name))) {
+                const [
+                  'toString',
+                  'runtimeType',
+                  'noSuchMethod',
+                ].contains(name))) {
           throw RuntimeError('Forbidden enum member $name.');
         }
         if (!member.isComplete) {
           throw RuntimeError('Enums cannot declare abstract members.');
         }
-        final function =
-            InterpretedFunction.method(member, typeScope, enumType);
+        final function = InterpretedFunction.method(
+          member,
+          typeScope,
+          enumType,
+        );
         final map = member.isStatic
             ? (member.isGetter
-                ? enumType.staticGetters
-                : member.isSetter
-                    ? enumType.staticSetters
-                    : enumType.staticMethods)
+                  ? enumType.staticGetters
+                  : member.isSetter
+                  ? enumType.staticSetters
+                  : enumType.staticMethods)
             : (member.isGetter
-                ? enumType.getters
-                : member.isSetter
-                    ? enumType.setters
-                    : enumType.methods);
+                  ? enumType.getters
+                  : member.isSetter
+                  ? enumType.setters
+                  : enumType.methods);
         map[name] = function;
       } else if (member is FieldDeclaration) {
         if (!member.isStatic &&
             (!member.fields.isFinal || member.fields.lateKeyword != null)) {
           throw RuntimeError(
-              'Enum instance fields must be final and not late.');
+            'Enum instance fields must be final and not late.',
+          );
         }
         for (final variable in member.fields.variables) {
-          if (const ['values', 'index', 'hashCode']
-                  .contains(variable.name.lexeme) ||
+          if (const [
+                'values',
+                'index',
+                'hashCode',
+              ].contains(variable.name.lexeme) ||
               (member.isStatic &&
-                  const ['toString', 'runtimeType', 'noSuchMethod']
-                      .contains(variable.name.lexeme))) {
+                  const [
+                    'toString',
+                    'runtimeType',
+                    'noSuchMethod',
+                  ].contains(variable.name.lexeme))) {
             throw RuntimeError('Forbidden enum field ${variable.name.lexeme}.');
           }
           if (member.isStatic) {
             enumType.declareStaticField(
-                variable.name.lexeme, variable, member.fields);
+              variable.name.lexeme,
+              variable,
+              member.fields,
+            );
           }
         }
         if (!member.isStatic) enumType.fieldDeclarations.add(member);
@@ -192,11 +229,15 @@ class _EnumDeclarationInterpreter {
         if (member.factoryKeyword == null &&
             member.body is! EmptyFunctionBody) {
           throw RuntimeError(
-              'Generative enum constructors cannot have a body.');
+            'Generative enum constructors cannot have a body.',
+          );
         }
         constructors[name] = member;
-        enumType.constructors[name] =
-            InterpretedFunction.constructor(member, typeScope, enumType);
+        enumType.constructors[name] = InterpretedFunction.constructor(
+          member,
+          typeScope,
+          enumType,
+        );
       }
     }
     for (final constructor in enumType.constructors.values) {
@@ -223,7 +264,8 @@ class _EnumDeclarationInterpreter {
           }
           if (declaration == null &&
               (constructors.values.any(
-                      (constructor) => constructor.factoryKeyword == null) ||
+                    (constructor) => constructor.factoryKeyword == null,
+                  ) ||
                   constructors.containsKey('') ||
                   constructorName.isNotEmpty)) {
             throw RuntimeError('Missing enum constructor $constructorName.');
@@ -234,25 +276,37 @@ class _EnumDeclarationInterpreter {
           if (declaration == null &&
               (args.$1.isNotEmpty || args.$2.isNotEmpty)) {
             throw RuntimeError(
-                'The implicit enum constructor takes no arguments.');
+              'The implicit enum constructor takes no arguments.',
+            );
           }
           final explicit = invocation?.typeArguments?.arguments
               .map((t) => resolveRuntimeTypeArgument(t, typeScope))
               .toList();
-          final types = enumType.validateTypeArguments(explicit ??
-              enumType.inferTypeArguments(
-                  visitor, declaration?.parameters, args.$1, args.$2));
+          final types = enumType.validateTypeArguments(
+            explicit ??
+                enumType.inferTypeArguments(
+                  visitor,
+                  declaration?.parameters,
+                  args.$1,
+                  args.$2,
+                ),
+          );
           final value = InterpretedEnumValue(
-              enumType, constant.name.lexeme, index,
-              typeArguments: types);
+            enumType,
+            constant.name.lexeme,
+            index,
+            typeArguments: types,
+          );
           final fieldScope = enumType.memberEnvironment(receiver: value);
           enumType.bindTypeParameters(enumType, types, fieldScope);
           visitor.environment = fieldScope;
           for (final field in enumType.fieldDeclarations) {
             for (final variable in field.fields.variables) {
               if (variable.initializer != null) {
-                value.set(variable.name.lexeme,
-                    interpreter._constantValue(variable.initializer!, node));
+                value.set(
+                  variable.name.lexeme,
+                  interpreter._constantValue(variable.initializer!, node),
+                );
               }
             }
           }
@@ -289,13 +343,17 @@ class _EnumDeclarationInterpreter {
   }
 
   (List<Object?>, Map<String, Object?>) _constantArguments(
-      ArgumentList arguments, EnumDeclaration node) {
+    ArgumentList arguments,
+    EnumDeclaration node,
+  ) {
     final positional = <Object?>[];
     final named = <String, Object?>{};
     for (final argument in arguments.arguments) {
       if (argument is NamedArgument) {
-        named[argument.name.lexeme] =
-            _constantValue(argument.argumentExpression, node);
+        named[argument.name.lexeme] = _constantValue(
+          argument.argumentExpression,
+          node,
+        );
       } else {
         positional.add(_constantValue(argument.argumentExpression, node));
       }
@@ -317,22 +375,22 @@ class _EnumDeclarationInterpreter {
       final methods = base is InterpretedClass
           ? base.methods
           : base is BridgedClass
-              ? base.methods
-              : const <String, Object?>{};
+          ? base.methods
+          : const <String, Object?>{};
       final getters = base is InterpretedClass
           ? base.getters
           : base is BridgedClass
-              ? base.getters
-              : const <String, Object?>{};
+          ? base.getters
+          : const <String, Object?>{};
       final setters = base is InterpretedClass
           ? base.setters
           : base is BridgedClass
-              ? base.setters
-              : const <String, Object?>{};
+          ? base.setters
+          : const <String, Object?>{};
       for (final entry in {
         'method': methods,
         'getter': getters,
-        'setter': setters
+        'setter': setters,
       }.entries) {
         for (final member in entry.value.keys) {
           if (member == 'values') {
@@ -340,7 +398,8 @@ class _EnumDeclarationInterpreter {
           }
           if (!type.hasConcreteInstanceMember(member, entry.key)) {
             throw RuntimeError(
-                'Enum ${type.name} does not implement ${entry.key} $member.');
+              'Enum ${type.name} does not implement ${entry.key} $member.',
+            );
           }
         }
       }
@@ -351,9 +410,12 @@ class _EnumDeclarationInterpreter {
           if (!type.hasConcreteInstanceMember(variable.name.lexeme, 'getter') ||
               (!field.fields.isFinal &&
                   !type.hasConcreteInstanceMember(
-                      variable.name.lexeme, 'setter'))) {
+                    variable.name.lexeme,
+                    'setter',
+                  ))) {
             throw RuntimeError(
-                'Enum ${type.name} does not implement ${variable.name.lexeme}.');
+              'Enum ${type.name} does not implement ${variable.name.lexeme}.',
+            );
           }
         }
       }
@@ -372,13 +434,14 @@ class _EnumDeclarationInterpreter {
         for (final entry in {
           'method': base.methods,
           'getter': base.getters,
-          'setter': base.setters
+          'setter': base.setters,
         }.entries) {
           for (final member in entry.value.entries) {
             if (member.value.isAbstract &&
                 !type.hasConcreteInstanceMember(member.key, entry.key)) {
               throw RuntimeError(
-                  'Unimplemented enum mixin member ${member.key}.');
+                'Unimplemented enum mixin member ${member.key}.',
+              );
             }
           }
         }
@@ -386,9 +449,12 @@ class _EnumDeclarationInterpreter {
         for (final requirement
             in base.enumMixinMetadata!.abstractMembers.entries) {
           if (!type.hasConcreteInstanceMember(
-              requirement.key, requirement.value)) {
+            requirement.key,
+            requirement.value,
+          )) {
             throw RuntimeError(
-                'Unimplemented native enum mixin member ${requirement.key}.');
+              'Unimplemented native enum mixin member ${requirement.key}.',
+            );
           }
         }
       }
@@ -467,8 +533,8 @@ class _EnumConstantValidator extends RecursiveAstVisitor<void> {
 
   @override
   void visitRedirectingConstructorInvocation(
-          RedirectingConstructorInvocation node) =>
-      node.argumentList.accept(this);
+    RedirectingConstructorInvocation node,
+  ) => node.argumentList.accept(this);
 
   void _constructor(Object? owner, String name) {
     if (name == 'new') name = '';
@@ -497,7 +563,8 @@ class _EnumConstantValidator extends RecursiveAstVisitor<void> {
     } else if (owner is BridgedClass) {
       if (!owner.constantConstructors.contains(name)) {
         throw RuntimeError(
-            'Native enum payload constructors must be registered const.');
+          'Native enum payload constructors must be registered const.',
+        );
       }
     } else {
       throw RuntimeError('Enum entry arguments must be constant expressions.');
@@ -534,9 +601,13 @@ class _EnumConstantValidator extends RecursiveAstVisitor<void> {
   @override
   void visitInstanceCreationExpression(InstanceCreationExpression node) {
     final type = resolveRuntimeTypeAnnotation(
-        node.constructorName.type, visitor.environment);
-    _constructor(type is AppliedRuntimeType ? type.baseType : type,
-        node.constructorName.name?.name ?? '');
+      node.constructorName.type,
+      visitor.environment,
+    );
+    _constructor(
+      type is AppliedRuntimeType ? type.baseType : type,
+      node.constructorName.name?.name ?? '',
+    );
     node.argumentList.accept(this);
   }
 
@@ -557,7 +628,8 @@ class _EnumConstantValidator extends RecursiveAstVisitor<void> {
       final definition = visitor.environment.get(target.function.toSource());
       if (definition is InterpretedClass && target.typeArguments != null) {
         throw RuntimeError(
-            'Specialized class constructor payloads require compiled support.');
+          'Specialized class constructor payloads require compiled support.',
+        );
       }
       owner = target.accept<Object?>(visitor);
     } else if (target is TypeLiteral) {
@@ -597,15 +669,17 @@ class _EnumConstantValidator extends RecursiveAstVisitor<void> {
       }
       final declaration = owner.declaration;
       if (declaration is ClassDeclaration) {
-        return declaration.body.members.any((declaration) =>
-            declaration is MethodDeclaration &&
-                declaration.isStatic &&
-                !declaration.isGetter &&
-                !declaration.isSetter &&
-                declaration.name.lexeme == member ||
-            declaration is ConstructorDeclaration &&
-                (declaration.name?.lexeme ?? '') ==
-                    (member == 'new' ? '' : member));
+        return declaration.body.members.any(
+          (declaration) =>
+              declaration is MethodDeclaration &&
+                  declaration.isStatic &&
+                  !declaration.isGetter &&
+                  !declaration.isSetter &&
+                  declaration.name.lexeme == member ||
+              declaration is ConstructorDeclaration &&
+                  (declaration.name?.lexeme ?? '') ==
+                      (member == 'new' ? '' : member),
+        );
       }
       return owner.staticMethods.containsKey(member) ||
           owner.constructors.containsKey(member == 'new' ? '' : member);
@@ -646,7 +720,8 @@ class _EnumConstantValidator extends RecursiveAstVisitor<void> {
         return;
       }
       throw RuntimeError(
-          'Enum arguments cannot reference nonconstant members.');
+        'Enum arguments cannot reference nonconstant members.',
+      );
     }
     final value = visitor.environment.get(node.name);
     if (value is InterpretedEnumValue ||
@@ -656,6 +731,7 @@ class _EnumConstantValidator extends RecursiveAstVisitor<void> {
       return;
     }
     throw RuntimeError(
-        'Enum arguments cannot reference nonconstant variables.');
+      'Enum arguments cannot reference nonconstant variables.',
+    );
   }
 }

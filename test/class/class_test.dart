@@ -89,14 +89,19 @@ void main() {
       ''';
       expect(execute(source), [7, 5, 3, 7]);
     });
-    test('Type variables dispatch instance methods without static fallthrough',
-        () {
-      expect(
+    test(
+      'Type variables dispatch instance methods without static fallthrough',
+      () {
+        expect(
           execute('String main() { Type type = int; return type.toString(); }'),
-          'int');
-      expect(() => execute('Object main() => int.toString();'),
-          throwsA(isA<RuntimeError>()));
-    });
+          'int',
+        );
+        expect(
+          () => execute('Object main() => int.toString();'),
+          throwsA(isA<RuntimeError>()),
+        );
+      },
+    );
 
     test('Instance method call (no parameters)', () {
       const source = '''
@@ -711,12 +716,13 @@ void main() {
           }
         ''');
         expect(
-            result,
-            equals([
-              [4.0, 6.0],
-              [-2.0, -2.0],
-              [2.0, 4.0]
-            ]));
+          result,
+          equals([
+            [4.0, 6.0],
+            [-2.0, -2.0],
+            [2.0, 4.0],
+          ]),
+        );
       });
     });
 
@@ -1052,12 +1058,13 @@ void main() {
           }
         ''');
         expect(
-            result,
-            equals([
-              21,
-              21,
-              [10, 21, 30]
-            ]));
+          result,
+          equals([
+            21,
+            21,
+            [10, 21, 30],
+          ]),
+        );
       });
 
       test('Postfix increment on index access (array[i]++)', () {
@@ -1069,12 +1076,13 @@ void main() {
           }
         ''');
         expect(
-            result,
-            equals([
-              5,
-              6,
-              [6, 15, 25]
-            ]));
+          result,
+          equals([
+            5,
+            6,
+            [6, 15, 25],
+          ]),
+        );
       });
 
       test('Increment with custom class operators', () {
@@ -1097,9 +1105,10 @@ void main() {
         ''');
         expect(result, equals(11));
       });
-      test('Custom operators preserve prefix postfix and decrement operands',
-          () {
-        final result = execute('''
+      test(
+        'Custom operators preserve prefix postfix and decrement operands',
+        () {
+          final result = execute('''
           class CustomNumber {
             final int value;
             CustomNumber(this.value);
@@ -1126,8 +1135,9 @@ void main() {
               indexed.value, list[0].value];
           }
         ''');
-        expect(result, [10, 12, 12, 10, 10, 10, 11, 19, 19]);
-      });
+          expect(result, [10, 12, 12, 10, 10, 10, 11, 19, 19]);
+        },
+      );
     });
   });
   group('Super Parameters (Dart 2.17+):', () {
@@ -1343,9 +1353,11 @@ void main() {
       expect(execute(code), equals('chained'));
     });
 
-    test('Positional super formals forward by position rather than parent name',
-        () {
-      expect(execute('''
+    test(
+      'Positional super formals forward by position rather than parent name',
+      () {
+        expect(
+          execute('''
 class Parent {
   Parent(this.left, this.right);
   final int left;
@@ -1355,11 +1367,15 @@ class Child extends Parent {
   Child(super.right, super.left);
 }
 main() { final child = Child(1, 2); return [child.left, child.right]; }
-'''), [1, 2]);
-    });
+'''),
+          [1, 2],
+        );
+      },
+    );
 
     test('Inherited positional default slots survive later child defaults', () {
-      expect(execute('''
+      expect(
+        execute('''
 class GrandParent {
   GrandParent([this.first = 1, this.second = 2]);
   final Object? first;
@@ -1373,12 +1389,16 @@ class Child extends Parent {
 }
 main() => [Child().first, Child().second, Child(null).first,
     Child(null).second, Child(4).first, Child(4).second];
-'''), [1, 3, null, 3, 4, 3]);
+'''),
+        [1, 3, null, 3, 4, 3],
+      );
     });
 
-    test('Explicit interpreted super calls include super formals and defaults',
-        () {
-      expect(execute('''
+    test(
+      'Explicit interpreted super calls include super formals and defaults',
+      () {
+        expect(
+          execute('''
 class Parent {
   Parent.named(this.first, {this.second = 'parent'});
   final Object? first;
@@ -1390,7 +1410,10 @@ class Child extends Parent {
 }
 main() => [Child(1).first, Child(1).second, Child.explicit().first,
     Child.explicit().second, Child.explicit(second: null).second];
-'''), [1, 'child', 'fixed', 'parent', null]);
-    });
+'''),
+          [1, 'child', 'fixed', 'parent', null],
+        );
+      },
+    );
   });
 }

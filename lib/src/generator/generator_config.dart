@@ -85,12 +85,14 @@ class GeneratorConfig {
   }) {
     return GeneratorConfig(
       basePath: json['basePath'] as String? ?? basePath,
-      inputPaths: (json['inputPaths'] as List<dynamic>?)
+      inputPaths:
+          (json['inputPaths'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toList() ??
           [],
       outputPath: json['outputPath'] as String? ?? 'lib/generated',
-      excludePatterns: (json['excludePatterns'] as List<dynamic>?)
+      excludePatterns:
+          (json['excludePatterns'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toList() ??
           const ['.g.dart', '.generated.dart', '_test.dart'],
@@ -99,19 +101,25 @@ class GeneratorConfig {
       includeStaticMembers: json['includeStaticMembers'] as bool? ?? true,
       includeOperators: json['includeOperators'] as bool? ?? true,
       bridgeAnnotation: json['bridgeAnnotation'] as String?,
-      typeMappings: (json['typeMappings'] as Map<String, dynamic>?)
-              ?.map((k, v) => MapEntry(k, v as String)) ??
+      typeMappings:
+          (json['typeMappings'] as Map<String, dynamic>?)?.map(
+            (k, v) => MapEntry(k, v as String),
+          ) ??
           const {},
       enumFactoryTypeArguments:
           (json['enumFactoryTypeArguments'] as Map<String, dynamic>?)?.map(
-                  (name, tuples) => MapEntry(
-                      name,
-                      (tuples as List<dynamic>)
-                          .map((tuple) =>
-                              (tuple as List<dynamic>).cast<String>().toList())
-                          .toList())) ??
-              const {},
-      additionalImports: (json['additionalImports'] as List<dynamic>?)
+            (name, tuples) => MapEntry(
+              name,
+              (tuples as List<dynamic>)
+                  .map(
+                    (tuple) => (tuple as List<dynamic>).cast<String>().toList(),
+                  )
+                  .toList(),
+            ),
+          ) ??
+          const {},
+      additionalImports:
+          (json['additionalImports'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toList() ??
           const [],
@@ -131,22 +139,22 @@ class GeneratorConfig {
 
   /// Converts config to JSON.
   Map<String, dynamic> toJson() => {
-        'basePath': basePath,
-        'inputPaths': inputPaths,
-        'outputPath': outputPath,
-        'excludePatterns': excludePatterns,
-        'includePrivateMembers': includePrivateMembers,
-        'includeAbstractClasses': includeAbstractClasses,
-        'includeStaticMembers': includeStaticMembers,
-        'includeOperators': includeOperators,
-        'bridgeAnnotation': bridgeAnnotation,
-        'typeMappings': typeMappings,
-        'enumFactoryTypeArguments': enumFactoryTypeArguments,
-        'additionalImports': additionalImports,
-        'outputNaming': outputNaming.name,
-        'codeStyle': codeStyle.toJson(),
-        'logLevel': logLevel.name,
-      };
+    'basePath': basePath,
+    'inputPaths': inputPaths,
+    'outputPath': outputPath,
+    'excludePatterns': excludePatterns,
+    'includePrivateMembers': includePrivateMembers,
+    'includeAbstractClasses': includeAbstractClasses,
+    'includeStaticMembers': includeStaticMembers,
+    'includeOperators': includeOperators,
+    'bridgeAnnotation': bridgeAnnotation,
+    'typeMappings': typeMappings,
+    'enumFactoryTypeArguments': enumFactoryTypeArguments,
+    'additionalImports': additionalImports,
+    'outputNaming': outputNaming.name,
+    'codeStyle': codeStyle.toJson(),
+    'logLevel': logLevel.name,
+  };
 
   /// Creates a copy with modified values.
   GeneratorConfig copyWith({
@@ -245,12 +253,12 @@ class CodeStyle {
   }
 
   Map<String, dynamic> toJson() => {
-        'lineLength': lineLength,
-        'trailingCommas': trailingCommas,
-        'generateDocs': generateDocs,
-        'preferConst': preferConst,
-        'indent': indent,
-      };
+    'lineLength': lineLength,
+    'trailingCommas': trailingCommas,
+    'generateDocs': generateDocs,
+    'preferConst': preferConst,
+    'indent': indent,
+  };
 }
 
 // =============================================================================
@@ -426,9 +434,12 @@ class ConfigBuilder {
       includeOperators: _includeOperators,
       bridgeAnnotation: _bridgeAnnotation,
       typeMappings: Map.unmodifiable(_typeMappings),
-      enumFactoryTypeArguments: Map.unmodifiable(_enumFactoryTypeArguments.map(
+      enumFactoryTypeArguments: Map.unmodifiable(
+        _enumFactoryTypeArguments.map(
           (name, tuples) =>
-              MapEntry(name, List<List<String>>.unmodifiable(tuples)))),
+              MapEntry(name, List<List<String>>.unmodifiable(tuples)),
+        ),
+      ),
       additionalImports: List.unmodifiable(_additionalImports),
       outputNaming: _outputNaming,
       codeStyle: _codeStyle,

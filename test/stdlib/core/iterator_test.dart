@@ -55,11 +55,12 @@ void main() {
       }
       ''';
       expect(
-          execute(source),
-          equals([
-            [1, 2, 3],
-            false
-          ]));
+        execute(source),
+        equals([
+          [1, 2, 3],
+          false,
+        ]),
+      );
     });
 
     test('Iterator with nested loops', () {
@@ -129,13 +130,17 @@ void main() {
       ''';
       expect(execute(source), equals([1, 3, 5]));
     });
-    test('typed host and collection-view iterators retain moveNext and current',
-        () {
-      final values = List<String?>.unmodifiable(['a', null, 'b']);
-      final interpreter = D4rt();
-      interpreter.registertopLevelFunction(
-          'provide', (visitor, args, named, types) => values);
-      final result = interpreter.execute(source: '''
+    test(
+      'typed host and collection-view iterators retain moveNext and current',
+      () {
+        final values = List<String?>.unmodifiable(['a', null, 'b']);
+        final interpreter = D4rt();
+        interpreter.registertopLevelFunction(
+          'provide',
+          (visitor, args, named, types) => values,
+        );
+        final result = interpreter.execute(
+          source: '''
         import 'dart:collection';
         Object main() {
           final source = provide() as List<String?>;
@@ -152,15 +157,17 @@ void main() {
           }
           return [first, second, direct.moveNext(), throughView.moveNext()];
         }
-      ''');
-      expect(result, [
-        ['a', null, 'b'],
-        ['a', null, 'b'],
-        false,
-        false
-      ]);
-      expect(values, ['a', null, 'b']);
-      expect(() => values.clear(), throwsUnsupportedError);
-    });
+      ''',
+        );
+        expect(result, [
+          ['a', null, 'b'],
+          ['a', null, 'b'],
+          false,
+          false,
+        ]);
+        expect(values, ['a', null, 'b']);
+        expect(() => values.clear(), throwsUnsupportedError);
+      },
+    );
   });
 }

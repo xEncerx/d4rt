@@ -21,8 +21,9 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
     }
 
     final typeParameters = node.namePart.typeParameters;
-    final typeParameterNames =
-        InterpretedClass.extractTypeParameterNames(typeParameters);
+    final typeParameterNames = InterpretedClass.extractTypeParameterNames(
+      typeParameters,
+    );
     // Imported bound types are unavailable during this pass. Keep one mutable
     // metadata map on the placeholder for pass 2 to populate after imports.
     final typeParameterBounds = <String, RuntimeType?>{
@@ -61,13 +62,16 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
       typeParameterBounds: typeParameterBounds,
     );
     placeholder.superclassType = node.extendsClause?.superclass;
-    placeholder.interfaceTypes
-        .addAll(node.implementsClause?.interfaces ?? const []);
-    placeholder.mixinApplicationTypes
-        .addAll(node.withClause?.mixinTypes ?? const []);
+    placeholder.interfaceTypes.addAll(
+      node.implementsClause?.interfaces ?? const [],
+    );
+    placeholder.mixinApplicationTypes.addAll(
+      node.withClause?.mixinTypes ?? const [],
+    );
     environment.define(className, placeholder);
     Logger.debug(
-        "[DeclarationVisitor] Defined placeholder for class '$className' in env: [38;5;244m${environment.hashCode}[0m");
+      "[DeclarationVisitor] Defined placeholder for class '$className' in env: [38;5;244m${environment.hashCode}[0m",
+    );
   }
 
   @override
@@ -98,17 +102,21 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
       interfaces: [], // Initially empty
       onClauseTypes: [], // Will be filled in pass 2
       mixins: [], // Initially empty (mixins cannot use 'with')
-      typeParameterNames:
-          InterpretedClass.extractTypeParameterNames(node.typeParameters),
+      typeParameterNames: InterpretedClass.extractTypeParameterNames(
+        node.typeParameters,
+      ),
       typeParameterBounds: {},
     );
-    placeholder.interfaceTypes
-        .addAll(node.implementsClause?.interfaces ?? const []);
-    placeholder.onConstraintTypes
-        .addAll(node.onClause?.superclassConstraints ?? const []);
+    placeholder.interfaceTypes.addAll(
+      node.implementsClause?.interfaces ?? const [],
+    );
+    placeholder.onConstraintTypes.addAll(
+      node.onClause?.superclassConstraints ?? const [],
+    );
     environment.define(mixinName, placeholder);
     Logger.debug(
-        "[DeclarationVisitor] Defined placeholder for mixin '$mixinName' in env: [38;5;244m${environment.hashCode}[0m");
+      "[DeclarationVisitor] Defined placeholder for mixin '$mixinName' in env: [38;5;244m${environment.hashCode}[0m",
+    );
   }
 
   @override
@@ -123,15 +131,20 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
 
     // Create the placeholder enum runtime object, storing only names for now
     final enumPlaceholder = InterpretedEnum.placeholder(
-        enumName, environment, valueNames,
-        declaration: node,
-        typeParameterNames: InterpretedClass.extractTypeParameterNames(
-            node.namePart.typeParameters));
+      enumName,
+      environment,
+      valueNames,
+      declaration: node,
+      typeParameterNames: InterpretedClass.extractTypeParameterNames(
+        node.namePart.typeParameters,
+      ),
+    );
 
     // Define the enum type placeholder in the current environment
     environment.define(enumName, enumPlaceholder);
     Logger.debug(
-        "[DeclarationVisitor] Defined placeholder for enum '$enumName' with value order [${valueNames.join(', ')}] in env: [38;5;244m${environment.hashCode}[0m");
+      "[DeclarationVisitor] Defined placeholder for enum '$enumName' with value order [${valueNames.join(', ')}] in env: [38;5;244m${environment.hashCode}[0m",
+    );
 
     // Do NOT process members or constants here. That happens in Pass 2 (InterpreterVisitor).
   }
@@ -141,7 +154,8 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
   void visitFunctionDeclaration(FunctionDeclaration node) {
     final functionName = node.name.lexeme;
     Logger.debug(
-        "[DeclarationVisitor.visitFunctionDeclaration] Processing function: $functionName");
+      "[DeclarationVisitor.visitFunctionDeclaration] Processing function: $functionName",
+    );
 
     if (environment.isDefinedLocally(functionName)) {
       return;
@@ -153,7 +167,8 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
 
     if (typeParameters != null) {
       Logger.debug(
-          "[DeclarationVisitor.visitFunctionDeclaration] Function '$functionName' has ${typeParameters.typeParameters.length} type parameters");
+        "[DeclarationVisitor.visitFunctionDeclaration] Function '$functionName' has ${typeParameters.typeParameters.length} type parameters",
+      );
 
       // Create a temporary environment for type resolution
       tempEnvironment = Environment(enclosing: environment);
@@ -167,14 +182,16 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
         tempEnvironment.define(paramName, typeParamPlaceholder);
 
         Logger.debug(
-            "[DeclarationVisitor.visitFunctionDeclaration]   Defined type parameter '$paramName' in temp environment");
+          "[DeclarationVisitor.visitFunctionDeclaration]   Defined type parameter '$paramName' in temp environment",
+        );
       }
     }
 
     // Use the temp environment (if any) for type resolution, otherwise use the normal environment
     final resolveEnvironment = tempEnvironment ?? environment;
 
-    final typeParameterNames = typeParameters?.typeParameters
+    final typeParameterNames =
+        typeParameters?.typeParameters
             .map((param) => param.name.lexeme)
             .toList() ??
         const <String>[];
@@ -191,7 +208,9 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
             bound = resolvedBound.bound;
           } else {
             bound = InterpretedClass.resolveTypeAnnotationDynamic(
-                typeParam.bound!, resolveEnvironment);
+              typeParam.bound!,
+              resolveEnvironment,
+            );
           }
         }
 
@@ -201,8 +220,10 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
 
     if (tempEnvironment != null) {
       for (final paramName in typeParameterNames) {
-        tempEnvironment.assign(paramName,
-            TypeParameter(paramName, bound: typeParameterBounds[paramName]));
+        tempEnvironment.assign(
+          paramName,
+          TypeParameter(paramName, bound: typeParameterBounds[paramName]),
+        );
       }
     }
 
@@ -214,45 +235,59 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
     if (returnTypeNode is NamedType) {
       final typeSource = returnTypeNode.toSource();
       Logger.debug(
-          "[DeclarationVisitor.visitFunctionDeclaration]   Return type node: $typeSource");
+        "[DeclarationVisitor.visitFunctionDeclaration]   Return type node: $typeSource",
+      );
 
       try {
         if (isAsync && returnTypeNode.name.lexeme == 'Future') {
           final futureTypeArguments = returnTypeNode.typeArguments?.arguments;
           if (futureTypeArguments != null && futureTypeArguments.isNotEmpty) {
             declaredReturnType = InterpretedClass.resolveTypeAnnotationDynamic(
-                futureTypeArguments.first, resolveEnvironment);
+              futureTypeArguments.first,
+              resolveEnvironment,
+            );
           } else {
-            declaredReturnType =
-                BridgedClass(nativeType: Object, name: 'dynamic');
+            declaredReturnType = BridgedClass(
+              nativeType: Object,
+              name: 'dynamic',
+            );
           }
         } else {
           declaredReturnType = InterpretedClass.resolveTypeAnnotationDynamic(
-              returnTypeNode, resolveEnvironment);
+            returnTypeNode,
+            resolveEnvironment,
+          );
         }
       } on RuntimeError catch (e) {
         Logger.warn(
-            "[DeclarationVisitor.visitFunctionDeclaration]     Type '$typeSource' not found in environment (RuntimeError: ${e.message}). Using placeholder.");
-        declaredReturnType =
-            BridgedClass(nativeType: Object, name: returnTypeNode.name.lexeme);
+          "[DeclarationVisitor.visitFunctionDeclaration]     Type '$typeSource' not found in environment (RuntimeError: ${e.message}). Using placeholder.",
+        );
+        declaredReturnType = BridgedClass(
+          nativeType: Object,
+          name: returnTypeNode.name.lexeme,
+        );
       }
     } else if (returnTypeNode == null) {
       declaredReturnType = BridgedClass(nativeType: Object, name: 'dynamic');
     } else {
       // For other TypeAnnotation types, use a generic placeholder
-      declaredReturnType =
-          BridgedClass(nativeType: Object, name: 'unknown_type_placeholder');
+      declaredReturnType = BridgedClass(
+        nativeType: Object,
+        name: 'unknown_type_placeholder',
+      );
     }
 
     bool isNullable = returnTypeNode?.question != null; // Check for 'A?'
 
     final function = InterpretedFunction.declaration(
-        node,
-        environment, // The function captures the environment it's declared in
-        declaredReturnType,
-        isNullable);
+      node,
+      environment, // The function captures the environment it's declared in
+      declaredReturnType,
+      isNullable,
+    );
     Logger.debug(
-        "[DeclarationVisitor.visitFunctionDeclaration]   Defining function '$functionName' with declaredReturnType: ${declaredReturnType.name} (Hash: ${declaredReturnType.hashCode})");
+      "[DeclarationVisitor.visitFunctionDeclaration]   Defining function '$functionName' with declaredReturnType: ${declaredReturnType.name} (Hash: ${declaredReturnType.hashCode})",
+    );
     environment.defineFunction(functionName, function);
   }
 
@@ -270,10 +305,13 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
         environment.define(variable.name.lexeme, null);
         if (node.variables.isConst && variable.initializer != null) {
           environment.declareConstant(
-              variable.name.lexeme, variable.initializer!);
+            variable.name.lexeme,
+            variable.initializer!,
+          );
         }
         Logger.debug(
-            "[DeclarationVisitor] Defined top-level variable placeholder '${variable.name.lexeme}' in env: ${environment.hashCode}");
+          "[DeclarationVisitor] Defined top-level variable placeholder '${variable.name.lexeme}' in env: ${environment.hashCode}",
+        );
       }
     }
   }

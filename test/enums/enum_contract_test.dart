@@ -41,7 +41,7 @@ main() async {
       99,
       98,
       'outside',
-      'outside'
+      'outside',
     ],
   ),
   'live state and mutation ordering': (
@@ -92,8 +92,8 @@ main() {
         'set:7',
         'receiver',
         'get',
-        'set:6'
-      ]
+        'set:6',
+      ],
     ],
   ),
   'lazy static transitions and retries': (
@@ -142,7 +142,7 @@ main() {
       9,
       5,
       6,
-      ['once', 'broken', 'broken', 'late', 'late', 'cycle']
+      ['once', 'broken', 'broken', 'late', 'late', 'cycle'],
     ],
   ),
   'constructors factories redirects and tearoffs': (
@@ -202,7 +202,7 @@ main() {
       true,
       true,
       true,
-      [0, 1]
+      [0, 1],
     ],
   ),
   'member overrides and core enum helpers': (
@@ -237,7 +237,7 @@ main() {
       true,
       true,
       3,
-      true
+      true,
     ],
   ),
   'generic types interfaces casts and nullability': (
@@ -290,7 +290,7 @@ main() {
       true,
       false,
       true,
-      'x'
+      'x',
     ],
   ),
   'enum type object and constant patterns': (
@@ -471,7 +471,7 @@ main() {
       true,
       true,
       true,
-      'Chooser<int>'
+      'Chooser<int>',
     ],
   ),
 };
@@ -480,11 +480,15 @@ void main() {
   for (final scenario in enumScenarios.entries) {
     test(scenario.key, () async {
       final interpreter = D4rt();
-      expect(await interpreter.execute(source: scenario.value.source),
-          scenario.value.expected);
+      expect(
+        await interpreter.execute(source: scenario.value.source),
+        scenario.value.expected,
+      );
       final compiled = interpreter.compile(source: scenario.value.source);
       expect(
-          await interpreter.executeCompiled(compiled), scenario.value.expected);
+        await interpreter.executeCompiled(compiled),
+        scenario.value.expected,
+      );
     });
   }
 
@@ -516,33 +520,54 @@ main() {
 ''';
     final interpreter = D4rt();
     const sources = {'package:enum_fixture/model.dart': library};
-    expect(interpreter.execute(source: source, sources: sources),
-        [1, 4, 4, true, true, true]);
+    expect(interpreter.execute(source: source, sources: sources), [
+      1,
+      4,
+      4,
+      true,
+      true,
+      true,
+    ]);
     expect(
-        interpreter.executeCompiled(interpreter.compile(source: source),
-            sources: sources),
-        [1, 4, 4, true, true, true]);
+      interpreter.executeCompiled(
+        interpreter.compile(source: source),
+        sources: sources,
+      ),
+      [1, 4, 4, true, true, true],
+    );
   });
 
-  test('host handles cannot construct replacements or reinitialize constants',
-      () {
-    final value = D4rt().execute(source: r'''
+  test(
+    'host handles cannot construct replacements or reinitialize constants',
+    () {
+      final value =
+          D4rt().execute(
+                source: r'''
 enum E { a(1); const E(this.payload); final int payload; }
 main()=>E.a;
-''') as InterpretedEnumValue;
-    expect(
+''',
+              )
+              as InterpretedEnumValue;
+      expect(
         () => InterpretedEnumValue(value.parentEnum, value.name, value.index),
-        throwsA(anything));
-    expect(() => value.set('payload', 8), throwsA(anything));
-    expect(() => value.finishInitialization(), throwsA(anything));
-  });
+        throwsA(anything),
+      );
+      expect(() => value.set('payload', 8), throwsA(anything));
+      expect(() => value.finishInitialization(), throwsA(anything));
+    },
+  );
 
   test('throwing found getter never falls back to an outer binding', () {
-    expect(() => D4rt().execute(source: r'''
+    expect(
+      () => D4rt().execute(
+        source: r'''
 int broken = 99;
 enum E { a; int get broken => throw 'member failure'; int read() => broken; }
 main() => E.a.read();
-'''), throwsA(anything));
+''',
+      ),
+      throwsA(anything),
+    );
   });
 
   for (final source in <String>[

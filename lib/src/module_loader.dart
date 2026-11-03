@@ -22,11 +22,16 @@ class LoadedModule {
   final CompilationUnit ast; // The AST of the module
   final Environment environment; // The environment of this module
   final Environment
-      exportedEnvironment; // The environment of the exported symbols
+  exportedEnvironment; // The environment of the exported symbols
   final InterpreterVisitor interpreter;
 
-  LoadedModule(this.uri, this.ast, this.environment, this.exportedEnvironment,
-      this.interpreter);
+  LoadedModule(
+    this.uri,
+    this.ast,
+    this.environment,
+    this.exportedEnvironment,
+    this.interpreter,
+  );
 }
 
 class _ModuleEnvironment extends Environment {
@@ -75,11 +80,12 @@ class ModuleLoader {
     int? maxSteps,
     void Function(String)? rootOnPrint,
     bool metadataOnly = false,
-  })  : _metadataOnly = metadataOnly,
-        steps = InvocationSteps(maxSteps),
-        _rootOnPrint = rootOnPrint {
+  }) : _metadataOnly = metadataOnly,
+       steps = InvocationSteps(maxSteps),
+       _rootOnPrint = rootOnPrint {
     Logger.debug(
-        "[ModuleLoader] Initialized with ${sources.length} preloaded sources.");
+      "[ModuleLoader] Initialized with ${sources.length} preloaded sources.",
+    );
   }
 
   bool _isPublicName(String name) => !name.startsWith('_');
@@ -125,10 +131,12 @@ class ModuleLoader {
     final cycle = cycleStartIndex >= 0
         ? [..._moduleLoadStack.sublist(cycleStartIndex), uri]
         : [..._moduleLoadStack, uri];
-    final cycleDescription =
-        cycle.map((entry) => entry.toString()).join(' -> ');
+    final cycleDescription = cycle
+        .map((entry) => entry.toString())
+        .join(' -> ');
     return SourceCodeException(
-        'Circular module dependency detected: $cycleDescription');
+      'Circular module dependency detected: $cycleDescription',
+    );
   }
 
   Uri? _resolveFileSystemUri(Uri uri) {
@@ -164,25 +172,30 @@ class ModuleLoader {
 
       if (allowFileSystemImports && !localFileSystemSupported) {
         throw SourceCodeException(
-            'Filesystem module imports are not supported on this platform for URI: $uriString.');
+          'Filesystem module imports are not supported on this platform for URI: $uriString.',
+        );
       }
 
       if (!allowFileSystemImports) {
         throw SourceCodeException(
-            'Module source not preloaded for URI: $uriString. Filesystem imports are disabled; enable allowFileSystemImports or preload the module source.');
+          'Module source not preloaded for URI: $uriString. Filesystem imports are disabled; enable allowFileSystemImports or preload the module source.',
+        );
       }
 
       throw SourceCodeException(
-          'Module source not found on filesystem for URI: $uriString (resolved path: $resolvedPath).');
+        'Module source not found on filesystem for URI: $uriString (resolved path: $resolvedPath).',
+      );
     }
 
     if (uri.scheme == 'package') {
       throw SourceCodeException(
-          'Package module source not preloaded for URI: $uriString. Provide it in sources or register a bridge for that package library.');
+        'Package module source not preloaded for URI: $uriString. Provide it in sources or register a bridge for that package library.',
+      );
     }
 
     throw SourceCodeException(
-        'Module source not preloaded for URI: $uriString, and not a recognized Dart standard library.');
+      'Module source not preloaded for URI: $uriString, and not a recognized Dart standard library.',
+    );
   }
 
   SourceCodeException wrapDirectiveSourceError(
@@ -191,10 +204,12 @@ class ModuleLoader {
     String targetUri,
     Object error,
   ) {
-    final message =
-        error is SourceCodeException ? error.message : error.toString();
+    final message = error is SourceCodeException
+        ? error.message
+        : error.toString();
     return SourceCodeException(
-        'Failed to load $directiveType "$targetUri" from module "$ownerUri": $message');
+      'Failed to load $directiveType "$targetUri" from module "$ownerUri": $message',
+    );
   }
 
   ({Set<String>? showNames, Set<String>? hideNames}) _extractCombinators(
@@ -210,12 +225,14 @@ class ModuleLoader {
         showNames ??= {};
         showNames.addAll(combinator.shownNames.map((id) => id.name));
         Logger.debug(
-            "[ModuleLoader loadModule for $ownerUri]   $directiveType combinator: show ${combinator.shownNames.map((id) => id.name).join(', ')}");
+          "[ModuleLoader loadModule for $ownerUri]   $directiveType combinator: show ${combinator.shownNames.map((id) => id.name).join(', ')}",
+        );
       } else if (combinator is HideCombinator) {
         hideNames ??= {};
         hideNames.addAll(combinator.hiddenNames.map((id) => id.name));
         Logger.debug(
-            "[ModuleLoader loadModule for $ownerUri]   $directiveType combinator: hide ${combinator.hiddenNames.map((id) => id.name).join(', ')}");
+          "[ModuleLoader loadModule for $ownerUri]   $directiveType combinator: hide ${combinator.hiddenNames.map((id) => id.name).join(', ')}",
+        );
       }
     }
 
@@ -234,22 +251,23 @@ class ModuleLoader {
     Set<String> localNames = const {},
   }) {
     if (prefix != null) {
-      final prefixedEnv =
-          importedModule.exportedEnvironment.shallowCopyFiltered(
-        showNames: showNames,
-        hideNames: hideNames,
-      );
+      final prefixedEnv = importedModule.exportedEnvironment
+          .shallowCopyFiltered(showNames: showNames, hideNames: hideNames);
       targetEnvironment.definePrefixedImport(prefix, prefixedEnv);
       Logger.debug(
-          "[ModuleLoader loadModule for $ownerUri]   Successfully defined prefixed import '$prefix' from ${resolvedImportUri.toString()} into ${ownerUri.toString()} (show: ${showNames?.join(", ")}, hide: ${hideNames?.join(", ")}).");
+        "[ModuleLoader loadModule for $ownerUri]   Successfully defined prefixed import '$prefix' from ${resolvedImportUri.toString()} into ${ownerUri.toString()} (show: ${showNames?.join(", ")}, hide: ${hideNames?.join(", ")}).",
+      );
       return;
     }
 
-    final visible = importedModule.exportedEnvironment
-        .shallowCopyFiltered(showNames: showNames, hideNames: hideNames);
+    final visible = importedModule.exportedEnvironment.shallowCopyFiltered(
+      showNames: showNames,
+      hideNames: hideNames,
+    );
     targetEnvironment.importEnvironment(visible, hide: localNames);
     Logger.debug(
-        "[ModuleLoader loadModule for $ownerUri]   Successfully imported environment from ${resolvedImportUri.toString()} into ${ownerUri.toString()} (show: ${showNames?.join(", ")}, hide: ${hideNames?.join(", ")}).");
+      "[ModuleLoader loadModule for $ownerUri]   Successfully imported environment from ${resolvedImportUri.toString()} into ${ownerUri.toString()} (show: ${showNames?.join(", ")}, hide: ${hideNames?.join(", ")}).",
+    );
   }
 
   void _checkFileSystemSourceReadPermission(Uri fileUri) {
@@ -262,7 +280,8 @@ class ModuleLoader {
       'read': true,
     })) {
       throw RuntimeError(
-          'Reading module source from "$filePath" requires FilesystemPermission.');
+        'Reading module source from "$filePath" requires FilesystemPermission.',
+      );
     }
   }
 
@@ -283,7 +302,8 @@ class ModuleLoader {
     }
 
     throw RuntimeError(
-        "Unable to resolve relative import '$importUriString': Base URI not defined. Either provide a basePath parameter or use absolute URIs.");
+      "Unable to resolve relative import '$importUriString': Base URI not defined. Either provide a basePath parameter or use absolute URIs.",
+    );
   }
 
   LoadedModule loadModule(Uri uri) {
@@ -294,7 +314,8 @@ class ModuleLoader {
 
     if (_moduleCache.containsKey(uri)) {
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Module '${uri.toString()}' found in cache.");
+        "[ModuleLoader loadModule for $uri] Module '${uri.toString()}' found in cache.",
+      );
       return _moduleCache[uri]!;
     }
 
@@ -309,16 +330,19 @@ class ModuleLoader {
 
     try {
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Loading module: ${uri.toString()}");
-      final moduleEnvironment =
-          _ModuleEnvironment(enclosing: globalEnvironment);
+        "[ModuleLoader loadModule for $uri] Loading module: ${uri.toString()}",
+      );
+      final moduleEnvironment = _ModuleEnvironment(
+        enclosing: globalEnvironment,
+      );
       String sourceCode = _fetchModuleSource(uri, moduleEnvironment);
       CompilationUnit ast = _parseSource(uri, sourceCode);
       if (_metadataOnly) {
         AnalysisMetadata.declare(ast, moduleEnvironment);
       } else {
-        final DeclarationVisitor declarationVisitor =
-            DeclarationVisitor(moduleEnvironment);
+        final DeclarationVisitor declarationVisitor = DeclarationVisitor(
+          moduleEnvironment,
+        );
         // Declare local names before imports while deferring function metadata
         // until imported types are available.
         for (var declaration in ast.declarations) {
@@ -351,12 +375,13 @@ class ModuleLoader {
       final privateNames = moduleEnvironment.values.keys
           .where((name) => !_isPublicName(name))
           .toSet();
-      final Environment exportedEnvironment =
-          moduleEnvironment.shallowCopyFiltered(hideNames: privateNames);
+      final Environment exportedEnvironment = moduleEnvironment
+          .shallowCopyFiltered(hideNames: privateNames);
       final localNames = moduleEnvironment.values.keys.toSet();
 
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Processing import directives...");
+        "[ModuleLoader loadModule for $uri] Processing import directives...",
+      );
       for (final directive in ast.directives) {
         if (directive is! ImportDirective) {
           continue;
@@ -365,14 +390,18 @@ class ModuleLoader {
         final importedUriString = directive.uri.stringValue;
         if (importedUriString == null) {
           Logger.warn(
-              "[ModuleLoader loadModule for $uri] Import directive with null URI string in ${uri.toString()}");
+            "[ModuleLoader loadModule for $uri] Import directive with null URI string in ${uri.toString()}",
+          );
           continue;
         }
         try {
-          final resolvedImportUri =
-              resolveModuleUri(importedUriString, from: uri);
+          final resolvedImportUri = resolveModuleUri(
+            importedUriString,
+            from: uri,
+          );
           Logger.debug(
-              "[ModuleLoader loadModule for $uri]   Importing from ${uri.toString()}: URI '$importedUriString', resolved to '${resolvedImportUri.toString()}'");
+            "[ModuleLoader loadModule for $uri]   Importing from ${uri.toString()}: URI '$importedUriString', resolved to '${resolvedImportUri.toString()}'",
+          );
           final importedModule = loadModule(resolvedImportUri);
           final prefix = directive.prefix?.name;
 
@@ -394,7 +423,8 @@ class ModuleLoader {
           );
         } catch (e, s) {
           Logger.error(
-              "[ModuleLoader loadModule for $uri] Error processing import directive for '$importedUriString' from ${uri.toString()}: $e\nStackTrace: $s");
+            "[ModuleLoader loadModule for $uri] Error processing import directive for '$importedUriString' from ${uri.toString()}: $e\nStackTrace: $s",
+          );
           if (e is SourceCodeException) {
             throw wrapDirectiveSourceError('import', uri, importedUriString, e);
           }
@@ -402,7 +432,8 @@ class ModuleLoader {
         }
       }
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Finished processing import directives.");
+        "[ModuleLoader loadModule for $uri] Finished processing import directives.",
+      );
 
       // Metadata mode shares loading and namespace rules, but never dispatches
       // declarations to the executable visitor.
@@ -427,8 +458,10 @@ class ModuleLoader {
             declaration.accept(moduleInterpreter);
             final functionName = declaration.name.lexeme;
             if (_isPublicName(functionName)) {
-              exportedEnvironment.defineFunction(functionName,
-                  moduleEnvironment.values[functionName] as Callable);
+              exportedEnvironment.defineFunction(
+                functionName,
+                moduleEnvironment.values[functionName] as Callable,
+              );
             }
           }
         }
@@ -437,7 +470,8 @@ class ModuleLoader {
         // native iteration that invokes interpreted callbacks.
         moduleInterpreter.runCollectionInvocation(() {
           Logger.debug(
-              "[ModuleLoader loadModule for $uri] Processing class/mixin declarations to populate constructors...");
+            "[ModuleLoader loadModule for $uri] Processing class/mixin declarations to populate constructors...",
+          );
           // First process all mixin declarations to ensure they're fully initialized
           // before classes try to use them
           for (final declaration in ast.declarations) {
@@ -468,7 +502,8 @@ class ModuleLoader {
                   : moduleEnvironment.values[extensionName];
               if (extension is! InterpretedExtension) {
                 throw RuntimeError(
-                    "Extension '${declaration.name?.lexeme ?? '<unnamed>'}' was not populated.");
+                  "Extension '${declaration.name?.lexeme ?? '<unnamed>'}' was not populated.",
+                );
               }
               if (extensionName == null) {
                 exportedEnvironment.addUnnamedExtension(extension);
@@ -482,17 +517,21 @@ class ModuleLoader {
               declaration.accept(moduleInterpreter);
               final extensionTypeName = declaration.namePart.typeName.lexeme;
               if (_isPublicName(extensionTypeName)) {
-                exportedEnvironment.assign(extensionTypeName,
-                    moduleEnvironment.values[extensionTypeName]);
+                exportedEnvironment.assign(
+                  extensionTypeName,
+                  moduleEnvironment.values[extensionTypeName],
+                );
               }
             }
           }
           Logger.debug(
-              "[ModuleLoader loadModule for $uri] Finished processing class/mixin/extension declarations.");
+            "[ModuleLoader loadModule for $uri] Finished processing class/mixin/extension declarations.",
+          );
         });
 
         Logger.debug(
-            "[ModuleLoader loadModule for $uri] Executing InterpreterVisitor pass for initializers...");
+          "[ModuleLoader loadModule for $uri] Executing InterpreterVisitor pass for initializers...",
+        );
         moduleInterpreter.runCollectionInvocation(() {
           for (final declaration in ast.declarations) {
             if (declaration is TopLevelVariableDeclaration) {
@@ -501,32 +540,40 @@ class ModuleLoader {
                 final variableName = variable.name.lexeme;
                 if (variableName != '_' && _isPublicName(variableName)) {
                   exportedEnvironment.assign(
-                      variableName, moduleEnvironment.values[variableName]);
+                    variableName,
+                    moduleEnvironment.values[variableName],
+                  );
                 }
               }
             }
           }
         });
         Logger.debug(
-            "[ModuleLoader loadModule for $uri] Finished InterpreterVisitor pass for initializers.");
+          "[ModuleLoader loadModule for $uri] Finished InterpreterVisitor pass for initializers.",
+        );
       }
 
       // Process the export directives of this module to populate its exportedEnvironment
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Processing export directives for ${uri.toString()}...");
+        "[ModuleLoader loadModule for $uri] Processing export directives for ${uri.toString()}...",
+      );
       for (final directive in ast.directives) {
         if (directive is ExportDirective) {
           final exportedUriString = directive.uri.stringValue;
           if (exportedUriString == null) {
             Logger.warn(
-                "[ModuleLoader loadModule for $uri] Export directive with null URI string in ${uri.toString()}");
+              "[ModuleLoader loadModule for $uri] Export directive with null URI string in ${uri.toString()}",
+            );
             continue;
           }
           try {
-            final resolvedExportUri =
-                resolveModuleUri(exportedUriString, from: uri);
+            final resolvedExportUri = resolveModuleUri(
+              exportedUriString,
+              from: uri,
+            );
             Logger.debug(
-                "[ModuleLoader loadModule for $uri]   Exporting from ${uri.toString()}: URI '$exportedUriString', resolved to '${resolvedExportUri.toString()}'");
+              "[ModuleLoader loadModule for $uri]   Exporting from ${uri.toString()}: URI '$exportedUriString', resolved to '${resolvedExportUri.toString()}'",
+            );
             LoadedModule subModule = loadModule(resolvedExportUri);
 
             final combinators = _extractCombinators(
@@ -542,26 +589,39 @@ class ModuleLoader {
               hide: combinators.hideNames,
             );
             Logger.debug(
-                "[ModuleLoader loadModule for $uri]   Successfully merged exported environment from ${resolvedExportUri.toString()} into ${uri.toString()} (show: ${combinators.showNames?.join(", ")}, hide: ${combinators.hideNames?.join(", ")}).");
+              "[ModuleLoader loadModule for $uri]   Successfully merged exported environment from ${resolvedExportUri.toString()} into ${uri.toString()} (show: ${combinators.showNames?.join(", ")}, hide: ${combinators.hideNames?.join(", ")}).",
+            );
           } catch (e, s) {
             Logger.error(
-                "[ModuleLoader loadModule for $uri] Error processing export directive for '$exportedUriString' from ${uri.toString()}: $e\nStackTrace: $s");
+              "[ModuleLoader loadModule for $uri] Error processing export directive for '$exportedUriString' from ${uri.toString()}: $e\nStackTrace: $s",
+            );
             if (e is SourceCodeException) {
               throw wrapDirectiveSourceError(
-                  'export', uri, exportedUriString, e);
+                'export',
+                uri,
+                exportedUriString,
+                e,
+              );
             }
             rethrow;
           }
         }
       }
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Finished processing export directives for ${uri.toString()}.");
+        "[ModuleLoader loadModule for $uri] Finished processing export directives for ${uri.toString()}.",
+      );
 
       final loadedModule = LoadedModule(
-          uri, ast, moduleEnvironment, exportedEnvironment, moduleInterpreter);
+        uri,
+        ast,
+        moduleEnvironment,
+        exportedEnvironment,
+        moduleInterpreter,
+      );
       _moduleCache[uri] = loadedModule;
       Logger.debug(
-          "[ModuleLoader loadModule for $uri] Module '${uri.toString()}' chargé et mis en cache.");
+        "[ModuleLoader loadModule for $uri] Module '${uri.toString()}' chargé et mis en cache.",
+      );
       return loadedModule;
     } finally {
       _loadingModules.remove(uri);
@@ -576,7 +636,8 @@ class ModuleLoader {
   String _fetchModuleSource(Uri uri, Environment namespace) {
     final uriString = uri.toString();
     Logger.debug(
-        "[ModuleLoader] Récupération de la source pour: $uriString depuis sources.");
+      "[ModuleLoader] Récupération de la source pour: $uriString depuis sources.",
+    );
 
     // First check if the exact URI is in the preloaded sources
     if (sources.containsKey(uriString)) {
@@ -593,11 +654,13 @@ class ModuleLoader {
         if (fileUriExistsSync(fileUri)) {
           _checkFileSystemSourceReadPermission(fileUri);
           Logger.debug(
-              "[ModuleLoader] Source loaded from filesystem for ${fileUri.toString()}.");
+            "[ModuleLoader] Source loaded from filesystem for ${fileUri.toString()}.",
+          );
           return readFileUriAsStringSync(fileUri);
         }
         Logger.debug(
-            "[ModuleLoader] Filesystem import enabled, but no file found at $filePath.");
+          "[ModuleLoader] Filesystem import enabled, but no file found at $filePath.",
+        );
       }
     }
 
@@ -644,13 +707,16 @@ class ModuleLoader {
           return '';
         }
         Logger.info(
-            "[ModuleLoader] The Dart library '${uri.toString()}' is provided natively by Stdlib. Returning an empty module.");
+          "[ModuleLoader] The Dart library '${uri.toString()}' is provided natively by Stdlib. Returning an empty module.",
+        );
         return ""; // Empty source to allow the import to succeed
       } else {
         Logger.error(
-            "[ModuleLoader] Dart library '${uri.toString()}' not supported or recognized by Stdlib.");
+          "[ModuleLoader] Dart library '${uri.toString()}' not supported or recognized by Stdlib.",
+        );
         throw SourceCodeException(
-            "Dart library '${uri.toString()}' not supported.");
+          "Dart library '${uri.toString()}' not supported.",
+        );
       }
     }
     var registered = false;
@@ -691,7 +757,8 @@ class ModuleLoader {
 
     // If it's neither explicitly preloaded nor a known Dart library, it's an error.
     Logger.error(
-        "[ModuleLoader] Source not preloaded and not a recognized Dart standard library for URI: $uriString");
+      "[ModuleLoader] Source not preloaded and not a recognized Dart standard library for URI: $uriString",
+    );
     _throwMissingModuleSource(uri, attemptedFileUri: attemptedFileUri);
   }
 
@@ -700,8 +767,9 @@ class ModuleLoader {
     // Ensure the path passed to parseString is meaningful for errors.
     // If the URI is opaque (ex: custom scheme), toFilePath may fail.
     // Use uri.path or uri.toString() as a fallback.
-    String pathToReport =
-        uri.isScheme('file') ? uri.toFilePath() : uri.toString();
+    String pathToReport = uri.isScheme('file')
+        ? uri.toFilePath()
+        : uri.toString();
 
     final result = parseString(
       content: sourceCode,
@@ -714,17 +782,22 @@ class ModuleLoader {
         .where((e) => e.diagnosticCode.severity == DiagnosticSeverity.ERROR)
         .toList();
     if (errors.isNotEmpty) {
-      final errorMessages = errors.map((e) {
-        final location = result.lineInfo.getLocation(e.offset);
-        return "- ${e.message} (ligne ${location.lineNumber}, colonne ${location.columnNumber})";
-      }).join("\\n");
+      final errorMessages = errors
+          .map((e) {
+            final location = result.lineInfo.getLocation(e.offset);
+            return "- ${e.message} (ligne ${location.lineNumber}, colonne ${location.columnNumber})";
+          })
+          .join("\\n");
       Logger.error(
-          "[ModuleLoader] Parsing errors for $pathToReport:\\n$errorMessages");
+        "[ModuleLoader] Parsing errors for $pathToReport:\\n$errorMessages",
+      );
       throw SourceCodeException(
-          "Parsing errors in module $pathToReport:\\n$errorMessages");
+        "Parsing errors in module $pathToReport:\\n$errorMessages",
+      );
     }
     Logger.debug(
-        "[ModuleLoader] Module ${uri.toString()} parsed successfully.");
+      "[ModuleLoader] Module ${uri.toString()} parsed successfully.",
+    );
     return result.unit;
   }
 }

@@ -12,20 +12,20 @@ Object? _executeEntry(
 }) {
   return switch (mode) {
     'library' => interpreter.execute(
-        library: 'package:fixture/entry.dart',
-        sources: {'package:fixture/entry.dart': source, ...sources},
-        maxSteps: maxSteps,
-      ),
+      library: 'package:fixture/entry.dart',
+      sources: {'package:fixture/entry.dart': source, ...sources},
+      maxSteps: maxSteps,
+    ),
     'compiled' => interpreter.executeCompiled(
-        interpreter.compile(source: source),
-        sources: sources,
-        maxSteps: maxSteps,
-      ),
+      interpreter.compile(source: source),
+      sources: sources,
+      maxSteps: maxSteps,
+    ),
     _ => interpreter.execute(
-        source: source,
-        sources: sources,
-        maxSteps: maxSteps,
-      ),
+      source: source,
+      sources: sources,
+      maxSteps: maxSteps,
+    ),
   };
 }
 
@@ -96,8 +96,7 @@ void main() {
         });
       }
 
-      test('$mode requires an exact bridge registration for missing modules',
-          () {
+      test('$mode requires an exact bridge registration for missing modules', () {
         final interpreter = D4rt()
           ..registerBridgedClass(
             BridgedClass(
@@ -146,7 +145,8 @@ Future<Object?> main() async => catalog.readEntries();
 ''';
         final modules = {
           'package:fixture/main.dart': entry,
-          'package:fixture/catalog.dart': '''
+          'package:fixture/catalog.dart':
+              '''
 import 'package:fixture/helpers.dart' as helpers;
 int adjust(int value) => helpers.offset + value;
 $declaration {
@@ -162,10 +162,13 @@ List<int> readEntries() => Catalog.entries;
           final interpreter = D4rt();
           final result = switch (mode) {
             'library' => interpreter.execute(
-                library: 'package:fixture/main.dart', sources: modules),
+              library: 'package:fixture/main.dart',
+              sources: modules,
+            ),
             'compiled' => interpreter.executeCompiled(
-                interpreter.compile(source: entry),
-                sources: modules),
+              interpreter.compile(source: entry),
+              sources: modules,
+            ),
             _ => interpreter.execute(source: entry, sources: modules),
           };
           expect(await result, [11, 13], reason: mode);
@@ -214,15 +217,18 @@ enum Method with Label {
       var effects = 0;
       final interpreter = D4rt();
       interpreter.registertopLevelFunction(
-          'touch', (visitor, args, named, types) => ++effects);
-      final values = interpreter.execute(
-        library: 'package:fixture/main.dart',
-        sources: {
-          'package:fixture/main.dart': '''
+        'touch',
+        (visitor, args, named, types) => ++effects,
+      );
+      final values =
+          interpreter.execute(
+                library: 'package:fixture/main.dart',
+                sources: {
+                  'package:fixture/main.dart': '''
 import 'package:fixture/catalog.dart';
 main() => Catalog.values;
 ''',
-          'package:fixture/catalog.dart': '''
+                  'package:fixture/catalog.dart': '''
 class Catalog {
   static final entries = List.unmodifiable([1].map((value) => value + 1));
   static final values = [1].map((value) {
@@ -232,23 +238,30 @@ class Catalog {
   });
 }
 ''',
-        },
-      ) as Iterable;
+                },
+              )
+              as Iterable;
       // Observe only effects after the loading invocation has returned.
       effects = 0;
       expect(() => values.single, throwsA(isA<RuntimeError>()));
       expect(effects, 0);
       interpreter.registertopLevelFunction(
-          'retained', (visitor, args, named, types) => values);
+        'retained',
+        (visitor, args, named, types) => values,
+      );
       expect(
         () => interpreter.execute(
-            source: 'main() => retained().toList();', maxSteps: 100),
+          source: 'main() => retained().toList();',
+          maxSteps: 100,
+        ),
         throwsA(isA<ExecutionLimitException>()),
       );
       expect(effects, 0);
       expect(
         interpreter.execute(
-            source: 'main() => retained().toList();', maxSteps: 20000),
+          source: 'main() => retained().toList();',
+          maxSteps: 20000,
+        ),
         [1003],
       );
       expect(effects, 1);
@@ -431,14 +444,12 @@ class Catalog {
       () {
         final d4rt = D4rt();
         final mainlibrary = "d4rt-mem:/main_source.dart";
-        final result = d4rt.execute(
-          library: mainlibrary,
-          sources: sources,
-        );
+        final result = d4rt.execute(library: mainlibrary, sources: sources);
         expect(
           result,
           equals(
-              "Message from lib: Hello from lib_common! and number is 42 and extra: Extra message from lib_common!"),
+            "Message from lib: Hello from lib_common! and number is 42 and extra: Extra message from lib_common!",
+          ),
         );
       },
     );
@@ -446,10 +457,7 @@ class Catalog {
     test('Import package simple (memory)', () {
       final d4rt = D4rt();
       final mainlibrary = "d4rt-mem:/main_pkg_import.dart";
-      final result = d4rt.execute(
-        library: mainlibrary,
-        sources: sources,
-      );
+      final result = d4rt.execute(library: mainlibrary, sources: sources);
       expect(
         result,
         equals("PkgMsg: Hello from my_test_pkg/utils! | PkgNum: 123"),
@@ -457,10 +465,10 @@ class Catalog {
     });
 
     test(
-        'Library execution reuses one fully populated module graph across inheritance and initialization',
-        () {
-      final inheritanceSources = <String, String>{
-        'package:sdk/model.dart': '''
+      'Library execution reuses one fully populated module graph across inheritance and initialization',
+      () {
+        final inheritanceSources = <String, String>{
+          'package:sdk/model.dart': '''
 class InputModel {
   final String value;
 
@@ -473,7 +481,7 @@ class OutputModel {
   OutputModel(this.value);
 }
 ''',
-        'package:sdk/base.dart': '''
+          'package:sdk/base.dart': '''
 import 'package:sdk/model.dart';
 
 int rootInitializationCount = 0;
@@ -498,7 +506,7 @@ class Base {
   }
 }
 ''',
-        'package:author/author.dart': '''
+          'package:author/author.dart': '''
 import 'package:sdk/base.dart';
 import 'package:sdk/model.dart';
 
@@ -510,7 +518,7 @@ final class Author extends Base {
   }
 }
 ''',
-        'd4rt-mem:/inheritance_main.dart': '''
+          'd4rt-mem:/inheritance_main.dart': '''
 import 'package:author/author.dart';
 import 'package:sdk/base.dart';
 import 'package:sdk/model.dart';
@@ -543,30 +551,31 @@ String main() => initializedReport +
     '|count:' +
     readRootInitializationCount().toString();
 ''',
-      };
+        };
 
-      final d4rt = D4rt();
-      final printedMessages = <String>[];
-      final result = d4rt.execute(
-        library: 'd4rt-mem:/inheritance_main.dart',
-        sources: inheritanceSources,
-        onPrint: printedMessages.add,
-      );
+        final d4rt = D4rt();
+        final printedMessages = <String>[];
+        final result = d4rt.execute(
+          library: 'd4rt-mem:/inheritance_main.dart',
+          sources: inheritanceSources,
+          onPrint: printedMessages.add,
+        );
 
-      expect(
-        result,
-        equals(
-          'entry|author|base:constructor-body-ran|author:payload|base:payload:constructor-body-ran|count:1',
-        ),
-      );
-      expect(printedMessages, equals(['root initialized']));
-      expect(
-        d4rt.eval('initializedReport'),
-        equals(
-          'entry|author|base:constructor-body-ran|author:payload|base:payload:constructor-body-ran',
-        ),
-      );
-    });
+        expect(
+          result,
+          equals(
+            'entry|author|base:constructor-body-ran|author:payload|base:payload:constructor-body-ran|count:1',
+          ),
+        );
+        expect(printedMessages, equals(['root initialized']));
+        expect(
+          d4rt.eval('initializedReport'),
+          equals(
+            'entry|author|base:constructor-body-ran|author:payload|base:payload:constructor-body-ran',
+          ),
+        );
+      },
+    );
 
     test('Imported symbols are available to module top-level initializers', () {
       final initializerSources = <String, String>{
@@ -596,17 +605,17 @@ String main() => readLoadedMessage();
     });
 
     test(
-        'Local functions are callable by eager static initializers after imports',
-        () {
-      final staticInitializerSources = <String, String>{
-        'package:static_initializers/model.dart': '''
+      'Local functions are callable by eager static initializers after imports',
+      () {
+        final staticInitializerSources = <String, String>{
+          'package:static_initializers/model.dart': '''
 class StaticValue {
   final String label;
 
   StaticValue(this.label);
 }
 ''',
-        'package:static_initializers/class_holder.dart': '''
+          'package:static_initializers/class_holder.dart': '''
 import 'package:static_initializers/model.dart';
 
 class ClassHolder {
@@ -615,7 +624,7 @@ class ClassHolder {
 
 StaticValue buildClassValue() => StaticValue('class');
 ''',
-        'package:static_initializers/mixin_holder.dart': '''
+          'package:static_initializers/mixin_holder.dart': '''
 import 'package:static_initializers/model.dart';
 
 mixin MixinHolder {
@@ -624,7 +633,7 @@ mixin MixinHolder {
 
 StaticValue buildMixinValue() => StaticValue('mixin');
 ''',
-        'package:static_initializers/enum_holder.dart': '''
+          'package:static_initializers/enum_holder.dart': '''
 import 'package:static_initializers/model.dart';
 
 enum EnumHolder {
@@ -635,7 +644,7 @@ enum EnumHolder {
 
 StaticValue buildEnumValue() => StaticValue('enum');
 ''',
-        'package:static_initializers/extension_holder.dart': '''
+          'package:static_initializers/extension_holder.dart': '''
 import 'package:static_initializers/model.dart';
 
 extension ExtensionHolder on String {
@@ -644,7 +653,7 @@ extension ExtensionHolder on String {
 
 StaticValue buildExtensionValue() => StaticValue('extension');
 ''',
-        'd4rt-mem:/static_initializers_main.dart': '''
+          'd4rt-mem:/static_initializers_main.dart': '''
 import 'package:static_initializers/class_holder.dart';
 import 'package:static_initializers/enum_holder.dart';
 import 'package:static_initializers/extension_holder.dart';
@@ -658,15 +667,16 @@ String main() => ClassHolder.value.label +
     '|' +
     ExtensionHolder.value.label;
 ''',
-      };
+        };
 
-      final result = D4rt().execute(
-        library: 'd4rt-mem:/static_initializers_main.dart',
-        sources: staticInitializerSources,
-      );
+        final result = D4rt().execute(
+          library: 'd4rt-mem:/static_initializers_main.dart',
+          sources: staticInitializerSources,
+        );
 
-      expect(result, equals('class|mixin|enum|extension'));
-    });
+        expect(result, equals('class|mixin|enum|extension'));
+      },
+    );
 
     test('Imported class bounds are resolved after imports and enforced', () {
       final boundSources = <String, String>{
@@ -788,35 +798,32 @@ String main() => publicFunction() + '|' + PublicClass().reveal();
         final exportMainUri = 'package:privacy/export_${entry.key}.dart';
         final transitiveMainUri =
             'package:privacy/transitive_${entry.key}.dart';
-        privacySources[directMainUri] = '''
+        privacySources[directMainUri] =
+            '''
 import '$ownerUri';
 
 dynamic main() => ${entry.value};
 ''';
-        privacySources[exportMainUri] = '''
+        privacySources[exportMainUri] =
+            '''
 import '$exporterUri';
 
 dynamic main() => ${entry.value};
 ''';
-        privacySources[transitiveMainUri] = '''
+        privacySources[transitiveMainUri] =
+            '''
 import '$transitiveExporterUri';
 
 dynamic main() => ${entry.value};
 ''';
 
         expect(
-          () => D4rt().execute(
-            library: directMainUri,
-            sources: privacySources,
-          ),
+          () => D4rt().execute(library: directMainUri, sources: privacySources),
           throwsA(isA<RuntimeError>()),
           reason: '${entry.key} must not be available through an import',
         );
         expect(
-          () => D4rt().execute(
-            library: exportMainUri,
-            sources: privacySources,
-          ),
+          () => D4rt().execute(library: exportMainUri, sources: privacySources),
           throwsA(isA<RuntimeError>()),
           reason: '${entry.key} must not be available through an export',
         );
@@ -837,7 +844,8 @@ dynamic main() => ${entry.value};
       };
       for (final entry in prefixedExpressions.entries) {
         final mainUri = 'package:privacy/prefixed_${entry.key}.dart';
-        privacySources[mainUri] = '''
+        privacySources[mainUri] =
+            '''
 import '$ownerUri' as owner;
 
 dynamic main() => ${entry.value};
@@ -1010,24 +1018,19 @@ String main() => 'exported'.decorated();
     test('Import prefixed package (memory)', () {
       final d4rt = D4rt();
       final mainlibrary = "d4rt-mem:/main_prefixed_pkg_import.dart";
-      final result = d4rt.execute(
-        library: mainlibrary,
-        sources: sources,
-      );
+      final result = d4rt.execute(library: mainlibrary, sources: sources);
       expect(
         result,
         equals(
-            "PrefixedPkgMsg: Hello from my_test_pkg/utils! | PrefixedPkgNum: 123"),
+          "PrefixedPkgMsg: Hello from my_test_pkg/utils! | PrefixedPkgNum: 123",
+        ),
       );
     });
 
     test('Import dart:math (global functions)', () {
       final d4rt = D4rt();
       final mainlibrary = "d4rt-mem:/main_dart_math_import.dart";
-      final result = d4rt.execute(
-        library: mainlibrary,
-        sources: sources,
-      );
+      final result = d4rt.execute(library: mainlibrary, sources: sources);
       expect(result, equals("sin(pi/2) = 1.0"));
     });
 
@@ -1047,8 +1050,9 @@ String main() => 'exported'.decorated();
           final d4rt = D4rt();
           expect(
             () => d4rt.execute(
-                library: "d4rt-mem:/main_import_show_check_hidden.dart",
-                sources: sources),
+              library: "d4rt-mem:/main_import_show_check_hidden.dart",
+              sources: sources,
+            ),
             throwsA(
               isA<RuntimeError>().having(
                 (e) => e.message,
@@ -1075,8 +1079,9 @@ String main() => 'exported'.decorated();
           final d4rt = D4rt();
           expect(
             () => d4rt.execute(
-                library: "d4rt-mem:/main_import_hide_check_hidden.dart",
-                sources: sources),
+              library: "d4rt-mem:/main_import_hide_check_hidden.dart",
+              sources: sources,
+            ),
             throwsA(
               isA<RuntimeError>().having(
                 (e) => e.message,
@@ -1091,8 +1096,9 @@ String main() => 'exported'.decorated();
       test('Import prefixed with "show" - access allowed symbols', () {
         final d4rt = D4rt();
         final result = d4rt.execute(
-            library: "d4rt-mem:/main_prefixed_import_show.dart",
-            sources: sources);
+          library: "d4rt-mem:/main_prefixed_import_show.dart",
+          sources: sources,
+        );
         expect(result, equals("Hello from lib_common! | 42"));
       });
 
@@ -1102,15 +1108,16 @@ String main() => 'exported'.decorated();
           final d4rt = D4rt();
           expect(
             () => d4rt.execute(
-                library:
-                    "d4rt-mem:/main_prefixed_import_show_check_hidden.dart",
-                sources: sources),
+              library: "d4rt-mem:/main_prefixed_import_show_check_hidden.dart",
+              sources: sources,
+            ),
             throwsA(
               isA<RuntimeError>().having(
                 (e) => e.message,
                 'message',
                 contains(
-                    "Method 'getExtraMessage' not found in imported module 'common'. Error: Undefined variable: getExtraMessage"),
+                  "Method 'getExtraMessage' not found in imported module 'common'. Error: Undefined variable: getExtraMessage",
+                ),
               ),
             ),
           );
@@ -1120,8 +1127,9 @@ String main() => 'exported'.decorated();
       test('Import prefixed with "hide" - access allowed symbols', () {
         final d4rt = D4rt();
         final result = d4rt.execute(
-            library: "d4rt-mem:/main_prefixed_import_hide.dart",
-            sources: sources);
+          library: "d4rt-mem:/main_prefixed_import_hide.dart",
+          sources: sources,
+        );
         expect(result, equals("Hello from lib_common! | 42"));
       });
 
@@ -1131,15 +1139,16 @@ String main() => 'exported'.decorated();
           final d4rt = D4rt();
           expect(
             () => d4rt.execute(
-                library:
-                    "d4rt-mem:/main_prefixed_import_hide_check_hidden.dart",
-                sources: sources),
+              library: "d4rt-mem:/main_prefixed_import_hide_check_hidden.dart",
+              sources: sources,
+            ),
             throwsA(
               isA<RuntimeError>().having(
                 (e) => e.message,
                 'message',
                 contains(
-                    "Method 'getExtraMessage' not found in imported module 'common'. Error: Undefined variable: getExtraMessage"),
+                  "Method 'getExtraMessage' not found in imported module 'common'. Error: Undefined variable: getExtraMessage",
+                ),
               ),
             ),
           );
@@ -1149,8 +1158,9 @@ String main() => 'exported'.decorated();
       test('Import with "show" avoids name conflict with local definition', () {
         final d4rt = D4rt();
         final result = d4rt.execute(
-            library: "d4rt-mem:/main_import_conflict_show.dart",
-            sources: sources);
+          library: "d4rt-mem:/main_import_conflict_show.dart",
+          sources: sources,
+        );
         expect(result, equals("Local getMessage | 42"));
       });
 
@@ -1159,10 +1169,13 @@ String main() => 'exported'.decorated();
         () {
           final d4rt = D4rt();
           final result = d4rt.execute(
-              library: "d4rt-mem:/main_import_conflict_hide.dart",
-              sources: sources);
-          expect(result,
-              equals("Local getMessage | 42 | Extra message from lib_common!"));
+            library: "d4rt-mem:/main_import_conflict_hide.dart",
+            sources: sources,
+          );
+          expect(
+            result,
+            equals("Local getMessage | 42 | Extra message from lib_common!"),
+          );
         },
       );
 
@@ -1170,10 +1183,8 @@ String main() => 'exported'.decorated();
         final d4rt = D4rt();
 
         expect(
-          () => d4rt.execute(
-            library: 'd4rt-mem:/cycle_a.dart',
-            sources: sources,
-          ),
+          () =>
+              d4rt.execute(library: 'd4rt-mem:/cycle_a.dart', sources: sources),
           throwsA(
             isA<SourceCodeException>()
                 .having(
@@ -1238,7 +1249,8 @@ String main() => 'exported'.decorated();
                   (e) => e.message,
                   'message',
                   contains(
-                      'Failed to load export "missing_export_target.dart"'),
+                    'Failed to load export "missing_export_target.dart"',
+                  ),
                 )
                 .having(
                   (e) => e.message,
@@ -1268,7 +1280,8 @@ String main() => 'exported'.decorated();
                   (e) => e.message,
                   'message',
                   contains(
-                      'Failed to load import "missing_import_target.dart"'),
+                    'Failed to load import "missing_import_target.dart"',
+                  ),
                 )
                 .having(
                   (e) => e.message,
@@ -1329,8 +1342,9 @@ String main() {
         d4rt.grant(FilesystemPermission.readPath('test_fs_imports/app'));
 
         final result = d4rt.execute(
-          library:
-              io.File('test_fs_imports/app/main.dart').absolute.uri.toString(),
+          library: io.File(
+            'test_fs_imports/app/main.dart',
+          ).absolute.uri.toString(),
           allowFileSystemImports: true,
           basePath: 'test_fs_imports/app',
         );
@@ -1338,90 +1352,98 @@ String main() {
         expect(result, equals('from helper'));
       });
 
-      test('Filesystem imports fail without matching filesystem permission',
-          () {
-        io.Directory('test_fs_imports/lib').createSync(recursive: true);
-        io.File('test_fs_imports/lib/utils.dart').writeAsStringSync('''
+      test(
+        'Filesystem imports fail without matching filesystem permission',
+        () {
+          io.Directory('test_fs_imports/lib').createSync(recursive: true);
+          io.File('test_fs_imports/lib/utils.dart').writeAsStringSync('''
 String greetFromUtils() {
   return "hello from fs";
 }
 ''');
 
-        final d4rt = D4rt();
+          final d4rt = D4rt();
 
-        expect(
-          () => d4rt.execute(
-            source: '''
+          expect(
+            () => d4rt.execute(
+              source: '''
 import './utils.dart';
 
 String main() {
   return greetFromUtils();
 }
 ''',
-            basePath: 'test_fs_imports/lib',
-            allowFileSystemImports: true,
-          ),
-          throwsA(
-            isA<RuntimeError>().having(
-              (e) => e.message,
-              'message',
-              contains('requires FilesystemPermission'),
+              basePath: 'test_fs_imports/lib',
+              allowFileSystemImports: true,
             ),
-          ),
-        );
-      });
+            throwsA(
+              isA<RuntimeError>().having(
+                (e) => e.message,
+                'message',
+                contains('requires FilesystemPermission'),
+              ),
+            ),
+          );
+        },
+      );
 
-      test('Filesystem imports resolve nested relatives without shared state',
-          () {
-        final rootDirectory = io.Directory('test_fs_imports/nested');
-        final featuresDirectory = io.Directory(io.Platform.pathSeparator == '/'
-            ? '${rootDirectory.path}/features/messages'
-            : '${rootDirectory.path}\\features\\messages');
-        featuresDirectory.createSync(recursive: true);
+      test(
+        'Filesystem imports resolve nested relatives without shared state',
+        () {
+          final rootDirectory = io.Directory('test_fs_imports/nested');
+          final featuresDirectory = io.Directory(
+            io.Platform.pathSeparator == '/'
+                ? '${rootDirectory.path}/features/messages'
+                : '${rootDirectory.path}\\features\\messages',
+          );
+          featuresDirectory.createSync(recursive: true);
 
-        io.File(
-          io.Platform.pathSeparator == '/'
-              ? '${rootDirectory.path}/main.dart'
-              : '${rootDirectory.path}\\main.dart',
-        ).writeAsStringSync('''
+          io.File(
+            io.Platform.pathSeparator == '/'
+                ? '${rootDirectory.path}/main.dart'
+                : '${rootDirectory.path}\\main.dart',
+          ).writeAsStringSync('''
 import 'features/feature.dart';
 
       String entryMessage() => loadMessage();
 ''');
 
-        io.File(
-          io.Platform.pathSeparator == '/'
-              ? '${rootDirectory.path}/features/feature.dart'
-              : '${rootDirectory.path}\\features\\feature.dart',
-        ).writeAsStringSync('''
+          io.File(
+            io.Platform.pathSeparator == '/'
+                ? '${rootDirectory.path}/features/feature.dart'
+                : '${rootDirectory.path}\\features\\feature.dart',
+          ).writeAsStringSync('''
 import 'messages/value.dart';
 
 String loadMessage() => featureValue();
 ''');
 
-        io.File(
-          io.Platform.pathSeparator == '/'
-              ? '${rootDirectory.path}/features/messages/value.dart'
-              : '${rootDirectory.path}\\features\\messages\\value.dart',
-        ).writeAsStringSync('''
+          io.File(
+            io.Platform.pathSeparator == '/'
+                ? '${rootDirectory.path}/features/messages/value.dart'
+                : '${rootDirectory.path}\\features\\messages\\value.dart',
+          ).writeAsStringSync('''
 String featureValue() => 'nested-ok';
 ''');
 
-        final d4rt = D4rt();
-        d4rt.grant(FilesystemPermission.readPath(rootDirectory.absolute.path));
+          final d4rt = D4rt();
+          d4rt.grant(
+            FilesystemPermission.readPath(rootDirectory.absolute.path),
+          );
 
-        final result = d4rt.execute(
-          source: '''
+          final result = d4rt.execute(
+            source: '''
 import 'main.dart';
 
 String main() => entryMessage();
 ''',
-          basePath: rootDirectory.absolute.path,
-          allowFileSystemImports: true,
-        );
+            basePath: rootDirectory.absolute.path,
+            allowFileSystemImports: true,
+          );
 
-        expect(result, equals('nested-ok'));
-      });
+          expect(result, equals('nested-ok'));
+        },
+      );
 
       test('Filesystem imports reuse one module identity across URI forms', () {
         final rootDirectory = io.Directory('test_fs_imports/canonical');
@@ -1504,44 +1526,48 @@ String main() => symlinkedMessage();
         expect(result, equals('symlink-ok'));
       });
 
-      test('Missing filesystem imports fail with a resolved path in the error',
-          () {
-        final rootDirectory = io.Directory('test_fs_imports/missing_fs');
-        rootDirectory.createSync(recursive: true);
+      test(
+        'Missing filesystem imports fail with a resolved path in the error',
+        () {
+          final rootDirectory = io.Directory('test_fs_imports/missing_fs');
+          rootDirectory.createSync(recursive: true);
 
-        final d4rt = D4rt();
-        d4rt.grant(FilesystemPermission.readPath(rootDirectory.absolute.path));
+          final d4rt = D4rt();
+          d4rt.grant(
+            FilesystemPermission.readPath(rootDirectory.absolute.path),
+          );
 
-        expect(
-          () => d4rt.execute(
-            source: '''
+          expect(
+            () => d4rt.execute(
+              source: '''
 import './missing.dart';
 
 String main() => 'never';
 ''',
-            basePath: rootDirectory.absolute.path,
-            allowFileSystemImports: true,
-          ),
-          throwsA(
-            isA<SourceCodeException>()
-                .having(
-                  (e) => e.message,
-                  'message',
-                  contains('Failed to load import "./missing.dart"'),
-                )
-                .having(
-                  (e) => e.message,
-                  'message',
-                  contains('Module source not found on filesystem'),
-                )
-                .having(
-                  (e) => e.message,
-                  'message',
-                  contains('missing.dart'),
-                ),
-          ),
-        );
-      });
+              basePath: rootDirectory.absolute.path,
+              allowFileSystemImports: true,
+            ),
+            throwsA(
+              isA<SourceCodeException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('Failed to load import "./missing.dart"'),
+                  )
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('Module source not found on filesystem'),
+                  )
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('missing.dart'),
+                  ),
+            ),
+          );
+        },
+      );
 
       test('Missing package imports fail with a package-specific error', () {
         final d4rt = D4rt();
@@ -1560,7 +1586,8 @@ String main() => 'never';
                   (e) => e.message,
                   'message',
                   contains(
-                      'Failed to load import "package:missing_pkg/feature.dart"'),
+                    'Failed to load import "package:missing_pkg/feature.dart"',
+                  ),
                 )
                 .having(
                   (e) => e.message,
@@ -1599,40 +1626,41 @@ String main() => 'never';
       });
 
       test(
-          'Root filesystem libraries fail clearly when filesystem imports are disabled',
-          () {
-        final rootDirectory = io.Directory('test_fs_imports/disabled_root');
-        rootDirectory.createSync(recursive: true);
-        io.File(
-          io.Platform.pathSeparator == '/'
-              ? '${rootDirectory.path}/main.dart'
-              : '${rootDirectory.path}\\main.dart',
-        ).writeAsStringSync('''
+        'Root filesystem libraries fail clearly when filesystem imports are disabled',
+        () {
+          final rootDirectory = io.Directory('test_fs_imports/disabled_root');
+          rootDirectory.createSync(recursive: true);
+          io.File(
+            io.Platform.pathSeparator == '/'
+                ? '${rootDirectory.path}/main.dart'
+                : '${rootDirectory.path}\\main.dart',
+          ).writeAsStringSync('''
 String main() => 'disabled';
 ''');
 
-        final d4rt = D4rt();
+          final d4rt = D4rt();
 
-        expect(
-          () => d4rt.execute(
-            library: 'main.dart',
-            basePath: rootDirectory.absolute.path,
-          ),
-          throwsA(
-            isA<SourceCodeException>()
-                .having(
-                  (e) => e.message,
-                  'message',
-                  contains('was not found in sources'),
-                )
-                .having(
-                  (e) => e.message,
-                  'message',
-                  contains('enable allowFileSystemImports'),
-                ),
-          ),
-        );
-      });
+          expect(
+            () => d4rt.execute(
+              library: 'main.dart',
+              basePath: rootDirectory.absolute.path,
+            ),
+            throwsA(
+              isA<SourceCodeException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('was not found in sources'),
+                  )
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('enable allowFileSystemImports'),
+                  ),
+            ),
+          );
+        },
+      );
     });
   });
 }

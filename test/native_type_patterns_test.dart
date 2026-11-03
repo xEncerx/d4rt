@@ -102,27 +102,31 @@ class _PretendReading {}
 class _NativeBox<T> {}
 
 void main() {
-  test('inferred collection subclasses retain erased and generic interfaces',
-      () {
-    expect(D4rt().execute(source: _erasedCollectionSource), [
-      [...List.filled(5, true), ...List.filled(10, false)],
-      [
-        ...List.filled(5, false),
-        ...List.filled(5, true),
-        ...List.filled(5, false)
-      ],
-      1,
-      1,
-      true,
-      false,
-      true,
-      false,
-    ]);
-    for (final name in ['rejectListAsMap', 'rejectMapAsList']) {
-      expect(() => D4rt().execute(source: _erasedCollectionSource, name: name),
-          throwsA(isA<RuntimeError>()));
-    }
-  });
+  test(
+    'inferred collection subclasses retain erased and generic interfaces',
+    () {
+      expect(D4rt().execute(source: _erasedCollectionSource), [
+        [...List.filled(5, true), ...List.filled(10, false)],
+        [
+          ...List.filled(5, false),
+          ...List.filled(5, true),
+          ...List.filled(5, false),
+        ],
+        1,
+        1,
+        true,
+        false,
+        true,
+        false,
+      ]);
+      for (final name in ['rejectListAsMap', 'rejectMapAsList']) {
+        expect(
+          () => D4rt().execute(source: _erasedCollectionSource, name: name),
+          throwsA(isA<RuntimeError>()),
+        );
+      }
+    },
+  );
 
   test('raw and wrapped erased collection checks reject unrelated kinds', () {
     final core = Environment();
@@ -132,7 +136,7 @@ void main() {
       <String, int>{'key': 1},
       <int>{1},
       Uri(path: '/read'),
-      null
+      null,
     ];
     for (final native in values) {
       final wrapped = native == null || native is Uri
@@ -140,15 +144,17 @@ void main() {
           : BridgedInstance(core.toBridgedClass(native), native);
       for (final value in [native, wrapped]) {
         expect(
-            D4rt().execute(
-                source: _erasedCollectionSource,
-                name: 'inspect',
-                positionalArgs: [value]),
-            [
-              ...List.filled(5, native is List),
-              ...List.filled(5, native is Map),
-              ...List.filled(5, native is Set),
-            ]);
+          D4rt().execute(
+            source: _erasedCollectionSource,
+            name: 'inspect',
+            positionalArgs: [value],
+          ),
+          [
+            ...List.filled(5, native is List),
+            ...List.filled(5, native is Map),
+            ...List.filled(5, native is Set),
+          ],
+        );
         for (final (name, matches) in [
           ('castList', native is List),
           ('castMap', native is Map),
@@ -156,18 +162,22 @@ void main() {
         ]) {
           if (matches) {
             expect(
-                D4rt().execute(
-                    source: _erasedCollectionSource,
-                    name: name,
-                    positionalArgs: [value]),
-                1);
+              D4rt().execute(
+                source: _erasedCollectionSource,
+                name: name,
+                positionalArgs: [value],
+              ),
+              1,
+            );
           } else {
             expect(
-                () => D4rt().execute(
-                    source: _erasedCollectionSource,
-                    name: name,
-                    positionalArgs: [value]),
-                throwsA(isA<RuntimeError>()));
+              () => D4rt().execute(
+                source: _erasedCollectionSource,
+                name: name,
+                positionalArgs: [value],
+              ),
+              throwsA(isA<RuntimeError>()),
+            );
           }
         }
       }
@@ -193,12 +203,16 @@ inspect(Object? value) => [
     for (final value in [
       <int>[1],
       <String, int>{'key': 1},
-      <int>{1}
+      <int>{1},
     ]) {
       expect(
-          D4rt().execute(
-              source: source, name: 'inspect', positionalArgs: [value]),
-          List.filled(8, false));
+        D4rt().execute(
+          source: source,
+          name: 'inspect',
+          positionalArgs: [value],
+        ),
+        List.filled(8, false),
+      );
     }
   });
 
@@ -221,29 +235,44 @@ inspect(Object? value) => [
     for (final value in [uri, wrapped]) {
       expect(
         D4rt().execute(
-            source: _uriSource, name: 'inspect', positionalArgs: [value]),
+          source: _uriSource,
+          name: 'inspect',
+          positionalArgs: [value],
+        ),
         List.filled(6, true),
       );
       expect(
-        D4rt()
-            .execute(source: _uriSource, name: 'bind', positionalArgs: [value]),
+        D4rt().execute(
+          source: _uriSource,
+          name: 'bind',
+          positionalArgs: [value],
+        ),
         same(uri),
       );
       expect(
-        D4rt()
-            .execute(source: _uriSource, name: 'cast', positionalArgs: [value]),
+        D4rt().execute(
+          source: _uriSource,
+          name: 'cast',
+          positionalArgs: [value],
+        ),
         same(uri),
       );
     }
     for (final value in ['https://example.com/host', null, DateTime(2026)]) {
       expect(
         D4rt().execute(
-            source: _uriSource, name: 'inspect', positionalArgs: [value]),
+          source: _uriSource,
+          name: 'inspect',
+          positionalArgs: [value],
+        ),
         List.filled(6, false),
       );
       expect(
-        () => D4rt()
-            .execute(source: _uriSource, name: 'cast', positionalArgs: [value]),
+        () => D4rt().execute(
+          source: _uriSource,
+          name: 'cast',
+          positionalArgs: [value],
+        ),
         throwsA(isA<RuntimeError>()),
       );
     }
@@ -253,20 +282,27 @@ inspect(Object? value) => [
     for (final value in [null, Uri(path: '/read')]) {
       expect(
         D4rt().execute(
-            source: _uriSource, name: 'nullable', positionalArgs: [value]),
+          source: _uriSource,
+          name: 'nullable',
+          positionalArgs: [value],
+        ),
         [true, true, true, true, value != null],
       );
     }
     expect(
       D4rt().execute(
-          source: _uriSource, name: 'nullable', positionalArgs: ['not a Uri']),
+        source: _uriSource,
+        name: 'nullable',
+        positionalArgs: ['not a Uri'],
+      ),
       [false, false, true, true, true],
     );
   });
 
-  test('another core bridge matches without admitting unrelated native values',
-      () {
-    const source = '''
+  test(
+    'another core bridge matches without admitting unrelated native values',
+    () {
+      const source = '''
 List<bool> inspect(Object? value) => [
   value is DateTime,
   switch (value) { final DateTime date => date.year == 2026, _ => false },
@@ -275,34 +311,39 @@ List<bool> inspect(Object? value) => [
   switch (value) { DateTime() => true, _ => false },
 ];
 ''';
-    for (final value in [DateTime(2026), Uri(path: '/read'), 'date']) {
-      expect(
-        D4rt()
-            .execute(source: source, name: 'inspect', positionalArgs: [value]),
-        List.filled(5, value is DateTime),
-      );
-    }
-  });
+      for (final value in [DateTime(2026), Uri(path: '/read'), 'date']) {
+        expect(
+          D4rt().execute(
+            source: source,
+            name: 'inspect',
+            positionalArgs: [value],
+          ),
+          List.filled(5, value is DateTime),
+        );
+      }
+    },
+  );
 
-  test('registered native interface checker recognizes a real implementation',
-      () {
-    final d4rt = D4rt();
-    d4rt.registerBridgedClass(
-      BridgedClass(
-        nativeType: _NativeReading,
-        name: 'Reading',
-        isSubtypeOfFunc: (value) => value is _NativeReading,
-        getters: {
-          'value': (visitor, target) => (target as _NativeReading).value
-        },
-      ),
-      'package:native/reading.dart',
-    );
-    d4rt.registerBridgedClass(
-      BridgedClass(nativeType: _PretendReading, name: 'PretendReading'),
-      'package:native/reading.dart',
-    );
-    const source = '''
+  test(
+    'registered native interface checker recognizes a real implementation',
+    () {
+      final d4rt = D4rt();
+      d4rt.registerBridgedClass(
+        BridgedClass(
+          nativeType: _NativeReading,
+          name: 'Reading',
+          isSubtypeOfFunc: (value) => value is _NativeReading,
+          getters: {
+            'value': (visitor, target) => (target as _NativeReading).value,
+          },
+        ),
+        'package:native/reading.dart',
+      );
+      d4rt.registerBridgedClass(
+        BridgedClass(nativeType: _PretendReading, name: 'PretendReading'),
+        'package:native/reading.dart',
+      );
+      const source = '''
 import 'package:native/reading.dart';
 List<bool> inspect(Object? value) => [
   value is Reading,
@@ -312,25 +353,35 @@ List<bool> inspect(Object? value) => [
   switch (value) { Reading() => true, _ => false },
 ];
 ''';
-    for (final value in [_ReadingImplementation(7), _PretendReading(), null]) {
-      expect(
+      for (final value in [
+        _ReadingImplementation(7),
+        _PretendReading(),
+        null,
+      ]) {
+        expect(
           d4rt.execute(
-              source: source, name: 'inspect', positionalArgs: [value]),
-          List.filled(5, value is _NativeReading));
-    }
-  });
+            source: source,
+            name: 'inspect',
+            positionalArgs: [value],
+          ),
+          List.filled(5, value is _NativeReading),
+        );
+      }
+    },
+  );
 
-  test('generic bridged patterns retain wrapper arguments and reject erasure',
-      () {
-    final boxType = BridgedClass(
-      nativeType: _NativeBox,
-      name: 'Box',
-      typeParameterCount: 1,
-      isSubtypeOfFunc: (value) => value is _NativeBox,
-    );
-    final d4rt = D4rt()
-      ..registerBridgedClass(boxType, 'package:native/box.dart');
-    const source = '''
+  test(
+    'generic bridged patterns retain wrapper arguments and reject erasure',
+    () {
+      final boxType = BridgedClass(
+        nativeType: _NativeBox,
+        name: 'Box',
+        typeParameterCount: 1,
+        isSubtypeOfFunc: (value) => value is _NativeBox,
+      );
+      final d4rt = D4rt()
+        ..registerBridgedClass(boxType, 'package:native/box.dart');
+      const source = '''
 import 'package:native/box.dart';
 List<bool> inspect(Object? value) => [
   switch (value) { final Box<int> box => true, _ => false },
@@ -339,22 +390,31 @@ List<bool> inspect(Object? value) => [
   switch (value) { final Box<String> box => true, _ => false },
 ];
 ''';
-    final native = _NativeBox<int>();
-    final wrapped = BridgedInstance(boxType, native,
-        typeArguments: [BridgedClass(nativeType: int, name: 'int')]);
-    expect(
+      final native = _NativeBox<int>();
+      final wrapped = BridgedInstance(
+        boxType,
+        native,
+        typeArguments: [BridgedClass(nativeType: int, name: 'int')],
+      );
+      expect(
         d4rt.execute(
-            source: source, name: 'inspect', positionalArgs: [wrapped]),
-        [true, true, true, false]);
-    expect(
+          source: source,
+          name: 'inspect',
+          positionalArgs: [wrapped],
+        ),
+        [true, true, true, false],
+      );
+      expect(
         d4rt.execute(source: source, name: 'inspect', positionalArgs: [native]),
-        [false, false, false, false]);
-  });
+        [false, false, false, false],
+      );
+    },
+  );
 
   test(
-      'interpreted hierarchy, generic arguments and enum identities remain sound',
-      () {
-    const source = '''
+    'interpreted hierarchy, generic arguments and enum identities remain sound',
+    () {
+      const source = '''
 class Base {}
 class Child extends Base {}
 abstract class Marker {}
@@ -379,7 +439,17 @@ List<bool> main() {
   ];
 }
 ''';
-    expect(D4rt().execute(source: source),
-        [true, true, true, true, true, false, true, false, true]);
-  });
+      expect(D4rt().execute(source: source), [
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        false,
+        true,
+      ]);
+    },
+  );
 }

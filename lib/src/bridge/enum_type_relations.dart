@@ -48,8 +48,10 @@ bool enumNominalTypesEquivalent(RuntimeType first, RuntimeType second) {
       second is BridgedEnum &&
       first.values.isNotEmpty &&
       second.values.isNotEmpty) {
-    return identical(first.enumValues.first.nativeValue,
-        second.enumValues.first.nativeValue);
+    return identical(
+      first.enumValues.first.nativeValue,
+      second.enumValues.first.nativeValue,
+    );
   }
   if (first is NamedRuntimeType && isEnumCoreTypeName(first.name)) {
     return isEnumCoreType(second, first.name);
@@ -82,22 +84,28 @@ int enumNominalTypeHash(RuntimeType type) {
 ///
 /// Generic arguments are substituted on each hierarchy edge. Consumers compare
 /// the projected arguments, never unrelated positions in the original types.
-RuntimeType? projectEnumType(RuntimeType actual, RuntimeType target,
-    {EnumTypeMetadata? nativeMetadata}) {
+RuntimeType? projectEnumType(
+  RuntimeType actual,
+  RuntimeType target, {
+  EnumTypeMetadata? nativeMetadata,
+}) {
   final targetBase = target is AppliedRuntimeType ? target.baseType : target;
   final actualBase = actual is AppliedRuntimeType ? actual.baseType : actual;
   if (enumNominalTypesEquivalent(actualBase, targetBase)) return actual;
-  final metadata = nativeMetadata ??
+  final metadata =
+      nativeMetadata ??
       EnumTypeMetadata.ownerOf(targetBase) ??
       EnumTypeMetadata.ownerOf(
-          actual is AppliedRuntimeType ? actual.baseType : actual);
+        actual is AppliedRuntimeType ? actual.baseType : actual,
+      );
   final seen = <Object>{};
   RuntimeType? project(RuntimeType type, [EnumTypeMetadata? context]) {
     final base = type is AppliedRuntimeType ? type.baseType : type;
     if (enumNominalTypesEquivalent(base, targetBase)) return type;
     if (!seen.add(EnumTypeMetadata.nominalIdentity(base))) return null;
-    final arguments =
-        type is AppliedRuntimeType ? type.typeArguments : const <RuntimeType>[];
+    final arguments = type is AppliedRuntimeType
+        ? type.typeArguments
+        : const <RuntimeType>[];
     if (isEnumCoreType(targetBase, 'Iterable') &&
         (isEnumCoreType(base, 'List') || isEnumCoreType(base, 'Set'))) {
       return arguments.isEmpty
@@ -136,11 +144,12 @@ RuntimeType? projectEnumType(RuntimeType actual, RuntimeType target,
       for (var index = 0; index < base.typeParameterNames.length; index++) {
         final name = base.typeParameterNames[index];
         scope.define(
-            name,
-            index < arguments.length
-                ? arguments[index]
-                : base.typeParameterBounds[name] ??
-                    const NamedRuntimeType('dynamic'));
+          name,
+          index < arguments.length
+              ? arguments[index]
+              : base.typeParameterBounds[name] ??
+                    const NamedRuntimeType('dynamic'),
+        );
       }
       for (final annotation in [
         if (base.superclassType != null) base.superclassType!,
@@ -152,8 +161,9 @@ RuntimeType? projectEnumType(RuntimeType actual, RuntimeType target,
         if (result != null) return result;
       }
     } else if (base is InterpretedEnum) {
-      final resolved =
-          arguments.isEmpty ? base.validateTypeArguments(null) : arguments;
+      final resolved = arguments.isEmpty
+          ? base.validateTypeArguments(null)
+          : arguments;
       final scope = Environment(enclosing: base.declarationEnvironment);
       base.bindTypeParameters(base, resolved, scope);
       for (final annotation in base.interfaceTypes) {
@@ -163,15 +173,17 @@ RuntimeType? projectEnumType(RuntimeType actual, RuntimeType target,
       for (final mixin in base.mixinTypes) {
         final mixinBase = mixin is AppliedRuntimeType ? mixin.baseType : mixin;
         final result = project(
-            substituteEnumType(mixin, base.typeParameterNames, resolved),
-            base.nativeMixinTypeMetadata[mixinBase]);
+          substituteEnumType(mixin, base.typeParameterNames, resolved),
+          base.nativeMixinTypeMetadata[mixinBase],
+        );
         if (result != null) return result;
       }
       if (isEnumCoreType(targetBase, 'Enum')) return targetBase;
     } else if (base is BridgedEnum) {
       if (isEnumCoreType(targetBase, 'Enum')) return targetBase;
-      for (final parent in base.typeMetadata?.resolveSupertypes(arguments) ??
-          const <RuntimeType>[]) {
+      for (final parent
+          in base.typeMetadata?.resolveSupertypes(arguments) ??
+              const <RuntimeType>[]) {
         final result = project(parent);
         if (result != null) return result;
       }

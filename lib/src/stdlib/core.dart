@@ -70,10 +70,11 @@ export 'package:d4rt/src/stdlib/core/finalizer.dart';
 class CoreStdlib {
   /// The actual core intrinsic, whose invocation is legal in constant contexts.
   static final NativeFunction identicalFunction = NativeFunction(
-      (visitor, arguments, namedArguments, typeArguments) =>
-          identical(arguments[0], arguments[1]),
-      arity: 2,
-      name: 'identical');
+    (visitor, arguments, namedArguments, typeArguments) =>
+        identical(arguments[0], arguments[1]),
+    arity: 2,
+    name: 'identical',
+  );
 
   static void register(Environment environment) {
     EnumCore.register(environment);
@@ -121,14 +122,20 @@ class CoreStdlib {
     environment.defineBridge(FinalizerCore.definition);
     environment.defineBridge(RecordCore.definition);
     environment.define(
-        'dynamic',
-        NativeFunction((visitor, arguments, namedArguments, typeArguments) {
+      'dynamic',
+      NativeFunction(
+        (visitor, arguments, namedArguments, typeArguments) {
           return dynamic;
-        }, arity: 0, name: 'dynamic'));
+        },
+        arity: 0,
+        name: 'dynamic',
+      ),
+    );
     environment.defineFunction('identical', identicalFunction);
     environment.defineFunction(
-        'print',
-        NativeFunction((visitor, arguments, namedArguments, typeArguments) {
+      'print',
+      NativeFunction(
+        (visitor, arguments, namedArguments, typeArguments) {
           final message = visitor.valueToString(arguments[0]);
           if (visitor.onPrint != null) {
             visitor.onPrint!(message);
@@ -136,6 +143,10 @@ class CoreStdlib {
             print(message);
           }
           return null;
-        }, arity: 1, name: 'print'));
+        },
+        arity: 1,
+        name: 'print',
+      ),
+    );
   }
 }

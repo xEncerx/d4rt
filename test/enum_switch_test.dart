@@ -23,7 +23,9 @@ void main() {
     });
 
     test('Interpreted enum in switch statement and expression', () {
-      final result = d4rt.execute(source: '''
+      final result =
+          d4rt.execute(
+                source: '''
         enum Status { pending, active, completed }
 
         String getStatusLabel(Status s) {
@@ -55,23 +57,27 @@ void main() {
             getStatusExpr(Status.completed),
           ];
         }
-      ''') as List;
+      ''',
+              )
+              as List;
 
       expect(
-          result,
-          equals([
-            'Pending',
-            'Active',
-            'Completed',
-            'PendingExpr',
-            'ActiveExpr',
-            'CompletedExpr',
-          ]));
+        result,
+        equals([
+          'Pending',
+          'Active',
+          'Completed',
+          'PendingExpr',
+          'ActiveExpr',
+          'CompletedExpr',
+        ]),
+      );
     });
 
     test('Bridged enum in switch statement and expression', () {
-      final result = d4rt.execute(
-        source: '''
+      final result =
+          d4rt.execute(
+                source: '''
           import 'package:test/enums.dart';
 
           String getNativeLabel(NativeTestEnum e) {
@@ -104,18 +110,20 @@ void main() {
             ];
           }
         ''',
-      ) as List;
+              )
+              as List;
 
       expect(
-          result,
-          equals([
-            'First',
-            'Second',
-            'Third',
-            'FirstExpr',
-            'SecondExpr',
-            'ThirdExpr',
-          ]));
+        result,
+        equals([
+          'First',
+          'Second',
+          'Third',
+          'FirstExpr',
+          'SecondExpr',
+          'ThirdExpr',
+        ]),
+      );
     });
   });
 }

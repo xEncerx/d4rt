@@ -226,25 +226,25 @@ int castSet(Object? value) => switch (value) {
 ''';
 
 int _castListNatively(Object? value) => switch (value) {
-      (var list as List<int>) => list.length,
-      // A cast pattern either binds or throws; retain the fallback for D4rt parity.
-      // ignore: unreachable_switch_case, dead_code
-      _ => -1,
-    };
+  (var list as List<int>) => list.length,
+  // A cast pattern either binds or throws; retain the fallback for D4rt parity.
+  // ignore: unreachable_switch_case, dead_code
+  _ => -1,
+};
 
 int _castMapNatively(Object? value) => switch (value) {
-      (var map as Map<String, Object?>) => map.length,
-      // A cast pattern either binds or throws; retain the fallback for D4rt parity.
-      // ignore: unreachable_switch_case, dead_code
-      _ => -1,
-    };
+  (var map as Map<String, Object?>) => map.length,
+  // A cast pattern either binds or throws; retain the fallback for D4rt parity.
+  // ignore: unreachable_switch_case, dead_code
+  _ => -1,
+};
 
 int _castSetNatively(Object? value) => switch (value) {
-      (var set as Set<int>) => set.length,
-      // A cast pattern either binds or throws; retain the fallback for D4rt parity.
-      // ignore: unreachable_switch_case, dead_code
-      _ => -1,
-    };
+  (var set as Set<int>) => set.length,
+  // A cast pattern either binds or throws; retain the fallback for D4rt parity.
+  // ignore: unreachable_switch_case, dead_code
+  _ => -1,
+};
 
 const _bridgedSource = '''
 List<bool> checkBridged(Object? map, Object? list, Object? set) => [
@@ -275,25 +275,26 @@ void main() {
     );
 
     expect(
-        nativeOutcome,
-        equals([
-          true,
-          1,
-          false,
-          -1,
-          false,
-          -1,
-          false,
-          -1,
-          true,
-          1,
-          false,
-          -1,
-          true,
-          1,
-          false,
-          -1
-        ]));
+      nativeOutcome,
+      equals([
+        true,
+        1,
+        false,
+        -1,
+        false,
+        -1,
+        false,
+        -1,
+        true,
+        1,
+        false,
+        -1,
+        true,
+        1,
+        false,
+        -1,
+      ]),
+    );
     expect(d4rtOutcome, equals(nativeOutcome));
   });
 
@@ -349,23 +350,24 @@ void main() {
 
     final nativeOutcome = _inspectReifiedNatively(values);
     expect(
-        nativeOutcome,
-        equals([
-          false,
-          -1,
-          false,
-          -1,
-          false,
-          -1,
-          false,
-          -1,
-          false,
-          -1,
-          false,
-          -1,
-          false,
-          -1
-        ]));
+      nativeOutcome,
+      equals([
+        false,
+        -1,
+        false,
+        -1,
+        false,
+        -1,
+        false,
+        -1,
+        false,
+        -1,
+        false,
+        -1,
+        false,
+        -1,
+      ]),
+    );
     final d4rtOutcome = D4rt().execute(
       source: _reifiedSource,
       name: 'inspectReified',
@@ -374,31 +376,33 @@ void main() {
     expect(d4rtOutcome, equals(nativeOutcome));
   });
 
-  test('matching reified arguments also match empty and populated collections',
-      () {
-    final values = <Object?>[
-      UnmodifiableMapView<String, Object?>(<String, Object?>{}),
-      <int, Object?>{1: null},
-      <String, int>{'key': 1},
-      <int>[],
-      <int>[1],
-      <int>{},
-      <int>{1},
-    ];
-    final nativeOutcome = _inspectReifiedNatively(values);
-    expect(
+  test(
+    'matching reified arguments also match empty and populated collections',
+    () {
+      final values = <Object?>[
+        UnmodifiableMapView<String, Object?>(<String, Object?>{}),
+        <int, Object?>{1: null},
+        <String, int>{'key': 1},
+        <int>[],
+        <int>[1],
+        <int>{},
+        <int>{1},
+      ];
+      final nativeOutcome = _inspectReifiedNatively(values);
+      expect(
         nativeOutcome,
-        equals(
-            [true, 0, true, 1, true, 1, true, 0, true, 1, true, 0, true, 1]));
-    expect(
-      D4rt().execute(
-        source: _reifiedSource,
-        name: 'inspectReified',
-        positionalArgs: values,
-      ),
-      equals(nativeOutcome),
-    );
-  });
+        equals([true, 0, true, 1, true, 1, true, 0, true, 1, true, 0, true, 1]),
+      );
+      expect(
+        D4rt().execute(
+          source: _reifiedSource,
+          name: 'inspectReified',
+          positionalArgs: values,
+        ),
+        equals(nativeOutcome),
+      );
+    },
+  );
 
   test('bridged native collections retain their reified arguments', () {
     final nativeMap = UnmodifiableMapView<String, Object?>({'key': null});
@@ -433,14 +437,17 @@ void main() {
       (
         'castMap',
         UnmodifiableMapView<String, Object?>({'key': null}),
-        _castMapNatively
+        _castMapNatively,
       ),
       ('castSet', <int>{1}, _castSetNatively),
     ];
     for (final (name, value, nativeCast) in cases) {
       expect(
-        D4rt()
-            .execute(source: _castSource, name: name, positionalArgs: [value]),
+        D4rt().execute(
+          source: _castSource,
+          name: name,
+          positionalArgs: [value],
+        ),
         nativeCast(value),
       );
     }
@@ -449,7 +456,7 @@ void main() {
       (
         'castMap',
         UnmodifiableMapView<int, Object?>(<int, Object?>{}),
-        _castMapNatively
+        _castMapNatively,
       ),
       ('castSet', <Object>{1}, _castSetNatively),
     ];

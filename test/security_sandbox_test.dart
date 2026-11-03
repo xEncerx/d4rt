@@ -43,27 +43,36 @@ void main() {
 
       final interpreter = D4rt();
       expect(
-        () => interpreter.execute(source: '''
+        () => interpreter.execute(
+          source: '''
           import 'dart:io';
           void main() {
             var content = File('test.txt').readAsStringSync();
             print(content);
           }
-        '''),
-        throwsA(isA<RuntimeError>().having((e) => e.message, 'message',
-            contains('dart:io requires FilesystemPermission'))),
+        ''',
+        ),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains('dart:io requires FilesystemPermission'),
+          ),
+        ),
       );
     });
 
     test('Writing a file fails without permission', () {
       final interpreter = D4rt();
       expect(
-        () => interpreter.execute(source: '''
+        () => interpreter.execute(
+          source: '''
           import 'dart:io';
           void main() {
             File('test_write.txt').writeAsStringSync('attempting to write');
           }
-        '''),
+        ''',
+        ),
         throwsA(isA<RuntimeError>()),
       );
 
@@ -76,12 +85,14 @@ void main() {
 
       final interpreter = D4rt();
       expect(
-        () => interpreter.execute(source: '''
+        () => interpreter.execute(
+          source: '''
           import 'dart:io';
           void main() {
             File('test.txt').deleteSync();
           }
-        '''),
+        ''',
+        ),
         throwsA(isA<RuntimeError>()),
       );
 
@@ -97,13 +108,15 @@ void main() {
       final interpreter = D4rt();
       interpreter.grant(FilesystemPermission.read);
 
-      final result = interpreter.execute(source: '''
+      final result = interpreter.execute(
+        source: '''
         import 'dart:io';
         String main() {
           var content = File('test.txt').readAsStringSync();
           return content;
         }
-      ''');
+      ''',
+      );
 
       expect(result, equals('Hello from file!'));
     });
@@ -112,24 +125,29 @@ void main() {
       final interpreter = D4rt();
       interpreter.grant(FilesystemPermission.write);
 
-      interpreter.execute(source: '''
+      interpreter.execute(
+        source: '''
         import 'dart:io';
         void main() {
           File('output.txt').writeAsStringSync('Generated content');
         }
-      ''');
+      ''',
+      );
 
       // Verify file was actually created with correct content
       expect(io.File('output.txt').existsSync(), isTrue);
-      expect(io.File('output.txt').readAsStringSync(),
-          equals('Generated content'));
+      expect(
+        io.File('output.txt').readAsStringSync(),
+        equals('Generated content'),
+      );
     });
 
     test('Complex file operations with full permission', () {
       final interpreter = D4rt();
       interpreter.grant(FilesystemPermission.any);
 
-      final result = interpreter.execute(source: '''
+      final result = interpreter.execute(
+        source: '''
         import 'dart:io';
         String main() {
           // Write initial data
@@ -146,7 +164,8 @@ void main() {
           // Read final result
           return File('data.txt').readAsStringSync();
         }
-      ''');
+      ''',
+      );
 
       expect(result, equals('LINE 1\nLINE 2\nLINE 3'));
     });
@@ -160,24 +179,33 @@ void main() {
       final interpreter = D4rt();
       interpreter.grant(FilesystemPermission.readPath('allowed_dir'));
 
-      final allowedResult = interpreter.execute(source: '''
+      final allowedResult = interpreter.execute(
+        source: '''
         import 'dart:io';
         String main() {
           return File('allowed_dir/inside.txt').readAsStringSync();
         }
-      ''');
+      ''',
+      );
 
       expect(allowedResult, equals('inside'));
 
       expect(
-        () => interpreter.execute(source: '''
+        () => interpreter.execute(
+          source: '''
           import 'dart:io';
           void main() {
             File('allowed_dir_sneaky/outside.txt').readAsStringSync();
           }
-        '''),
-        throwsA(isA<RuntimeError>().having((e) => e.message, 'message',
-            contains('Filesystem permission denied'))),
+        ''',
+        ),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains('Filesystem permission denied'),
+          ),
+        ),
       );
     });
 
@@ -188,25 +216,36 @@ void main() {
       final interpreter = D4rt();
       interpreter.grant(FilesystemPermission.writePath('allowed_dir'));
 
-      interpreter.execute(source: '''
+      interpreter.execute(
+        source: '''
         import 'dart:io';
         void main() {
           File('allowed_dir/output.txt').writeAsStringSync('ok');
         }
-      ''');
+      ''',
+      );
 
       expect(
-          io.File('allowed_dir/output.txt').readAsStringSync(), equals('ok'));
+        io.File('allowed_dir/output.txt').readAsStringSync(),
+        equals('ok'),
+      );
 
       expect(
-        () => interpreter.execute(source: '''
+        () => interpreter.execute(
+          source: '''
           import 'dart:io';
           void main() {
             File('blocked_dir/output.txt').writeAsStringSync('nope');
           }
-        '''),
-        throwsA(isA<RuntimeError>().having((e) => e.message, 'message',
-            contains('Filesystem permission denied'))),
+        ''',
+        ),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains('Filesystem permission denied'),
+          ),
+        ),
       );
     });
   });
@@ -220,14 +259,16 @@ void main() {
       io.File('test1.txt').writeAsStringSync('test1');
       io.File('test2.txt').writeAsStringSync('test2');
 
-      final result = interpreter.execute(source: '''
+      final result = interpreter.execute(
+        source: '''
         import 'dart:io';
         int main() {
           var files = Directory('.').listSync();
           var txtFiles = files.where((f) => f.path.endsWith('.txt')).toList();
           return txtFiles.length;
         }
-      ''');
+      ''',
+      );
 
       expect(result, greaterThanOrEqualTo(2));
 
@@ -240,12 +281,14 @@ void main() {
       final interpreter = D4rt();
 
       expect(
-        () => interpreter.execute(source: '''
+        () => interpreter.execute(
+          source: '''
           import 'dart:io';
           void main() {
             Directory('.').listSync();
           }
-        '''),
+        ''',
+        ),
         throwsA(isA<RuntimeError>()),
       );
     });
@@ -258,7 +301,8 @@ void main() {
       interpreter.grant(DangerousPermission.processExecution);
       interpreter.grant(FilesystemPermission.any);
 
-      final result = interpreter.execute(source: '''
+      final result = interpreter.execute(
+        source: '''
         import 'dart:io';
         String main(String executable, String fixture) {
           var process = Process.runSync(executable, [fixture, 'echo', 'Hello Process']);
@@ -279,14 +323,21 @@ void main() {
       interpreter.grant(FilesystemPermission.any); // IO needed but not process
 
       expect(
-        () => interpreter.execute(source: '''
+        () => interpreter.execute(
+          source: '''
           import 'dart:io';
           void main() {
             Process.runSync('echo', ['test']);
           }
-        '''),
-        throwsA(isA<RuntimeError>().having(
-            (e) => e.message, 'message', contains('ProcessRunPermission'))),
+        ''',
+        ),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains('ProcessRunPermission'),
+          ),
+        ),
       );
     });
   });
@@ -294,14 +345,16 @@ void main() {
   group('Complex Real-World Scenarios', () {
     test('Config file processor with read/write permissions', () {
       // Setup: Create a config file
-      io.File('config.json')
-          .writeAsStringSync('{"setting": "value", "count": 10}');
+      io.File(
+        'config.json',
+      ).writeAsStringSync('{"setting": "value", "count": 10}');
 
       final interpreter = D4rt();
       interpreter.grant(FilesystemPermission.read);
       interpreter.grant(FilesystemPermission.write);
 
-      final result = interpreter.execute(source: '''
+      final result = interpreter.execute(
+        source: '''
         import 'dart:io';
         import 'dart:convert';
         
@@ -322,7 +375,8 @@ void main() {
           var newConfig = jsonDecode(newContent);
           return 'Count is now: \${newConfig['count']}';
         }
-      ''');
+      ''',
+      );
 
       expect(result, equals('Count is now: 11'));
 
@@ -334,15 +388,18 @@ void main() {
 
     test('Log file aggregator - read multiple files, write summary', () {
       // Setup: Create multiple log files
-      io.File('log1.txt')
-          .writeAsStringSync('ERROR: Connection failed\nINFO: Starting\n');
-      io.File('log2.txt')
-          .writeAsStringSync('ERROR: Timeout\nWARN: Slow response\n');
+      io.File(
+        'log1.txt',
+      ).writeAsStringSync('ERROR: Connection failed\nINFO: Starting\n');
+      io.File(
+        'log2.txt',
+      ).writeAsStringSync('ERROR: Timeout\nWARN: Slow response\n');
 
       final interpreter = D4rt();
       interpreter.grant(FilesystemPermission.any);
 
-      final result = interpreter.execute(source: '''
+      final result = interpreter.execute(
+        source: '''
         import 'dart:io';
         
         int main() {
@@ -361,7 +418,8 @@ void main() {
           
           return errors.length;
         }
-      ''');
+      ''',
+      );
 
       expect(result, equals(2));
       expect(io.File('error_summary.txt').existsSync(), isTrue);
@@ -379,13 +437,15 @@ void main() {
 
     test('Data transformation pipeline', () {
       // Create input data
-      io.File('input.txt')
-          .writeAsStringSync('apple\nbanana\ncherry\napple\nbanana');
+      io.File(
+        'input.txt',
+      ).writeAsStringSync('apple\nbanana\ncherry\napple\nbanana');
 
       final interpreter = D4rt();
       interpreter.grant(FilesystemPermission.any);
 
-      final result = interpreter.execute(source: '''
+      final result = interpreter.execute(
+        source: '''
         import 'dart:io';
         
         Map<String, int> main() {
@@ -407,7 +467,8 @@ void main() {
           
           return counts;
         }
-      ''');
+      ''',
+      );
 
       expect(result, isA<Map>());
       expect(result['apple'], equals(2));
@@ -426,13 +487,15 @@ void main() {
 
     test('File backup system', () {
       // Create original file
-      io.File('important.txt')
-          .writeAsStringSync('Important data\nDo not lose!');
+      io.File(
+        'important.txt',
+      ).writeAsStringSync('Important data\nDo not lose!');
 
       final interpreter = D4rt();
       interpreter.grant(FilesystemPermission.any);
 
-      interpreter.execute(source: '''
+      interpreter.execute(
+        source: '''
         import 'dart:io';
         
         void main() {
@@ -446,7 +509,8 @@ void main() {
           // Modify original
           original.writeAsStringSync(content + '\\nModified!');
         }
-      ''');
+      ''',
+      );
 
       // Verify both files exist with correct content
       expect(io.File('important.txt').existsSync(), isTrue);
@@ -567,12 +631,14 @@ void main() {
       interpreter.grant(FilesystemPermission.any);
 
       // First operation succeeds
-      interpreter.execute(source: '''
+      interpreter.execute(
+        source: '''
         import 'dart:io';
         void main() {
           File('test.txt').writeAsStringSync('first write');
         }
-      ''');
+      ''',
+      );
 
       expect(io.File('test.txt').existsSync(), isTrue);
 
@@ -581,12 +647,14 @@ void main() {
 
       // Second operation fails
       expect(
-        () => interpreter.execute(source: '''
+        () => interpreter.execute(
+          source: '''
           import 'dart:io';
           void main() {
             File('test.txt').writeAsStringSync('second write');
           }
-        '''),
+        ''',
+        ),
         throwsA(isA<RuntimeError>()),
       );
 
@@ -599,12 +667,14 @@ void main() {
     test('Pure computation works without any permissions', () {
       final interpreter = D4rt();
 
-      final result = interpreter.execute(source: '''
+      final result = interpreter.execute(
+        source: '''
         int main() {
           List<int> numbers = [1, 2, 3, 4, 5];
           return numbers.fold(0, (sum, n) => sum + n);
         }
-      ''');
+      ''',
+      );
 
       expect(result, equals(15));
     });
@@ -612,12 +682,14 @@ void main() {
     test('String processing works without permissions', () {
       final interpreter = D4rt();
 
-      final result = interpreter.execute(source: '''
+      final result = interpreter.execute(
+        source: '''
         String main() {
           var text = 'hello world';
           return text.split(' ').map((w) => w.toUpperCase()).join('-');
         }
-      ''');
+      ''',
+      );
 
       expect(result, equals('HELLO-WORLD'));
     });
@@ -625,7 +697,8 @@ void main() {
     test('Complex data structures work without permissions', () {
       final interpreter = D4rt();
 
-      final result = interpreter.execute(source: '''
+      final result = interpreter.execute(
+        source: '''
         Map<String, dynamic> main() {
           var data = {
             'users': [
@@ -643,7 +716,8 @@ void main() {
             'names': users.map((u) => u['name']).toList(),
           };
         }
-      ''');
+      ''',
+      );
 
       expect(result['totalUsers'], equals(2));
       expect(result['averageAge'], equals(27.5));
@@ -658,14 +732,21 @@ void main() {
       // No network permission
 
       expect(
-        () => interpreter.execute(source: '''
+        () => interpreter.execute(
+          source: '''
           import 'dart:io';
           void main() {
             InternetAddress.lookup('localhost');
           }
-        '''),
-        throwsA(isA<RuntimeError>().having(
-            (e) => e.message, 'message', contains('NetworkPermission'))),
+        ''',
+        ),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains('NetworkPermission'),
+          ),
+        ),
       );
     });
   });
@@ -677,14 +758,21 @@ void main() {
         interpreter.grant(FilesystemPermission.any);
 
         expect(
-          () => interpreter.execute(source: '''
+          () => interpreter.execute(
+            source: '''
           import 'dart:io';
           void main() {
             InternetAddress.lookup('google.com');
           }
-        '''),
-          throwsA(isA<RuntimeError>().having(
-              (e) => e.message, 'message', contains('NetworkPermission'))),
+        ''',
+          ),
+          throwsA(
+            isA<RuntimeError>().having(
+              (e) => e.message,
+              'message',
+              contains('NetworkPermission'),
+            ),
+          ),
         );
       });
 
@@ -693,13 +781,15 @@ void main() {
         interpreter.grant(FilesystemPermission.any);
         interpreter.grant(NetworkPermission.any);
 
-        final result = interpreter.execute(source: '''
+        final result = interpreter.execute(
+          source: '''
         import 'dart:io';
         Future<bool> main() async {
           var addresses = await InternetAddress.lookup('localhost');
           return addresses.isNotEmpty;
         }
-      ''');
+      ''',
+        );
 
         expect(await result, isTrue);
       });
@@ -711,14 +801,21 @@ void main() {
         interpreter.grant(FilesystemPermission.any);
 
         expect(
-          () => interpreter.execute(source: '''
+          () => interpreter.execute(
+            source: '''
           import 'dart:io';
           void main() {
             Process.runSync('echo', ['test']);
           }
-        '''),
-          throwsA(isA<RuntimeError>().having(
-              (e) => e.message, 'message', contains('ProcessRunPermission'))),
+        ''',
+          ),
+          throwsA(
+            isA<RuntimeError>().having(
+              (e) => e.message,
+              'message',
+              contains('ProcessRunPermission'),
+            ),
+          ),
         );
       });
 
@@ -728,7 +825,8 @@ void main() {
         interpreter.grant(ProcessRunPermission.any);
         interpreter.grant(DangerousPermission.processExecution);
 
-        final result = interpreter.execute(source: '''
+        final result = interpreter.execute(
+          source: '''
         import 'dart:io';
         String main(String executable, String fixture) {
           var proc = Process.runSync(executable, [fixture, 'echo', 'Hello', 'World']);
@@ -751,7 +849,8 @@ void main() {
         interpreter.grant(ProcessRunPermission.any);
         interpreter.grant(DangerousPermission.processExecution);
 
-        final result = interpreter.execute(source: '''
+        final result = interpreter.execute(
+          source: '''
         import 'dart:io';
         String main(String executable, String fixture) {
           var proc = Process.runSync(executable, [fixture, 'cwd']);
@@ -775,12 +874,14 @@ void main() {
         interpreter.grant(FilesystemPermission.any);
         interpreter.grant(DangerousPermission.any);
 
-        final result = interpreter.execute(source: '''
+        final result = interpreter.execute(
+          source: '''
         import 'dart:io';
         String main() {
           return Platform.operatingSystem;
         }
-      ''');
+      ''',
+        );
 
         expect(result, isIn(['macos', 'linux', 'windows', 'android', 'ios']));
       });
@@ -790,13 +891,15 @@ void main() {
         interpreter.grant(FilesystemPermission.any);
         interpreter.grant(DangerousPermission.any);
 
-        final result = interpreter.execute(source: '''
+        final result = interpreter.execute(
+          source: '''
         import 'dart:io';
         int main() {
           var env = Platform.environment;
           return env.length;
         }
-      ''');
+      ''',
+        );
 
         expect(result, greaterThan(0));
       });
@@ -806,12 +909,14 @@ void main() {
         interpreter.grant(FilesystemPermission.any);
         interpreter.grant(DangerousPermission.any);
 
-        final result = interpreter.execute(source: '''
+        final result = interpreter.execute(
+          source: '''
         import 'dart:io';
         int main() {
           return Platform.numberOfProcessors;
         }
-      ''');
+      ''',
+        );
 
         expect(result, greaterThan(0));
       });
@@ -821,12 +926,14 @@ void main() {
       interpreter.grant(FilesystemPermission.any);
 
       expect(
-        () => interpreter.execute(source: '''
+        () => interpreter.execute(
+          source: '''
           import 'dart:io';
           void main() {
             File('nonexistent_file.txt').readAsStringSync();
           }
-        '''),
+        ''',
+        ),
         throwsA(anything), // Will throw FileSystemException
       );
     });

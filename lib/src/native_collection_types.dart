@@ -6,8 +6,9 @@ import 'package:d4rt/src/type_annotation_utils.dart';
 
 // Shared provenance for literals and collections created by interpreted
 // transformations. Native host collections are never tagged by type inference.
-final _interpreterOwnedCollections =
-    Expando<bool>('d4rt.interpretedCollection');
+final _interpreterOwnedCollections = Expando<bool>(
+  'd4rt.interpretedCollection',
+);
 
 /// Records interpreter ownership without accessing collection contents.
 void markInterpreterOwnedCollection(Object value) {
@@ -25,8 +26,12 @@ bool isInterpreterOwnedCollection(Object value) =>
 /// Type-preserving operations retain known declarations; transformations do not
 /// pretend that an erased callback return acquired a reified native generic type.
 T retainCollectionResult<T extends Object>(
-    T result, Object source, Environment environment,
-    {bool interpretedCallback = false, bool preservesType = true}) {
+  T result,
+  Object source,
+  Environment environment, {
+  bool interpretedCallback = false,
+  bool preservesType = true,
+}) {
   if (!interpretedCallback && !isInterpreterOwnedCollection(source)) {
     return result;
   }
@@ -37,14 +42,17 @@ T retainCollectionResult<T extends Object>(
       final family = result is List
           ? 'List'
           : result is Set
-              ? 'Set'
-              : result is Map
-                  ? 'Map'
-                  : 'Iterable';
+          ? 'Set'
+          : result is Map
+          ? 'Map'
+          : 'Iterable';
       environment.annotateRuntimeType(
-          result,
-          AppliedRuntimeType(environment.get(family) as RuntimeType,
-              annotation.typeArguments));
+        result,
+        AppliedRuntimeType(
+          environment.get(family) as RuntimeType,
+          annotation.typeArguments,
+        ),
+      );
     }
   }
   return result;
@@ -56,8 +64,12 @@ T retainCollectionResult<T extends Object>(
 /// Only interpreted transformations establish new ownership. Other operations
 /// propagate existing ownership; host inputs keep authoritative native checks.
 Object? retainCollectionOperationResult(
-    Object? result, Object source, String operation, Environment environment,
-    [List<Object?> arguments = const []]) {
+  Object? result,
+  Object source,
+  String operation,
+  Environment environment, [
+  List<Object?> arguments = const [],
+]) {
   if (result == null ||
       (source is! Iterable && source is! Map) ||
       (result is! Iterable && result is! Map)) {
@@ -66,10 +78,14 @@ Object? retainCollectionOperationResult(
   switch (operation) {
     case 'map':
     case 'expand':
-      return retainCollectionResult(result, source, environment,
-          interpretedCallback:
-              arguments.isNotEmpty && arguments.first is Callable,
-          preservesType: false);
+      return retainCollectionResult(
+        result,
+        source,
+        environment,
+        interpretedCallback:
+            arguments.isNotEmpty && arguments.first is Callable,
+        preservesType: false,
+      );
     case 'where':
     case 'take':
     case 'skip':
@@ -91,8 +107,12 @@ Object? retainCollectionOperationResult(
     case 'keys':
     case 'values':
     case 'entries':
-      return retainCollectionResult(result, source, environment,
-          preservesType: false);
+      return retainCollectionResult(
+        result,
+        source,
+        environment,
+        preservesType: false,
+      );
     default:
       return result;
   }
@@ -119,11 +139,14 @@ RuntimeType resolveNativeCollectionType(TypeAnnotation node, Environment env) {
           env.get(node.name.lexeme) as RuntimeType,
           node.typeArguments!.arguments
               .map((argument) => resolveNativeCollectionType(argument, env))
-              .toList())
+              .toList(),
+        )
       : resolveRuntimeTypeAnnotation(node, env);
   if (node is NamedType && node.question != null) {
     return NativeCollectionType(
-        type is NativeCollectionType ? type.base : type, true);
+      type is NativeCollectionType ? type.base : type,
+      true,
+    );
   }
   return type;
 }
@@ -149,7 +172,9 @@ bool nativeCollectionArgumentMatches(RuntimeType actual, RuntimeType expected) {
     }
     for (var i = 0; i < a.typeArguments.length; i++) {
       if (!nativeCollectionArgumentMatches(
-          a.typeArguments[i], e.typeArguments[i])) {
+        a.typeArguments[i],
+        e.typeArguments[i],
+      )) {
         return false;
       }
     }
@@ -161,8 +186,11 @@ bool nativeCollectionArgumentMatches(RuntimeType actual, RuntimeType expected) {
 /// Reifies supported core arguments, preserving erased interfaces for others.
 ///
 /// The erased interface does not claim an arbitrary declared native Dart type.
-R reifyNativeCollectionType<R>(RuntimeType type, R Function<T>() create,
-    {R Function()? unreified}) {
+R reifyNativeCollectionType<R>(
+  RuntimeType type,
+  R Function<T>() create, {
+  R Function()? unreified,
+}) {
   final name = type is NativeCollectionType ? type.nativeName : type.name;
   return switch (name) {
     'dynamic' => create<dynamic>(),
@@ -186,8 +214,12 @@ R reifyNativeCollectionType<R>(RuntimeType type, R Function<T>() create,
 }
 
 /// Constructs live views, retaining declared metadata separately from reification.
-Object nativeCollectionView(String name, Object source, List<RuntimeType> types,
-    InterpreterVisitor visitor) {
+Object nativeCollectionView(
+  String name,
+  Object source,
+  List<RuntimeType> types,
+  InterpreterVisitor visitor,
+) {
   bool compatible<T>(int index) {
     if (InterpreterVisitor.isInterpretedCollection(source)) {
       final annotation = visitor.environment.getAnnotatedRuntimeType(source);
@@ -196,13 +228,15 @@ Object nativeCollectionView(String name, Object source, List<RuntimeType> types,
       return annotation == null ||
           (annotation is AppliedRuntimeType &&
               nativeCollectionArgumentMatches(
-                  annotation.typeArguments[index], types[index]));
+                annotation.typeArguments[index],
+                types[index],
+              ));
     }
     return source is List
         ? source is List<T>
         : index == 0
-            ? source is Map<T, dynamic>
-            : source is Map<dynamic, T>;
+        ? source is Map<T, dynamic>
+        : source is Map<dynamic, T>;
   }
 
   Object createList<T>({bool reified = true}) {
@@ -229,21 +263,30 @@ Object nativeCollectionView(String name, Object source, List<RuntimeType> types,
   }
 
   Object withKey<K>({bool reified = true}) => reifyNativeCollectionType(
-      types[1], <V>() => createMap<K, V>(keyReified: reified),
-      unreified: () =>
-          createMap<K, dynamic>(keyReified: reified, valueReified: false));
+    types[1],
+    <V>() => createMap<K, V>(keyReified: reified),
+    unreified: () =>
+        createMap<K, dynamic>(keyReified: reified, valueReified: false),
+  );
 
   final view = name == 'UnmodifiableListView'
-      ? reifyNativeCollectionType(types[0], <T>() => createList<T>(),
-          unreified: () => createList<dynamic>(reified: false))
-      : reifyNativeCollectionType(types[0], <K>() => withKey<K>(),
-          unreified: () => withKey<dynamic>(reified: false));
+      ? reifyNativeCollectionType(
+          types[0],
+          <T>() => createList<T>(),
+          unreified: () => createList<dynamic>(reified: false),
+        )
+      : reifyNativeCollectionType(
+          types[0],
+          <K>() => withKey<K>(),
+          unreified: () => withKey<dynamic>(reified: false),
+        );
   visitor.environment.annotateRuntimeType(
-      view,
-      AppliedRuntimeType(
-          visitor.environment
-                  .get(name == 'UnmodifiableListView' ? 'List' : 'Map')
-              as RuntimeType,
-          types));
+    view,
+    AppliedRuntimeType(
+      visitor.environment.get(name == 'UnmodifiableListView' ? 'List' : 'Map')
+          as RuntimeType,
+      types,
+    ),
+  );
   return view;
 }

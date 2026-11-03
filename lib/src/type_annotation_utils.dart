@@ -45,12 +45,15 @@ RuntimeType resolveRuntimeTypeAnnotation(
       return RecordRuntimeType(const [], const {});
     }
 
-    final resolved = env.get(typeNode.importPrefix == null
-        ? typeName
-        : '${typeNode.importPrefix!.name.lexeme}.$typeName');
+    final resolved = env.get(
+      typeNode.importPrefix == null
+          ? typeName
+          : '${typeNode.importPrefix!.name.lexeme}.$typeName',
+    );
     if (resolved is! RuntimeType) {
       throw RuntimeError(
-          "Symbol '$typeName' resolved to non-type value: $resolved");
+        "Symbol '$typeName' resolved to non-type value: $resolved",
+      );
     }
 
     if (typeNode.typeArguments != null &&
@@ -74,9 +77,11 @@ RuntimeType resolveRuntimeTypeAnnotation(
 
   if (typeNode is GenericFunctionType) {
     return resolveFunctionRuntimeType(
-        typeNode.returnType, typeNode.parameters, env,
-        typeParameterCount:
-            typeNode.typeParameters?.typeParameters.length ?? 0);
+      typeNode.returnType,
+      typeNode.parameters,
+      env,
+      typeParameterCount: typeNode.typeParameters?.typeParameters.length ?? 0,
+    );
   }
 
   if (typeNode is RecordTypeAnnotation) {
@@ -88,8 +93,10 @@ RuntimeType resolveRuntimeTypeAnnotation(
 
     if (namedFields != null) {
       for (final field in namedFields.fields) {
-        namedTypes[field.name.lexeme] =
-            resolveRuntimeTypeAnnotation(field.type, env);
+        namedTypes[field.name.lexeme] = resolveRuntimeTypeAnnotation(
+          field.type,
+          env,
+        );
       }
     }
 
@@ -97,13 +104,17 @@ RuntimeType resolveRuntimeTypeAnnotation(
   }
 
   throw RuntimeError(
-      'Unsupported type annotation for constraint: ${typeNode.runtimeType}');
+    'Unsupported type annotation for constraint: ${typeNode.runtimeType}',
+  );
 }
 
 /// Normalizes actual callback formals without reconstructing source or AST nodes.
-FunctionRuntimeType resolveFunctionRuntimeType(TypeAnnotation? returnType,
-    FormalParameterList parameters, Environment environment,
-    {int typeParameterCount = 0}) {
+FunctionRuntimeType resolveFunctionRuntimeType(
+  TypeAnnotation? returnType,
+  FormalParameterList parameters,
+  Environment environment, {
+  int typeParameterCount = 0,
+}) {
   final positional = <RuntimeType>[];
   final named = <String, RuntimeType>{};
   final requiredNamed = <String>{};
@@ -120,30 +131,36 @@ FunctionRuntimeType resolveFunctionRuntimeType(TypeAnnotation? returnType,
     }
   }
   return FunctionRuntimeType(
-      returnType: resolveRuntimeTypeArgumentOrDynamic(returnType, environment),
-      positionalParameterTypes: positional,
-      requiredPositionalParameterCount: requiredPositional,
-      namedParameterTypes: named,
-      requiredNamedParameters: requiredNamed,
-      typeParameterCount: typeParameterCount);
+    returnType: resolveRuntimeTypeArgumentOrDynamic(returnType, environment),
+    positionalParameterTypes: positional,
+    requiredPositionalParameterCount: requiredPositional,
+    namedParameterTypes: named,
+    requiredNamedParameters: requiredNamed,
+    typeParameterCount: typeParameterCount,
+  );
 }
 
 /// Resolves an optional annotation while preserving genuine nullable type nodes.
 RuntimeType resolveRuntimeTypeArgumentOrDynamic(
-        TypeAnnotation? annotation, Environment environment) =>
-    annotation == null
-        ? const NamedRuntimeType('dynamic')
-        : resolveRuntimeTypeArgument(annotation, environment);
+  TypeAnnotation? annotation,
+  Environment environment,
+) => annotation == null
+    ? const NamedRuntimeType('dynamic')
+    : resolveRuntimeTypeArgument(annotation, environment);
 
 RuntimeType _resolveFormalParameterType(
-    FormalParameter parameter, Environment env) {
+  FormalParameter parameter,
+  Environment env,
+) {
   if (parameter is RegularFormalParameter) {
     if (parameter.functionTypedSuffix != null) {
       final suffix = parameter.functionTypedSuffix!;
       final function = resolveFunctionRuntimeType(
-          parameter.type, suffix.formalParameters, env,
-          typeParameterCount:
-              suffix.typeParameters?.typeParameters.length ?? 0);
+        parameter.type,
+        suffix.formalParameters,
+        env,
+        typeParameterCount: suffix.typeParameters?.typeParameters.length ?? 0,
+      );
       return suffix.question == null ? function : nullableEnumType(function);
     }
     return resolveRuntimeTypeArgumentOrDynamic(parameter.type, env);

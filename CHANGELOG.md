@@ -22,6 +22,7 @@
 - Prevent mutable raw paths and recursive creation from escaping filesystem scopes.
 - Keep deferred filesystem operations on their authorized paths while preserving relative-path results.
 - Reject empty filesystem operation paths and preserve watch event path spelling.
+- Isolate supported Linux x64 filesystem operations against symbolic-link substitution while preserving native results, caller-path diagnostics, asynchronous bulk IO, and resource ownership.
 
 ## 0.4.1
 - Isolate recursive synchronous calls and synchronous generator bodies from their async caller's continuation state while preserving exactly-once awaited operands, receivers, and arguments. Avoid extra iteration and repeated effects when delegating generator yields.

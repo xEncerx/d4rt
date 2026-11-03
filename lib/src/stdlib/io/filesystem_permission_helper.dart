@@ -7,18 +7,119 @@ import 'package:d4rt/d4rt.dart';
 import 'package:path/path.dart' as p;
 
 import '../../security/permission_path.dart';
+import 'descriptor_filesystem.dart';
+import 'filesystem_execution.dart';
+import 'filesystem_handle.dart';
+import 'filesystem_mode.dart';
 
-// Native handles keep the anchored execution path; preserve the bridge's
-// original path spelling without wrapping or changing handle operations.
-final _handlePaths = Expando<String>();
-
-RandomAccessFile filesystemHandleAt(RandomAccessFile handle, String path) {
-  if (handle.path != path) _handlePaths[handle] = path;
-  return handle;
+FilesystemExecution? filesystemExecution(
+  InterpreterVisitor visitor, {
+  Map<String, String> originalPaths = const {},
+}) {
+  final backend = DescriptorFilesystem.instance;
+  if (backend == null) return null;
+  return FilesystemExecution(
+    (path, {bool write = false, bool read = false, bool followLinks = true}) {
+      // Resolve before asking permission and execute exactly this canonical name.
+      // A subsequent symlink substitution is rejected by the no-follow walk.
+      _validateFilesystemPath(path);
+      final canonical = resolvePermissionPath(path, followLinks: followLinks);
+      // Separate grants may supply read and write authority. Check both against
+      // this one canonical operand, matching the portable permission boundary.
+      if (read || !write) {
+        _checkFilesystemPermission(
+          visitor,
+          canonical,
+          operation: 'access filesystem',
+          read: true,
+          followLinks: followLinks,
+        );
+      }
+      if (write) {
+        _checkFilesystemPermission(
+          visitor,
+          canonical,
+          operation: 'access filesystem',
+          write: true,
+          followLinks: followLinks,
+        );
+      }
+      return canonical;
+    },
+    backend,
+    originalPaths,
+  );
 }
 
-String filesystemHandlePath(RandomAccessFile handle) =>
-    _handlePaths[handle] ?? handle.path;
+T executionFilesystemEntity<T extends FileSystemEntity>(
+  InterpreterVisitor visitor,
+  T entity, {
+  Map<String, String> originalPaths = const {},
+}) {
+  final absolute = absoluteFilesystemEntity(entity);
+  final execution = filesystemExecution(
+    visitor,
+    originalPaths: absolute.path == entity.path
+        ? originalPaths
+        : {...originalPaths, absolute.path: entity.path},
+  );
+  if (execution == null) return absolute;
+  if (absolute is File) return ExecutionFile(execution, absolute.path) as T;
+  if (absolute is Directory) {
+    return ExecutionDirectory(execution, absolute.path) as T;
+  }
+  if (absolute is Link) return ExecutionLink(execution, absolute.path) as T;
+  throw ArgumentError.value(entity, 'entity');
+}
+
+FileStat filesystemStatSync(InterpreterVisitor visitor, String path) =>
+    filesystemExecution(visitor)?.stat(path) ?? FileStat.statSync(path);
+
+Future<FileStat> filesystemStat(InterpreterVisitor visitor, String path) =>
+    filesystemExecution(visitor)?.statAsync(path) ?? FileStat.stat(path);
+
+FileSystemEntityType filesystemTypeSync(
+  InterpreterVisitor visitor,
+  String path, {
+  bool followLinks = true,
+}) =>
+    filesystemExecution(visitor)?.type(path, followLinks: followLinks) ??
+    FileSystemEntity.typeSync(path, followLinks: followLinks);
+
+Future<FileSystemEntityType> filesystemType(
+  InterpreterVisitor visitor,
+  String path, {
+  bool followLinks = true,
+}) =>
+    filesystemExecution(visitor)?.typeAsync(path, followLinks: followLinks) ??
+    FileSystemEntity.type(path, followLinks: followLinks);
+
+bool filesystemIdenticalSync(
+  InterpreterVisitor visitor,
+  String first,
+  String second, {
+  Map<String, String> originalPaths = const {},
+}) =>
+    filesystemExecution(
+      visitor,
+      originalPaths: originalPaths,
+    )?.identical(first, second) ??
+    FileSystemEntity.identicalSync(first, second);
+
+Future<bool> filesystemIdentical(
+  InterpreterVisitor visitor,
+  String first,
+  String second, {
+  Map<String, String> originalPaths = const {},
+}) =>
+    filesystemExecution(
+      visitor,
+      originalPaths: originalPaths,
+    )?.identicalAsync(first, second) ??
+    FileSystemEntity.identical(first, second);
+
+RandomAccessFile filesystemHandleAt(RandomAccessFile handle, String path) =>
+    handle.path == path ? handle : FilesystemHandle(handle, path);
 
 /// Decode once into an immutable string. Native raw-path constructors may retain
 /// a caller-owned terminated buffer and decode malformed bytes lossily.
@@ -234,10 +335,10 @@ void checkFilesystemOpen(
   String path,
   FileMode mode,
 ) {
-  if (mode != FileMode.writeOnly && mode != FileMode.writeOnlyAppend) {
+  if (mode.requiresFilesystemRead) {
     checkFilesystemReadPermission(visitor, path, operation: 'open file');
   }
-  if (mode != FileMode.read) {
+  if (mode.requiresFilesystemWrite) {
     checkFilesystemWritePermission(visitor, path, operation: 'open file');
   }
 }
@@ -348,7 +449,7 @@ Stream<FileSystemEntity> listFilesystem(
   required bool followLinks,
 }) {
   final original = directory.path;
-  directory = absoluteFilesystemEntity(directory);
+  directory = executionFilesystemEntity(visitor, directory);
   void check() => checkFilesystemReadPermission(
     visitor,
     directory.path,
@@ -381,7 +482,7 @@ List<FileSystemEntity> listFilesystemSync(
   required bool followLinks,
 }) {
   final original = directory.path;
-  directory = absoluteFilesystemEntity(directory);
+  directory = executionFilesystemEntity(visitor, directory);
   checkFilesystemReadPermission(
     visitor,
     directory.path,
@@ -496,7 +597,7 @@ Future<Directory> createFilesystemTemp(
   if (original.isEmpty) {
     throw ArgumentError('Directory.createTemp called with an empty path.');
   }
-  directory = absoluteFilesystemEntity(directory);
+  directory = executionFilesystemEntity(visitor, directory);
   validateFilesystemTempPrefix(prefix);
   checkFilesystemWritePermission(
     visitor,
@@ -521,7 +622,7 @@ Directory createFilesystemTempSync(
   if (original.isEmpty) {
     throw ArgumentError('Directory.createTemp called with an empty path.');
   }
-  directory = absoluteFilesystemEntity(directory);
+  directory = executionFilesystemEntity(visitor, directory);
   validateFilesystemTempPrefix(prefix);
   checkFilesystemWritePermission(
     visitor,

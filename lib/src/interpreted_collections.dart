@@ -18,28 +18,38 @@ mixin _CollectionDispatch on InterpretedInstance {
     );
   }
 
-  Object? _callOverride(InterpretedFunction function, List<Object?> args,
-      [Map<String, Object?> named = const {}, List<RuntimeType>? types]) {
+  Object? _callOverride(
+    InterpretedFunction function,
+    List<Object?> args, [
+    Map<String, Object?> named = const {},
+    List<RuntimeType>? types,
+  ]) {
     Object? callableArgument(Object? value) => value is Function
         ? NativeFunction(
             (visitor, positional, named, types) => Function.apply(
-                value,
-                positional,
-                named.map((key, value) => MapEntry(Symbol(key), value))),
-            arity: 0)
+              value,
+              positional,
+              named.map((key, value) => MapEntry(Symbol(key), value)),
+            ),
+            arity: 0,
+          )
         : value;
     for (var i = 0; i < args.length; i++) {
       args[i] = callableArgument(args[i]);
     }
     try {
-      return function.bind(this).call(
-          _dispatchVisitor,
-          args,
-          named.isEmpty
-              ? named
-              : named
-                  .map((key, value) => MapEntry(key, callableArgument(value))),
-          types);
+      return function
+          .bind(this)
+          .call(
+            _dispatchVisitor,
+            args,
+            named.isEmpty
+                ? named
+                : named.map(
+                    (key, value) => MapEntry(key, callableArgument(value)),
+                  ),
+            types,
+          );
     } on ReturnException catch (error) {
       return error.value;
     } on InternalInterpreterException catch (error) {
@@ -59,8 +69,12 @@ mixin _CollectionDispatch on InterpretedInstance {
   }
 
   Object? _collectionMethod(
-      String name, List<Object?> args, Object? Function() inherited,
-      {Map<String, Object?> named = const {}, List<RuntimeType>? types}) {
+    String name,
+    List<Object?> args,
+    Object? Function() inherited, {
+    Map<String, Object?> named = const {},
+    List<RuntimeType>? types,
+  }) {
     final method = klass.findInstanceMethod(name);
     return method == null
         ? inherited()
@@ -91,8 +105,11 @@ final class _CollectionIterator<T> implements Iterator<T> {
 
 final class _InterpretedList<T> extends InterpretedInstance
     with _CollectionDispatch, ListMixin<T> {
-  _InterpretedList(super.klass, InterpreterVisitor visitor,
-      {super.typeArguments}) {
+  _InterpretedList(
+    super.klass,
+    InterpreterVisitor visitor, {
+    super.typeArguments,
+  }) {
     _constructionVisitor = visitor;
   }
   List get _source => bridgedSuperObject as List;
@@ -114,8 +131,9 @@ final class _InterpretedList<T> extends InterpretedInstance
   T operator [](int index) {
     final operator = findOperator('[]');
     return (operator == null
-        ? _source[index]
-        : _callOverride(operator, [index])) as T;
+            ? _source[index]
+            : _callOverride(operator, [index]))
+        as T;
   }
 
   @override
@@ -147,45 +165,66 @@ final class _InterpretedList<T> extends InterpretedInstance
   T removeLast() =>
       _collectionMethod('removeLast', [], () => _source.removeLast()) as T;
   @override
-  void insert(int index, T value) => _collectionMethod(
-      'insert', [index, value], () => _source.insert(index, value));
+  void insert(int index, T value) => _collectionMethod('insert', [
+    index,
+    value,
+  ], () => _source.insert(index, value));
   @override
   void insertAll(int index, Iterable<T> values) => _collectionMethod(
-      'insertAll', [index, values], () => _source.insertAll(index, values));
+    'insertAll',
+    [index, values],
+    () => _source.insertAll(index, values),
+  );
   @override
-  void removeRange(int start, int end) => _collectionMethod(
-      'removeRange', [start, end], () => _source.removeRange(start, end));
+  void removeRange(int start, int end) => _collectionMethod('removeRange', [
+    start,
+    end,
+  ], () => _source.removeRange(start, end));
   @override
-  void removeWhere(bool Function(T) test) => _collectionMethod('removeWhere',
-      [test], () => _source.removeWhere((value) => test(value as T)));
+  void removeWhere(bool Function(T) test) => _collectionMethod('removeWhere', [
+    test,
+  ], () => _source.removeWhere((value) => test(value as T)));
   @override
-  void retainWhere(bool Function(T) test) => _collectionMethod('retainWhere',
-      [test], () => _source.retainWhere((value) => test(value as T)));
+  void retainWhere(bool Function(T) test) => _collectionMethod('retainWhere', [
+    test,
+  ], () => _source.retainWhere((value) => test(value as T)));
   @override
   void sort([int Function(T, T)? compare]) => _collectionMethod(
-      'sort',
-      [compare],
-      () => _source
-          .sort(compare == null ? null : (a, b) => compare(a as T, b as T)));
+    'sort',
+    [compare],
+    () => _source.sort(
+      compare == null ? null : (a, b) => compare(a as T, b as T),
+    ),
+  );
   @override
   void shuffle([Random? random]) =>
       _collectionMethod('shuffle', [random], () => _source.shuffle(random));
   @override
-  void setAll(int index, Iterable<T> values) => _collectionMethod(
-      'setAll', [index, values], () => _source.setAll(index, values));
+  void setAll(int index, Iterable<T> values) => _collectionMethod('setAll', [
+    index,
+    values,
+  ], () => _source.setAll(index, values));
   @override
   void setRange(int start, int end, Iterable<T> values, [int skipCount = 0]) =>
-      _collectionMethod('setRange', [start, end, values, skipCount],
-          () => _source.setRange(start, end, values, skipCount));
+      _collectionMethod('setRange', [
+        start,
+        end,
+        values,
+        skipCount,
+      ], () => _source.setRange(start, end, values, skipCount));
   @override
   void fillRange(int start, int end, [T? value]) => _collectionMethod(
-      'fillRange',
-      [start, end, value],
-      () => _source.fillRange(start, end, value));
+    'fillRange',
+    [start, end, value],
+    () => _source.fillRange(start, end, value),
+  );
   @override
   void replaceRange(int start, int end, Iterable<T> values) =>
-      _collectionMethod('replaceRange', [start, end, values],
-          () => _source.replaceRange(start, end, values));
+      _collectionMethod('replaceRange', [
+        start,
+        end,
+        values,
+      ], () => _source.replaceRange(start, end, values));
   @override
   T get first => _readCollectionProperty('first', () => super.first) as T;
   @override
@@ -243,9 +282,15 @@ final class _InterpretedList<T> extends InterpretedInstance
       (_readCollectionProperty('reversed', () => super.reversed) as Iterable)
           .cast<T>();
   @override
-  List<R> cast<R>() => (_collectionMethod('cast', [], () => _source.cast<R>(),
-          types: [NamedRuntimeType('$R')]) as List)
-      .cast<R>();
+  List<R> cast<R>() =>
+      (_collectionMethod(
+                'cast',
+                [],
+                () => _source.cast<R>(),
+                types: [NamedRuntimeType('$R')],
+              )
+              as List)
+          .cast<R>();
   @override
   String join([String separator = '']) =>
       _collectionMethod('join', [separator], () => super.join(separator))
@@ -266,13 +311,23 @@ final class _InterpretedList<T> extends InterpretedInstance
           .cast<T>();
   @override
   Iterable<R> map<R>(R Function(T) convert) =>
-      (_collectionMethod('map', [convert], () => super.map<R>(convert),
-              types: [NamedRuntimeType('$R')]) as Iterable)
+      (_collectionMethod(
+                'map',
+                [convert],
+                () => super.map<R>(convert),
+                types: [NamedRuntimeType('$R')],
+              )
+              as Iterable)
           .cast<R>();
   @override
   Iterable<R> expand<R>(Iterable<R> Function(T) convert) =>
-      (_collectionMethod('expand', [convert], () => super.expand<R>(convert),
-              types: [NamedRuntimeType('$R')]) as Iterable)
+      (_collectionMethod(
+                'expand',
+                [convert],
+                () => super.expand<R>(convert),
+                types: [NamedRuntimeType('$R')],
+              )
+              as Iterable)
           .cast<R>();
   @override
   Iterable<T> where(bool Function(T) test) =>
@@ -280,34 +335,53 @@ final class _InterpretedList<T> extends InterpretedInstance
           .cast<T>();
   @override
   Iterable<R> whereType<R>() =>
-      (_collectionMethod('whereType', [], () => super.whereType<R>(),
-              types: [NamedRuntimeType('$R')]) as Iterable)
+      (_collectionMethod(
+                'whereType',
+                [],
+                () => super.whereType<R>(),
+                types: [NamedRuntimeType('$R')],
+              )
+              as Iterable)
           .cast<R>();
   @override
   T reduce(T Function(T, T) combine) =>
       _collectionMethod('reduce', [combine], () => super.reduce(combine)) as T;
   @override
-  R fold<R>(R initialValue, R Function(R, T) combine) => _collectionMethod(
-      'fold',
-      [initialValue, combine],
-      () => super.fold<R>(initialValue, combine),
-      types: [NamedRuntimeType('$R')]) as R;
+  R fold<R>(R initialValue, R Function(R, T) combine) =>
+      _collectionMethod(
+            'fold',
+            [initialValue, combine],
+            () => super.fold<R>(initialValue, combine),
+            types: [NamedRuntimeType('$R')],
+          )
+          as R;
   @override
   T firstWhere(bool Function(T) test, {T Function()? orElse}) =>
       _collectionMethod(
-          'firstWhere', [test], () => super.firstWhere(test, orElse: orElse),
-          named: {'orElse': ?orElse}) as T;
+            'firstWhere',
+            [test],
+            () => super.firstWhere(test, orElse: orElse),
+            named: {'orElse': ?orElse},
+          )
+          as T;
   @override
   T lastWhere(bool Function(T) test, {T Function()? orElse}) =>
       _collectionMethod(
-          'lastWhere', [test], () => super.lastWhere(test, orElse: orElse),
-          named: {'orElse': ?orElse}) as T;
+            'lastWhere',
+            [test],
+            () => super.lastWhere(test, orElse: orElse),
+            named: {'orElse': ?orElse},
+          )
+          as T;
   @override
-  T singleWhere(bool Function(T) test,
-          {T Function()? orElse}) =>
+  T singleWhere(bool Function(T) test, {T Function()? orElse}) =>
       _collectionMethod(
-          'singleWhere', [test], () => super.singleWhere(test, orElse: orElse),
-          named: {'orElse': ?orElse}) as T;
+            'singleWhere',
+            [test],
+            () => super.singleWhere(test, orElse: orElse),
+            named: {'orElse': ?orElse},
+          )
+          as T;
   @override
   Iterable<T> skip(int count) =>
       (_collectionMethod('skip', [count], () => super.skip(count)) as Iterable)
@@ -328,37 +402,61 @@ final class _InterpretedList<T> extends InterpretedInstance
           .cast<T>();
   @override
   List<T> toList({bool growable = true}) =>
-      (_collectionMethod('toList', [], () => super.toList(growable: growable),
-              named: {'growable': growable}) as List)
+      (_collectionMethod(
+                'toList',
+                [],
+                () => super.toList(growable: growable),
+                named: {'growable': growable},
+              )
+              as List)
           .cast<T>();
   @override
   Set<T> toSet() =>
       (_collectionMethod('toSet', [], () => super.toSet()) as Set).cast<T>();
   @override
-  int indexOf(Object? element, [int start = 0]) => _collectionMethod(
-      'indexOf', [element, start], () => super.indexOf(element, start)) as int;
+  int indexOf(Object? element, [int start = 0]) =>
+      _collectionMethod('indexOf', [
+            element,
+            start,
+          ], () => super.indexOf(element, start))
+          as int;
   @override
-  int lastIndexOf(Object? element, [int? start]) => _collectionMethod(
-      'lastIndexOf',
-      [element, start],
-      () => super.lastIndexOf(element, start)) as int;
+  int lastIndexOf(Object? element, [int? start]) =>
+      _collectionMethod('lastIndexOf', [
+            element,
+            start,
+          ], () => super.lastIndexOf(element, start))
+          as int;
   @override
-  int indexWhere(bool Function(T) test, [int start = 0]) => _collectionMethod(
-      'indexWhere', [test, start], () => super.indexWhere(test, start)) as int;
+  int indexWhere(bool Function(T) test, [int start = 0]) =>
+      _collectionMethod('indexWhere', [
+            test,
+            start,
+          ], () => super.indexWhere(test, start))
+          as int;
   @override
-  int lastIndexWhere(bool Function(T) test, [int? start]) => _collectionMethod(
-      'lastIndexWhere',
-      [test, start],
-      () => super.lastIndexWhere(test, start)) as int;
+  int lastIndexWhere(bool Function(T) test, [int? start]) =>
+      _collectionMethod('lastIndexWhere', [
+            test,
+            start,
+          ], () => super.lastIndexWhere(test, start))
+          as int;
   @override
-  List<T> sublist(int start, [int? end]) => (_collectionMethod(
-          'sublist', [start, end], () => super.sublist(start, end)) as List)
-      .cast<T>();
+  List<T> sublist(int start, [int? end]) =>
+      (_collectionMethod('sublist', [
+                start,
+                end,
+              ], () => super.sublist(start, end))
+              as List)
+          .cast<T>();
   @override
-  Iterable<T> getRange(int start, int end) => (_collectionMethod(
-              'getRange', [start, end], () => super.getRange(start, end))
-          as Iterable)
-      .cast<T>();
+  Iterable<T> getRange(int start, int end) =>
+      (_collectionMethod('getRange', [
+                start,
+                end,
+              ], () => super.getRange(start, end))
+              as Iterable)
+          .cast<T>();
   @override
   String toString() =>
       _collectionMethod('toString', [], () => super.toString()) as String;
@@ -366,8 +464,11 @@ final class _InterpretedList<T> extends InterpretedInstance
 
 final class _InterpretedMap<K, V> extends InterpretedInstance
     with _CollectionDispatch, MapMixin<K, V> {
-  _InterpretedMap(super.klass, InterpreterVisitor visitor,
-      {super.typeArguments}) {
+  _InterpretedMap(
+    super.klass,
+    InterpreterVisitor visitor, {
+    super.typeArguments,
+  }) {
     _constructionVisitor = visitor;
   }
   Map get _source => bridgedSuperObject as Map;
@@ -411,36 +512,47 @@ final class _InterpretedMap<K, V> extends InterpretedInstance
       _collectionMethod('addAll', [other], () => _source.addAll(other));
   @override
   void addEntries(Iterable<MapEntry<K, V>> entries) => _collectionMethod(
-      'addEntries', [entries], () => _source.addEntries(entries));
+    'addEntries',
+    [entries],
+    () => _source.addEntries(entries),
+  );
   @override
-  V putIfAbsent(K key, V Function() ifAbsent) => _collectionMethod(
-      'putIfAbsent',
-      [key, ifAbsent],
-      () => _source.putIfAbsent(key, ifAbsent)) as V;
+  V putIfAbsent(K key, V Function() ifAbsent) =>
+      _collectionMethod('putIfAbsent', [
+            key,
+            ifAbsent,
+          ], () => _source.putIfAbsent(key, ifAbsent))
+          as V;
   @override
   V update(K key, V Function(V) update, {V Function()? ifAbsent}) {
     final method = klass.findInstanceMethod('update');
     if (method != null) {
-      return _callOverride(method, [key, update],
-          {'ifAbsent': ?ifAbsent}) as V;
+      return _callOverride(method, [key, update], {'ifAbsent': ?ifAbsent}) as V;
     }
-    return _source.update(key, (value) => update(value as V),
-        ifAbsent: ifAbsent) as V;
+    return _source.update(
+          key,
+          (value) => update(value as V),
+          ifAbsent: ifAbsent,
+        )
+        as V;
   }
 
   @override
-  void updateAll(V Function(K, V) update) => _collectionMethod(
-      'updateAll',
-      [update],
-      () => _source.updateAll((key, value) => update(key as K, value as V)));
+  void updateAll(V Function(K, V) update) => _collectionMethod('updateAll', [
+    update,
+  ], () => _source.updateAll((key, value) => update(key as K, value as V)));
   @override
   void removeWhere(bool Function(K, V) test) => _collectionMethod(
-      'removeWhere',
-      [test],
-      () => _source.removeWhere((key, value) => test(key as K, value as V)));
+    'removeWhere',
+    [test],
+    () => _source.removeWhere((key, value) => test(key as K, value as V)),
+  );
   @override
-  bool containsValue(Object? value) => _collectionMethod(
-      'containsValue', [value], () => _source.containsValue(value)) as bool;
+  bool containsValue(Object? value) =>
+      _collectionMethod('containsValue', [
+            value,
+          ], () => _source.containsValue(value))
+          as bool;
   @override
   bool get isEmpty =>
       _readCollectionProperty('isEmpty', () => _source.isEmpty) as bool;
@@ -463,23 +575,30 @@ final class _InterpretedMap<K, V> extends InterpretedInstance
   }
 
   @override
-  void forEach(void Function(K, V) action) => _collectionMethod(
-      'forEach',
-      [action],
-      () => _source.forEach((key, value) => action(key as K, value as V)));
+  void forEach(void Function(K, V) action) => _collectionMethod('forEach', [
+    action,
+  ], () => _source.forEach((key, value) => action(key as K, value as V)));
   @override
   Map<RK, RV> cast<RK, RV>() =>
-      (_collectionMethod('cast', [], () => _source.cast<RK, RV>(),
-              types: [NamedRuntimeType('$RK'), NamedRuntimeType('$RV')]) as Map)
+      (_collectionMethod(
+                'cast',
+                [],
+                () => _source.cast<RK, RV>(),
+                types: [NamedRuntimeType('$RK'), NamedRuntimeType('$RV')],
+              )
+              as Map)
           .cast<RK, RV>();
   @override
   Map<RK, RV> map<RK, RV>(MapEntry<RK, RV> Function(K, V) transform) =>
       (_collectionMethod(
-              'map',
-              [transform],
-              () => _source
-                  .map<RK, RV>((key, value) => transform(key as K, value as V)),
-              types: [NamedRuntimeType('$RK'), NamedRuntimeType('$RV')]) as Map)
+                'map',
+                [transform],
+                () => _source.map<RK, RV>(
+                  (key, value) => transform(key as K, value as V),
+                ),
+                types: [NamedRuntimeType('$RK'), NamedRuntimeType('$RV')],
+              )
+              as Map)
           .cast<RK, RV>();
   @override
   String toString() =>

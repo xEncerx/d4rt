@@ -1,8 +1,11 @@
 import 'package:d4rt/d4rt.dart';
 import 'package:test/test.dart';
 
-Future<Object?> _execute(String source,
-    {String name = 'main', List<Object?> args = const []}) async {
+Future<Object?> _execute(
+  String source, {
+  String name = 'main',
+  List<Object?> args = const [],
+}) async {
   return await D4rt().execute(
     source: source,
     name: name,
@@ -185,34 +188,38 @@ void main() {
       }
     });
 
-    test('recursive functions and implicit and explicit methods survive await',
-        () async {
-      expect(await _execute(_recursiveSource), [
-        [10, 10, 10],
-        [10, 10, 10],
-      ]);
-    });
+    test(
+      'recursive functions and implicit and explicit methods survive await',
+      () async {
+        expect(await _execute(_recursiveSource), [
+          [10, 10, 10],
+          [10, 10, 10],
+        ]);
+      },
+    );
 
-    test('recursive prefixes and awaited receiver and arguments run once',
-        () async {
-      expect(await _execute(_suspensionSource), {
-        'invocation': 15,
-        'binary': 9,
-        'calls': 9,
-        'events': [
-          'receiver:start',
-          'receiver:end',
-          'positional',
-          'argument:start',
-          'argument:end',
-          'named:start',
-          'named:end',
-          'left',
-          'right:start',
-          'right:end',
-        ],
-      });
-    });
+    test(
+      'recursive prefixes and awaited receiver and arguments run once',
+      () async {
+        expect(await _execute(_suspensionSource), {
+          'invocation': 15,
+          'binary': 9,
+          'calls': 9,
+          'events': [
+            'receiver:start',
+            'receiver:end',
+            'positional',
+            'argument:start',
+            'argument:end',
+            'named:start',
+            'named:end',
+            'left',
+            'right:start',
+            'right:end',
+          ],
+        });
+      },
+    );
 
     test('synchronous recursive errors restore the suspended caller', () async {
       expect(await _execute(_errorSource, args: [true, false]), {
@@ -230,24 +237,26 @@ void main() {
       });
     });
 
-    test('await failures discard prefixes and run catch and finally once',
-        () async {
-      expect(await _execute(_errorSource, args: [false, true]), {
-        'value': 12,
-        'calls': 6,
-        'events': [
-          'prefix',
-          'await:start',
-          'await:end',
-          'catch:async',
-          'finally',
-          'prefix',
-          'await:start',
-          'await:end',
-          'tail',
-        ],
-      });
-    });
+    test(
+      'await failures discard prefixes and run catch and finally once',
+      () async {
+        expect(await _execute(_errorSource, args: [false, true]), {
+          'value': 12,
+          'calls': 6,
+          'events': [
+            'prefix',
+            'await:start',
+            'await:end',
+            'catch:async',
+            'finally',
+            'prefix',
+            'await:start',
+            'await:end',
+            'tail',
+          ],
+        });
+      },
+    );
 
     test('loop iterations do not reuse recursive operands', () async {
       const source = '''
@@ -274,9 +283,10 @@ Future<Object> main() async {
       });
     });
 
-    test('deferred recursive sync generators own their collection evaluation',
-        () async {
-      const source = '''
+    test(
+      'deferred recursive sync generators own their collection evaluation',
+      () async {
+        const source = '''
 List<String> events = [];
 Iterable<Object?> values(int n) sync* {
   events.add('enter:' + n.toString());
@@ -290,40 +300,42 @@ Future<Object> main() async {
   return {'before': before, 'after': after, 'events': events};
 }
 ''';
-      expect(await _execute(source), {
-        'before': [
-          [
-            2,
+        expect(await _execute(source), {
+          'before': [
+            [
+              2,
+              [
+                1,
+                [0],
+              ],
+            ],
+          ],
+          'after': [
             [
               1,
               [0],
             ],
           ],
-        ],
-        'after': [
-          [
-            1,
-            [0],
+          'events': [
+            'enter:2',
+            'enter:1',
+            'enter:0',
+            'exit:0',
+            'exit:1',
+            'exit:2',
+            'enter:1',
+            'enter:0',
+            'exit:0',
+            'exit:1',
           ],
-        ],
-        'events': [
-          'enter:2',
-          'enter:1',
-          'enter:0',
-          'exit:0',
-          'exit:1',
-          'exit:2',
-          'enter:1',
-          'enter:0',
-          'exit:0',
-          'exit:1',
-        ],
-      });
-    });
+        });
+      },
+    );
 
-    test('recursive yield delegation evaluates each generator body once',
-        () async {
-      const source = '''
+    test(
+      'recursive yield delegation evaluates each generator body once',
+      () async {
+        const source = '''
 final effects = <int>[];
 class Node {
   Node(this.value, this.child);
@@ -348,13 +360,14 @@ Future<Object> asyncScenario() async {
   return [values, effects];
 }
 ''';
-      for (final name in ['syncScenario', 'asyncScenario']) {
-        expect(await _execute(source, name: name), [
-          [1, 2, 3],
-          [1, 2, 3],
-        ]);
-      }
-    });
+        for (final name in ['syncScenario', 'asyncScenario']) {
+          expect(await _execute(source, name: name), [
+            [1, 2, 3],
+            [1, 2, 3],
+          ]);
+        }
+      },
+    );
 
     test('imported recursive helpers retain their dynamic receivers', () async {
       final result = await D4rt().execute(

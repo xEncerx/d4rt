@@ -86,11 +86,12 @@ void main() {
       }
       ''';
       expect(
-          execute(source),
-          equals([
-            [1, 2],
-            ['one', 'two']
-          ]));
+        execute(source),
+        equals([
+          [1, 2],
+          ['one', 'two'],
+        ]),
+      );
     });
 
     test('update', () {
@@ -169,32 +170,39 @@ void main() {
       final result = execute(source) as List;
       result.sort((a, b) => (a[0] as int).compareTo(b[0] as int));
       expect(
-          result,
-          equals([
-            [1, 'one'],
-            [2, 'two']
-          ]));
+        result,
+        equals([
+          [1, 'one'],
+          [2, 'two'],
+        ]),
+      );
     });
 
     test(
-        'host MapEntry getters follow the outer type with nested generic values',
-        () {
-      final numbers = <int>[1, 2];
-      final listValue = <Object?>[
-        'alpha',
-        null,
-        {'label': 'nested'}
-      ];
-      final listMap = <String, List<Object?>>{'items': listValue};
-      final mapValue = <String, List<int>>{'numbers': numbers};
-      final nestedMap = <String, Map<String, List<int>>>{'deep': mapValue};
-      final interpreter = D4rt();
-      interpreter.registertopLevelFunction(
-          'listMap', (visitor, args, named, types) => listMap);
-      interpreter.registertopLevelFunction(
-          'nestedMap', (visitor, args, named, types) => nestedMap);
+      'host MapEntry getters follow the outer type with nested generic values',
+      () {
+        final numbers = <int>[1, 2];
+        final listValue = <Object?>[
+          'alpha',
+          null,
+          {'label': 'nested'},
+        ];
+        final listMap = <String, List<Object?>>{'items': listValue};
+        final mapValue = <String, List<int>>{'numbers': numbers};
+        final nestedMap = <String, Map<String, List<int>>>{'deep': mapValue};
+        final interpreter = D4rt();
+        interpreter.registertopLevelFunction(
+          'listMap',
+          (visitor, args, named, types) => listMap,
+        );
+        interpreter.registertopLevelFunction(
+          'nestedMap',
+          (visitor, args, named, types) => nestedMap,
+        );
 
-      final result = interpreter.execute(source: '''
+        final result =
+            interpreter.execute(
+                  source: '''
         import 'dart:convert';
         Object readEntries(Map source) {
           final observed = [];
@@ -212,30 +220,35 @@ void main() {
             JsonCodec().encode({'nested': first, 'other': second})
           ];
         }
-      ''') as List;
-      expect(result[0], [
-        [
-          'items',
+      ''',
+                )
+                as List;
+        expect(result[0], [
           [
-            'alpha',
-            null,
-            {'label': 'nested'}
-          ]
-        ]
-      ]);
-      expect(result[1], [
-        [
-          'deep',
-          {
-            'numbers': [1, 2]
-          }
-        ]
-      ]);
-      expect(result[2],
-          '{"nested":[["items",["alpha",null,{"label":"nested"}]]],"other":[["deep",{"numbers":[1,2]}]]}');
-      expect((result[0] as List).single[1], same(listValue));
-      expect((result[1] as List).single[1], same(mapValue));
-    });
+            'items',
+            [
+              'alpha',
+              null,
+              {'label': 'nested'},
+            ],
+          ],
+        ]);
+        expect(result[1], [
+          [
+            'deep',
+            {
+              'numbers': [1, 2],
+            },
+          ],
+        ]);
+        expect(
+          result[2],
+          '{"nested":[["items",["alpha",null,{"label":"nested"}]]],"other":[["deep",{"numbers":[1,2]}]]}',
+        );
+        expect((result[0] as List).single[1], same(listValue));
+        expect((result[1] as List).single[1], same(mapValue));
+      },
+    );
 
     test('cast', () {
       const source = '''
@@ -273,11 +286,12 @@ void main() {
       }
       ''';
       expect(
-          execute(source),
-          equals([
-            {1: 'one', 2: 'two'},
-            {1: 'one', 2: 'two', 3: 'three'}
-          ]));
+        execute(source),
+        equals([
+          {1: 'one', 2: 'two'},
+          {1: 'one', 2: 'two', 3: 'three'},
+        ]),
+      );
     });
 
     test('fromEntries', () {
@@ -300,7 +314,9 @@ void main() {
       }
       ''';
       expect(
-          execute(source), equals({1: 'Value 1', 2: 'Value 2', 3: 'Value 3'}));
+        execute(source),
+        equals({1: 'Value 1', 2: 'Value 2', 3: 'Value 3'}),
+      );
     });
 
     test('fromIterables', () {

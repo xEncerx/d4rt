@@ -112,38 +112,38 @@ void main() {
         }
       ''';
       expect(
-          await execute(source),
-          equals({
-            'result': nativeResult,
-            'events': nativeEvents,
-          }));
+        await execute(source),
+        equals({'result': nativeResult, 'events': nativeEvents}),
+      );
     });
 
-    test('nested map key and named argument preserve sibling order and null',
-        () async {
-      final nativeEvents = <String>[];
-      Future<String> read(String label, String value) async {
-        nativeEvents.add('$label:start');
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-        nativeEvents.add('$label:end');
-        return value;
-      }
+    test(
+      'nested map key and named argument preserve sibling order and null',
+      () async {
+        final nativeEvents = <String>[];
+        Future<String> read(String label, String value) async {
+          nativeEvents.add('$label:start');
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          nativeEvents.add('$label:end');
+          return value;
+        }
 
-      Future<String?> writeValue(Map<String, String> data,
-          {required String suffix}) async {
-        nativeEvents.add('write:${data['key']}:$suffix');
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-        nativeEvents.add('write:end');
-        return null;
-      }
+        Future<String?> writeValue(
+          Map<String, String> data, {
+          required String suffix,
+        }) async {
+          nativeEvents.add('write:${data['key']}:$suffix');
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          nativeEvents.add('write:end');
+          return null;
+        }
 
-      final nativeResult = await writeValue(
-        {await read('key', 'key'): await read('value', 'Ada')},
-        suffix: await read('suffix', '!'),
-      );
-      nativeEvents.add('after:${nativeResult == null}');
+        final nativeResult = await writeValue({
+          await read('key', 'key'): await read('value', 'Ada'),
+        }, suffix: await read('suffix', '!'));
+        nativeEvents.add('after:${nativeResult == null}');
 
-      const source = '''
+        const source = '''
         List<String> events = [];
 
         Future<String> read(String label, String value) async {
@@ -170,35 +170,35 @@ void main() {
           return {'result': result, 'events': events};
         }
       ''';
-      expect(
+        expect(
           await execute(source),
-          equals({
-            'result': nativeResult,
-            'events': nativeEvents,
-          }));
-    });
+          equals({'result': nativeResult, 'events': nativeEvents}),
+        );
+      },
+    );
 
-    test('an inner null reaches the outer call without skipping its await',
-        () async {
-      final nativeEvents = <String>[];
-      Future<String?> readName() async {
-        nativeEvents.add('read:start');
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-        nativeEvents.add('read:end');
-        return null;
-      }
+    test(
+      'an inner null reaches the outer call without skipping its await',
+      () async {
+        final nativeEvents = <String>[];
+        Future<String?> readName() async {
+          nativeEvents.add('read:start');
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          nativeEvents.add('read:end');
+          return null;
+        }
 
-      Future<String> writeValue(Map<String, String?> data) async {
-        nativeEvents.add('write:${data.length}:${data['name'] == null}');
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-        nativeEvents.add('write:end');
-        return data['name'] ?? 'fallback';
-      }
+        Future<String> writeValue(Map<String, String?> data) async {
+          nativeEvents.add('write:${data.length}:${data['name'] == null}');
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          nativeEvents.add('write:end');
+          return data['name'] ?? 'fallback';
+        }
 
-      final nativeResult = await writeValue({'name': await readName()});
-      nativeEvents.add('after:$nativeResult');
+        final nativeResult = await writeValue({'name': await readName()});
+        nativeEvents.add('after:$nativeResult');
 
-      const source = '''
+        const source = '''
         List<String> events = [];
 
         Future<String?> readName() async {
@@ -221,17 +221,17 @@ void main() {
           return {'result': result, 'events': events};
         }
       ''';
-      expect(
+        expect(
           await execute(source),
-          equals({
-            'result': nativeResult,
-            'events': nativeEvents,
-          }));
-    });
+          equals({'result': nativeResult, 'events': nativeEvents}),
+        );
+      },
+    );
 
-    test('nested inner and outer failures reach catch and finally once',
-        () async {
-      const source = '''
+    test(
+      'nested inner and outer failures reach catch and finally once',
+      () async {
+        const source = '''
         List<String> events = [];
 
         Future<String> readName(bool failInner) async {
@@ -267,44 +267,43 @@ void main() {
         }
       ''';
 
-      for (final failInner in [true, false]) {
-        final nativeEvents = <String>[];
-        Future<String> readName() async {
-          nativeEvents.add('inner:start');
-          await Future<void>.delayed(const Duration(milliseconds: 1));
-          if (failInner) {
-            nativeEvents.add('inner:fail');
-            throw 'inner';
+        for (final failInner in [true, false]) {
+          final nativeEvents = <String>[];
+          Future<String> readName() async {
+            nativeEvents.add('inner:start');
+            await Future<void>.delayed(const Duration(milliseconds: 1));
+            if (failInner) {
+              nativeEvents.add('inner:fail');
+              throw 'inner';
+            }
+            nativeEvents.add('inner:end');
+            return 'Ada';
           }
-          nativeEvents.add('inner:end');
-          return 'Ada';
-        }
 
-        Future<String> writeValue(Map<String, String> data) async {
-          nativeEvents.add('outer:start:${data['name']}');
-          await Future<void>.delayed(const Duration(milliseconds: 1));
-          nativeEvents.add('outer:fail');
-          throw 'outer';
-        }
+          Future<String> writeValue(Map<String, String> data) async {
+            nativeEvents.add('outer:start:${data['name']}');
+            await Future<void>.delayed(const Duration(milliseconds: 1));
+            nativeEvents.add('outer:fail');
+            throw 'outer';
+          }
 
-        String nativeResult;
-        try {
-          nativeResult = await writeValue({'name': await readName()});
-        } catch (error) {
-          nativeEvents.add('catch:$error');
-          nativeResult = 'recovered';
-        } finally {
-          nativeEvents.add('finally');
-        }
-        nativeEvents.add('after:$nativeResult');
-        expect(
+          String nativeResult;
+          try {
+            nativeResult = await writeValue({'name': await readName()});
+          } catch (error) {
+            nativeEvents.add('catch:$error');
+            nativeResult = 'recovered';
+          } finally {
+            nativeEvents.add('finally');
+          }
+          nativeEvents.add('after:$nativeResult');
+          expect(
             await execute(source, args: [failInner]),
-            equals({
-              'result': nativeResult,
-              'events': nativeEvents,
-            }));
-      }
-    });
+            equals({'result': nativeResult, 'events': nativeEvents}),
+          );
+        }
+      },
+    );
 
     test('overlapping nested awaits keep their owning async frames', () async {
       final nativeEvents = <String>[];
@@ -315,18 +314,25 @@ void main() {
         return value;
       }
 
-      Future<String> writeValue(String label, Map<String, String> data,
-          Completer<String> gate) async {
+      Future<String> writeValue(
+        String label,
+        Map<String, String> data,
+        Completer<String> gate,
+      ) async {
         nativeEvents.add('$label:write:${data['name']}');
         final release = await gate.future;
         nativeEvents.add('$label:write:end:$release');
         return '${data['name']}:$release';
       }
 
-      Future<String> work(String label, Completer<String> inner,
-          Completer<String> outer) async {
-        final result = await writeValue(
-            label, {'name': await readName(label, inner)}, outer);
+      Future<String> work(
+        String label,
+        Completer<String> inner,
+        Completer<String> outer,
+      ) async {
+        final result = await writeValue(label, {
+          'name': await readName(label, inner),
+        }, outer);
         nativeEvents.add('$label:after:$result');
         return result;
       }
@@ -389,11 +395,12 @@ void main() {
         }
       ''';
       expect(
-          await execute(source),
-          equals({
-            'results': [nativeFast, nativeSlow],
-            'events': nativeEvents,
-          }));
+        await execute(source),
+        equals({
+          'results': [nativeFast, nativeSlow],
+          'events': nativeEvents,
+        }),
+      );
     });
 
     test('await with exception handling in arguments', () async {

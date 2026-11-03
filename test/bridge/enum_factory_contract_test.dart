@@ -10,8 +10,10 @@ enum Choice<T extends num> {
   factory Choice.choose() => (T == int ? high : low) as Choice<T>;
 }
 
-D4rt factoryInterpreter(List<List<RuntimeType>> observations,
-    {bool slow = false}) {
+D4rt factoryInterpreter(
+  List<List<RuntimeType>> observations, {
+  bool slow = false,
+}) {
   final interpreter = D4rt();
   Object? invoke(List<RuntimeType> types, bool integer) {
     observations.add(types);
@@ -23,26 +25,29 @@ D4rt factoryInterpreter(List<List<RuntimeType>> observations,
   }
 
   interpreter.registerBridgedEnum(
-      BridgedEnumDefinition<Choice>(
-          name: 'Choice',
-          values: Choice.values,
-          typeMetadata:
-              EnumTypeMetadata(typeParameters: ['T'], typeBounds: {'T': 'num'}),
-          factories: {
-            'choose': BridgedEnumFactory(
-                signature: EnumSignature([]),
-                specializations: [
-                  BridgedEnumFactorySpecialization(
-                      [const NamedRuntimeType('num')],
-                      (visitor, positional, named, types) =>
-                          invoke(types, false)),
-                  BridgedEnumFactorySpecialization(
-                      [const NamedRuntimeType('int')],
-                      (visitor, positional, named, types) =>
-                          invoke(types, true)),
-                ])
-          }),
-      'package:host/choice.dart');
+    BridgedEnumDefinition<Choice>(
+      name: 'Choice',
+      values: Choice.values,
+      typeMetadata: EnumTypeMetadata(
+        typeParameters: ['T'],
+        typeBounds: {'T': 'num'},
+      ),
+      factories: {
+        'choose': BridgedEnumFactory(
+          signature: EnumSignature([]),
+          specializations: [
+            BridgedEnumFactorySpecialization([
+              const NamedRuntimeType('num'),
+            ], (visitor, positional, named, types) => invoke(types, false)),
+            BridgedEnumFactorySpecialization([
+              const NamedRuntimeType('int'),
+            ], (visitor, positional, named, types) => invoke(types, true)),
+          ],
+        ),
+      },
+    ),
+    'package:host/choice.dart',
+  );
   return interpreter;
 }
 
@@ -53,23 +58,31 @@ List<Object?> runEnumVectorOwnershipCorrection() {
   final registration = BridgedEnumDefinition<Choice>(
     name: 'Choice',
     values: Choice.values,
-    typeMetadata:
-        EnumTypeMetadata(typeParameters: ['T'], typeBounds: {'T': 'num'}),
+    typeMetadata: EnumTypeMetadata(
+      typeParameters: ['T'],
+      typeBounds: {'T': 'num'},
+    ),
     factories: {
-      'choose':
-          BridgedEnumFactory(signature: EnumSignature([]), specializations: [
-        BridgedEnumFactorySpecialization([const NamedRuntimeType('int')],
-            (visitor, positional, named, types) {
-          observations.add(types);
-          try {
-            types[0] = const NamedRuntimeType('num');
-            immutable.add(false);
-          } on UnsupportedError {
-            immutable.add(true);
-          }
-          return Choice.high;
-        }),
-      ]),
+      'choose': BridgedEnumFactory(
+        signature: EnumSignature([]),
+        specializations: [
+          BridgedEnumFactorySpecialization([const NamedRuntimeType('int')], (
+            visitor,
+            positional,
+            named,
+            types,
+          ) {
+            observations.add(types);
+            try {
+              types[0] = const NamedRuntimeType('num');
+              immutable.add(false);
+            } on UnsupportedError {
+              immutable.add(true);
+            }
+            return Choice.high;
+          }),
+        ],
+      ),
     },
   );
   final owner = registration.buildBridgedEnum();
@@ -79,69 +92,90 @@ List<Object?> runEnumVectorOwnershipCorrection() {
   final interpreter = D4rt()
     ..registerBridgedEnum(registration, 'package:host/choice.dart')
     ..registertopLevelFunction(
-        'bound', (visitor, args, named, types) => bound.call(visitor, []))
+      'bound',
+      (visitor, args, named, types) => bound.call(visitor, []),
+    )
     ..registertopLevelFunction(
-        'explicit',
-        (visitor, args, named, types) => owner.factories['choose']!
-            .bind(owner, 'choose')
-            .call(
-                visitor, [], {}, <RuntimeType>[const NamedRuntimeType('int')]));
+      'explicit',
+      (visitor, args, named, types) => owner.factories['choose']!
+          .bind(owner, 'choose')
+          .call(visitor, [], {}, <RuntimeType>[const NamedRuntimeType('int')]),
+    );
   final values = interpreter.execute(
-      source:
-          "import 'package:host/choice.dart'; main()=>[bound().index,bound().index,explicit().index];");
+    source:
+        "import 'package:host/choice.dart'; main()=>[bound().index,bound().index,explicit().index];",
+  );
   return [
     values,
     observations.map((types) => types.single.name).toList(),
     immutable,
-    identical(observations[0], observations[1])
+    identical(observations[0], observations[1]),
   ];
 }
 
 void main() {
-  test('external factory vectors stay immutable across prebound invocations',
-      () {
-    expect(runEnumVectorOwnershipCorrection(), [
-      [1, 1, 1],
-      ['int', 'int', 'int'],
-      [true, true, true],
-      true
-    ]);
-  });
-  test('native factory gets the exact vector through bound escaping callbacks',
-      () {
-    final observations = <List<RuntimeType>>[];
-    final interpreter = factoryInterpreter(observations);
-    const source =
-        "import 'package:host/choice.dart'; main() { final f = Choice<int>.choose; return () => [f().index, f().index, Choice.choose().index]; }";
-    final callback = interpreter.execute(source: source);
-    interpreter.registertopLevelFunction('host',
-        (visitor, arguments, named, types) {
-      return (callback as Callable).call(visitor, []);
-    });
-    expect(interpreter.execute(source: 'main() => host();'), [1, 1, 0]);
-    expect(
-        observations.map((types) => types.single.name), ['int', 'int', 'num']);
-    expect(identical(observations[0], observations[1]), isTrue,
+  test(
+    'external factory vectors stay immutable across prebound invocations',
+    () {
+      expect(runEnumVectorOwnershipCorrection(), [
+        [1, 1, 1],
+        ['int', 'int', 'int'],
+        [true, true, true],
+        true,
+      ]);
+    },
+  );
+  test(
+    'native factory gets the exact vector through bound escaping callbacks',
+    () {
+      final observations = <List<RuntimeType>>[];
+      final interpreter = factoryInterpreter(observations);
+      const source =
+          "import 'package:host/choice.dart'; main() { final f = Choice<int>.choose; return () => [f().index, f().index, Choice.choose().index]; }";
+      final callback = interpreter.execute(source: source);
+      interpreter.registertopLevelFunction('host', (
+        visitor,
+        arguments,
+        named,
+        types,
+      ) {
+        return (callback as Callable).call(visitor, []);
+      });
+      expect(interpreter.execute(source: 'main() => host();'), [1, 1, 0]);
+      expect(observations.map((types) => types.single.name), [
+        'int',
+        'int',
+        'num',
+      ]);
+      expect(
+        identical(observations[0], observations[1]),
+        isTrue,
         reason:
-            'Repeated bound calls carry the same resolved immutable vector.');
-  });
+            'Repeated bound calls carry the same resolved immutable vector.',
+      );
+    },
+  );
 
   test('unsupported and invalid native tuples never enter the body', () {
     final observations = <List<RuntimeType>>[];
     final interpreter = factoryInterpreter(observations);
     for (final request in ['double', 'String', 'Local']) {
       expect(
-          () => interpreter.execute(
-              source:
-                  "import 'package:host/choice.dart'; class Local {} main()=>Choice<$request>.choose();"),
-          throwsA(anything));
+        () => interpreter.execute(
+          source:
+              "import 'package:host/choice.dart'; class Local {} main()=>Choice<$request>.choose();",
+        ),
+        throwsA(anything),
+      );
     }
     expect(observations, isEmpty);
     expect(
-        interpreter.execute(
-            source:
-                "import 'package:host/choice.dart'; main()=>Choice<int>.choose();"),
-        same(Choice.high));
+      interpreter.execute(
+        source:
+            "import 'package:host/choice.dart'; main()=>Choice<int>.choose();",
+      ),
+      same(Choice.high),
+    );
   });
 
   test('native factory deadline is terminal after synchronous native work', () {
@@ -156,12 +190,17 @@ void main() {
       const source =
           "import 'package:host/choice.dart'; main() { try { Choice<int>.choose(); } catch (_) { mark(); } finally { mark(); } mark(); }";
       expect(
-          () => compiled
-              ? interpreter.executeCompiled(interpreter.compile(source: source),
-                  timeout: const Duration(milliseconds: 100))
-              : interpreter.execute(
-                  source: source, timeout: const Duration(milliseconds: 100)),
-          throwsA(isA<ExecutionTimeoutException>()));
+        () => compiled
+            ? interpreter.executeCompiled(
+                interpreter.compile(source: source),
+                timeout: const Duration(milliseconds: 100),
+              )
+            : interpreter.execute(
+                source: source,
+                timeout: const Duration(milliseconds: 100),
+              ),
+        throwsA(isA<ExecutionTimeoutException>()),
+      );
       expect(observations, hasLength(1));
       expect(events, isEmpty);
     }
@@ -170,26 +209,32 @@ void main() {
   test('factory rejects a native result from another enum', () {
     final interpreter = D4rt();
     interpreter.registerBridgedEnum(
-        BridgedEnumDefinition<Choice>(
-            name: 'Choice',
-            values: Choice.values,
-            typeMetadata: EnumTypeMetadata(
-                typeParameters: ['T'], typeBounds: {'T': 'num'}),
-            factories: {
-              'choose': BridgedEnumFactory(
-                  signature: EnumSignature([]),
-                  specializations: [
-                    BridgedEnumFactorySpecialization(
-                        [const NamedRuntimeType('num')],
-                        (visitor, arguments, named, types) => Other.low)
-                  ])
-            }),
-        'package:host/choice.dart');
+      BridgedEnumDefinition<Choice>(
+        name: 'Choice',
+        values: Choice.values,
+        typeMetadata: EnumTypeMetadata(
+          typeParameters: ['T'],
+          typeBounds: {'T': 'num'},
+        ),
+        factories: {
+          'choose': BridgedEnumFactory(
+            signature: EnumSignature([]),
+            specializations: [
+              BridgedEnumFactorySpecialization([
+                const NamedRuntimeType('num'),
+              ], (visitor, arguments, named, types) => Other.low),
+            ],
+          ),
+        },
+      ),
+      'package:host/choice.dart',
+    );
     expect(
-        () => interpreter.execute(
-            source:
-                "import 'package:host/choice.dart'; main()=>Choice.choose();"),
-        throwsA(isA<RuntimeError>()));
+      () => interpreter.execute(
+        source: "import 'package:host/choice.dart'; main()=>Choice.choose();",
+      ),
+      throwsA(isA<RuntimeError>()),
+    );
   });
 }
 

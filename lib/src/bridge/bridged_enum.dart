@@ -37,17 +37,17 @@ class BridgedEnum implements RuntimeType, Callable {
   final EnumTypeMetadata? typeMetadata;
   List<BridgedEnumValue>? _enumValues;
   Map<String, Callable>? _staticReferences;
-  late final RuntimeType _bareType =
-      _NativeEnumRuntimeType(this, typeMetadata?.arguments() ?? const []);
+  late final RuntimeType _bareType = _NativeEnumRuntimeType(
+    this,
+    typeMetadata?.arguments() ?? const [],
+  );
 
   /// Creates a definition for a bridged enum.
   BridgedEnum(this.name, this.values, {this.typeMetadata});
 
   @override
   int get arity =>
-      factories['']
-          ?.signature
-          .parameters
+      factories['']?.signature.parameters
           .where((parameter) => !parameter.isNamed && parameter.isRequired)
           .length ??
       0;
@@ -56,8 +56,12 @@ class BridgedEnum implements RuntimeType, Callable {
 
   /// Invokes only a registered unnamed factory, never a generative constructor.
   @override
-  Object? call(InterpreterVisitor visitor, List<Object?> positional,
-      [Map<String, Object?> named = const {}, List<RuntimeType>? types]) {
+  Object? call(
+    InterpreterVisitor visitor,
+    List<Object?> positional, [
+    Map<String, Object?> named = const {},
+    List<RuntimeType>? types,
+  ]) {
     final factory = factories[''];
     if (factory == null) {
       throw RuntimeError('No unnamed native enum factory for $name.');
@@ -88,9 +92,11 @@ class BridgedEnum implements RuntimeType, Callable {
     if (visitor.environment.getAnnotatedRuntimeType(list) == null) {
       markInterpreterOwnedCollection(list);
       visitor.environment.annotateRuntimeType(
-          list,
-          AppliedRuntimeType(visitor.environment.get('List') as RuntimeType,
-              [instantiate(null)]));
+        list,
+        AppliedRuntimeType(visitor.environment.get('List') as RuntimeType, [
+          instantiate(null),
+        ]),
+      );
     }
     return list;
   }
@@ -102,22 +108,29 @@ class BridgedEnum implements RuntimeType, Callable {
     final factory = factories[member == 'new' ? '' : member];
     if (factory != null) {
       final name = member == 'new' ? '' : member;
-      return (_staticReferences ??= {})
-          .putIfAbsent(name, () => factory.bind(this, name));
+      return (_staticReferences ??= {}).putIfAbsent(
+        name,
+        () => factory.bind(this, name),
+      );
     }
     final getter = staticGetters[member];
     if (getter != null) return getter(visitor);
     final method = staticMethods[member];
     if (method != null) {
       return (_staticReferences ??= {}).putIfAbsent(
-          member, () => BridgedEnumStaticMethodCallable(this, method, member));
+        member,
+        () => BridgedEnumStaticMethodCallable(this, method, member),
+      );
     }
     throw RuntimeError('Undefined static native enum member $name.$member.');
   }
 
   /// Invokes only a registered native static setter.
   void setStaticMember(
-      String member, Object? value, InterpreterVisitor visitor) {
+    String member,
+    Object? value,
+    InterpreterVisitor visitor,
+  ) {
     final setter = staticSetters[member];
     if (setter == null) {
       throw RuntimeError('Cannot assign native enum member $name.$member.');
@@ -131,7 +144,8 @@ class BridgedEnum implements RuntimeType, Callable {
     if (typeMetadata == null) {
       if (arguments.isNotEmpty) {
         throw RuntimeError(
-            'Non-generic native enum $name cannot take type arguments.');
+          'Non-generic native enum $name cannot take type arguments.',
+        );
       }
       return _bareType;
     }
@@ -165,13 +179,17 @@ class BridgedEnumValue implements RuntimeValue {
   /// Instance method adapters.
   final Map<String, BridgedMethodAdapter> _methods;
 
-  BridgedEnumValue(this.enumType, this.name, this.index, this.nativeValue,
-      {Map<String, BridgedInstanceGetterAdapter>? getters,
-      Map<String, BridgedMethodAdapter>? methods,
-      List<RuntimeType> typeArguments = const []})
-      : typeArguments = List.unmodifiable(typeArguments),
-        _getters = getters ?? {},
-        _methods = methods ?? {};
+  BridgedEnumValue(
+    this.enumType,
+    this.name,
+    this.index,
+    this.nativeValue, {
+    Map<String, BridgedInstanceGetterAdapter>? getters,
+    Map<String, BridgedMethodAdapter>? methods,
+    List<RuntimeType> typeArguments = const [],
+  }) : typeArguments = List.unmodifiable(typeArguments),
+       _getters = getters ?? {},
+       _methods = methods ?? {};
 
   // Implement the required getter from RuntimeValue
   @override
@@ -184,10 +202,11 @@ class BridgedEnumValue implements RuntimeValue {
     final method = _methods[identifier] ?? enumType.methods[identifier];
     if (method != null || identifier == 'toString') {
       return NativeFunction(
-          (visitor, args, named, types) =>
-              invoke(visitor, identifier, args, named),
-          arity: 0,
-          name: identifier);
+        (visitor, args, named, types) =>
+            invoke(visitor, identifier, args, named),
+        arity: 0,
+        name: identifier,
+      );
     }
     return switch (identifier) {
       'index' => index,
@@ -195,7 +214,8 @@ class BridgedEnumValue implements RuntimeValue {
       'hashCode' => nativeValue.hashCode,
       'runtimeType' => valueType,
       _ => throw RuntimeError(
-          'Property "$identifier" not found on enum value ${enumType.name}.$name'),
+        'Property "$identifier" not found on enum value ${enumType.name}.$name',
+      ),
     };
   }
 
@@ -203,16 +223,24 @@ class BridgedEnumValue implements RuntimeValue {
   void set(String identifier, Object? value, [InterpreterVisitor? visitor]) {
     final setter = enumType.setters[identifier];
     if (setter != null && visitor != null) {
-      setter(visitor, nativeValue,
-          value is BridgedEnumValue ? value.nativeValue : value);
+      setter(
+        visitor,
+        nativeValue,
+        value is BridgedEnumValue ? value.nativeValue : value,
+      );
       return;
     }
     throw RuntimeError(
-        'Cannot set property "$identifier" on enum value ${enumType.name}.$name');
+      'Cannot set property "$identifier" on enum value ${enumType.name}.$name',
+    );
   }
 
-  Object? invoke(InterpreterVisitor visitor, String method, List<Object?> args,
-      Map<String, Object?> namedArgs) {
+  Object? invoke(
+    InterpreterVisitor visitor,
+    String method,
+    List<Object?> args,
+    Map<String, Object?> namedArgs,
+  ) {
     final methodAdapter = _methods[method] ?? enumType.methods[method];
     if (methodAdapter == null) {
       // Special case: if calling .toString() and there is no specific adapter,
@@ -221,7 +249,8 @@ class BridgedEnumValue implements RuntimeValue {
         return '${enumType.name}.$name';
       }
       throw RuntimeError(
-          'Method "$method" not found on enum value ${enumType.name}.$name');
+        'Method "$method" not found on enum value ${enumType.name}.$name',
+      );
     }
 
     try {
@@ -234,7 +263,8 @@ class BridgedEnumValue implements RuntimeValue {
       );
     } catch (e) {
       throw RuntimeError(
-          'Error executing bridged method "$method" on ${enumType.name}.$name: $e');
+        'Error executing bridged method "$method" on ${enumType.name}.$name: $e',
+      );
     }
   }
 
@@ -247,12 +277,14 @@ class BridgedEnumValue implements RuntimeValue {
       try {
         // Call without specific visitor or argument here, as it's just for representation
         return toStringAdapter(
-            InterpreterVisitor(
-                globalEnvironment: Environment(),
-                moduleLoader: ModuleLoader(Environment(), {}, [], [])),
-            nativeValue,
-            [],
-            {}).toString();
+          InterpreterVisitor(
+            globalEnvironment: Environment(),
+            moduleLoader: ModuleLoader(Environment(), {}, [], []),
+          ),
+          nativeValue,
+          [],
+          {},
+        ).toString();
       } catch (_) {
         // Fallback if the adapter fails
         return '${enumType.name}.$name (native toString failed)';
@@ -288,7 +320,8 @@ class _NativeEnumRuntimeType extends EnumTypeReference {
     final factory = owner.factories[name];
     if (factory == null) {
       throw RuntimeError(
-          'Instantiated native enum types expose factories only.');
+        'Instantiated native enum types expose factories only.',
+      );
     }
     return factory.bind(owner, name, typeArguments);
   }

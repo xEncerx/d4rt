@@ -46,10 +46,7 @@ main() => RetryChild().recoveredMethod();
     );
     expect(retryClass.methods.keys, isNot(contains('staleMethod')));
     expect(
-      identical(
-        retryClass,
-        loadedModule.exportedEnvironment.get('RetryChild'),
-      ),
+      identical(retryClass, loadedModule.exportedEnvironment.get('RetryChild')),
       isTrue,
     );
     expect(mainFunction, isA<Callable>());
@@ -66,13 +63,15 @@ main() => RetryChild().recoveredMethod();
   test('extension declaration visitation retains its null return contract', () {
     final d4rt = D4rt();
     d4rt.execute(source: 'void main() {}');
-    final extension = parseString(
-      content: '''
+    final extension =
+        parseString(
+              content: '''
 extension CompatibilityExtension on String {
   String decorated() => this + ':decorated';
 }
 ''',
-    ).unit.declarations.single as ExtensionDeclaration;
+            ).unit.declarations.single
+            as ExtensionDeclaration;
 
     final result = extension.accept<Object?>(d4rt.visitor!);
 

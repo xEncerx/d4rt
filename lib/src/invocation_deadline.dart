@@ -12,7 +12,8 @@ final class InvocationDeadline {
 
   /// Time left before this invocation expires.
   Duration get remaining => Duration(
-      microseconds: timeout.inMicroseconds - _clock.elapsedMicroseconds);
+    microseconds: timeout.inMicroseconds - _clock.elapsedMicroseconds,
+  );
 
   /// Whether elapsed time or an explicit timeout has terminated the invocation.
   bool get expired {
@@ -24,9 +25,9 @@ final class InvocationDeadline {
 
   /// Creates the public timeout error for this invocation.
   ExecutionTimeoutException get exception => ExecutionTimeoutException(
-        'Execution timed out after ${timeout.inMilliseconds}ms.',
-        timeout: timeout,
-      );
+    'Execution timed out after ${timeout.inMilliseconds}ms.',
+    timeout: timeout,
+  );
 
   /// Marks this invocation as terminal after its timer fires.
   void expire() => _timedOut = true;

@@ -25,20 +25,23 @@ class EnumTypeMetadata {
     for (final entry in supertypeDeclarations.entries) {
       final type = parseEnumTypeName(entry.key);
       final base = type is AppliedRuntimeType ? type.baseType : type;
-      declarations[base.name] = _NativeEnumDeclaredType(this, base.name,
-          parameters: type is AppliedRuntimeType
-              ? type.typeArguments.map((argument) => argument.name).toList()
-              : const [],
-          parentSources: entry.value);
+      declarations[base.name] = _NativeEnumDeclaredType(
+        this,
+        base.name,
+        parameters: type is AppliedRuntimeType
+            ? type.typeArguments.map((argument) => argument.name).toList()
+            : const [],
+        parentSources: entry.value,
+      );
     }
     return declarations;
   }();
 
   EnumTypeMetadata._resolved(EnumTypeMetadata source, this._environment)
-      : typeParameters = source.typeParameters,
-        typeBounds = source.typeBounds,
-        supertypes = source.supertypes,
-        supertypeDeclarations = source.supertypeDeclarations;
+    : typeParameters = source.typeParameters,
+      typeBounds = source.typeBounds,
+      supertypes = source.supertypes,
+      supertypeDeclarations = source.supertypeDeclarations;
 
   /// Binds native declarations to their owning imported namespace.
   EnumTypeMetadata inEnvironment(Environment environment) =>
@@ -78,10 +81,9 @@ class EnumTypeMetadata {
       final arguments = type.typeArguments.map(resolveType).toList();
       if (identical(base, type.baseType) &&
           List.generate(
-                  arguments.length,
-                  (index) =>
-                      identical(arguments[index], type.typeArguments[index]))
-              .every((same) => same)) {
+            arguments.length,
+            (index) => identical(arguments[index], type.typeArguments[index]),
+          ).every((same) => same)) {
         return type;
       }
       return AppliedRuntimeType(base, arguments);
@@ -89,11 +91,13 @@ class EnumTypeMetadata {
     if (type is FunctionRuntimeType) {
       return FunctionRuntimeType(
         returnType: resolveType(type.returnType),
-        positionalParameterTypes:
-            type.positionalParameterTypes.map(resolveType).toList(),
+        positionalParameterTypes: type.positionalParameterTypes
+            .map(resolveType)
+            .toList(),
         requiredPositionalParameterCount: type.requiredPositionalParameterCount,
-        namedParameterTypes: type.namedParameterTypes
-            .map((name, value) => MapEntry(name, resolveType(value))),
+        namedParameterTypes: type.namedParameterTypes.map(
+          (name, value) => MapEntry(name, resolveType(value)),
+        ),
         requiredNamedParameters: type.requiredNamedParameters,
         typeParameterCount: type.typeParameterCount,
         isUntyped: type.isUntyped,
@@ -103,12 +107,15 @@ class EnumTypeMetadata {
   }
 
   /// Parses only retained nominal metadata, never inferred expression types.
-  RuntimeType parse(String source,
-          [Map<String, RuntimeType> substitutions = const {}]) =>
-      resolveType(parseEnumTypeName(source, {
-        for (final name in typeParameters) name: NamedRuntimeType(name),
-        ...substitutions,
-      }));
+  RuntimeType parse(
+    String source, [
+    Map<String, RuntimeType> substitutions = const {},
+  ]) => resolveType(
+    parseEnumTypeName(source, {
+      for (final name in typeParameters) name: NamedRuntimeType(name),
+      ...substitutions,
+    }),
+  );
 
   final _directDeclarations = <RuntimeType, _NativeEnumDeclaredType>{};
 
@@ -131,26 +138,31 @@ class EnumTypeMetadata {
       }
     }
     if (declaration == null) return null;
-    return declaration
-        .parents(type is AppliedRuntimeType ? type.typeArguments : const []);
+    return declaration.parents(
+      type is AppliedRuntimeType ? type.typeArguments : const [],
+    );
   }
 
   /// Creates immutable native enum type metadata without executing adapters.
-  EnumTypeMetadata(
-      {List<String> typeParameters = const [],
-      Map<String, String> typeBounds = const {},
-      List<String> supertypes = const [],
-      Map<String, List<String>> supertypeDeclarations = const {}})
-      : _environment = null,
-        typeParameters = List.unmodifiable(typeParameters),
-        typeBounds = Map.unmodifiable(typeBounds),
-        supertypes = List.unmodifiable(supertypes),
-        supertypeDeclarations = Map.unmodifiable(supertypeDeclarations.map(
-            (key, value) => MapEntry(key, List<String>.unmodifiable(value))));
+  EnumTypeMetadata({
+    List<String> typeParameters = const [],
+    Map<String, String> typeBounds = const {},
+    List<String> supertypes = const [],
+    Map<String, List<String>> supertypeDeclarations = const {},
+  }) : _environment = null,
+       typeParameters = List.unmodifiable(typeParameters),
+       typeBounds = Map.unmodifiable(typeBounds),
+       supertypes = List.unmodifiable(supertypes),
+       supertypeDeclarations = Map.unmodifiable(
+         supertypeDeclarations.map(
+           (key, value) => MapEntry(key, List<String>.unmodifiable(value)),
+         ),
+       );
 
   /// Resolved bound templates, shared by inference and argument validation.
-  late final Map<String, RuntimeType?> resolvedBounds = Map.unmodifiable(
-      {for (final entry in typeBounds.entries) entry.key: parse(entry.value)});
+  late final Map<String, RuntimeType?> resolvedBounds = Map.unmodifiable({
+    for (final entry in typeBounds.entries) entry.key: parse(entry.value),
+  });
 
   /// Resolves explicit arguments, or instantiates an omitted enum type to bounds.
   List<RuntimeType> arguments([List<RuntimeType>? explicit]) {
@@ -164,11 +176,19 @@ class EnumTypeMetadata {
       if (normalized != null) normalized[index] = resolved;
     }
     return resolveEnumTypeArguments(
-        'native enum', typeParameters, resolvedBounds, normalized ?? explicit);
+      'native enum',
+      typeParameters,
+      resolvedBounds,
+      normalized ?? explicit,
+    );
   }
 
   late final List<RuntimeType> _defaultArguments = resolveEnumTypeArguments(
-      'native enum', typeParameters, resolvedBounds, null);
+    'native enum',
+    typeParameters,
+    resolvedBounds,
+    null,
+  );
 
   /// Reads a native constant's actual type arguments once during registration.
   List<RuntimeType> nativeArguments(Enum value) {
@@ -197,8 +217,12 @@ class _NativeEnumDeclaredType implements RuntimeType {
   RuntimeType? _resolvedIdentity;
   final List<String> parameters;
   final List<String> parentSources;
-  _NativeEnumDeclaredType(this.owner, this.name,
-      {this.parameters = const [], this.parentSources = const []});
+  _NativeEnumDeclaredType(
+    this.owner,
+    this.name, {
+    this.parameters = const [],
+    this.parentSources = const [],
+  });
 
   RuntimeType get identity {
     if (_resolvedIdentity != null) return _resolvedIdentity!;
@@ -227,7 +251,9 @@ class _NativeEnumDeclaredType implements RuntimeType {
     if (names.isEmpty) return _parents;
     final resolved = arguments.isEmpty
         ? List<RuntimeType>.filled(
-            names.length, const NamedRuntimeType('dynamic'))
+            names.length,
+            const NamedRuntimeType('dynamic'),
+          )
         : arguments;
     if (resolved.length != names.length) {
       throw RuntimeError('Wrong retained native type arity for $name.');
@@ -247,12 +273,15 @@ class _NativeEnumDeclaredType implements RuntimeType {
 ///
 /// Used only while native bridge metadata is materialized, not during member
 /// reads. [substitutions] replaces generic parameters along hierarchy edges.
-RuntimeType parseEnumTypeName(String source,
-    [Map<String, RuntimeType> substitutions = const {}]) {
+RuntimeType parseEnumTypeName(
+  String source, [
+  Map<String, RuntimeType> substitutions = const {},
+]) {
   source = source.trim();
   if (source.endsWith('?')) {
-    return nullableEnumType(parseEnumTypeName(
-        source.substring(0, source.length - 1), substitutions));
+    return nullableEnumType(
+      parseEnumTypeName(source.substring(0, source.length - 1), substitutions),
+    );
   }
   final substitution = substitutions[source];
   if (substitution != null) return substitution;
@@ -272,14 +301,18 @@ RuntimeType parseEnumTypeName(String source,
       depth--;
     } else if (source[i] == ',' && depth == 0) {
       arguments.add(
-          parseEnumTypeName(source.substring(argumentStart, i), substitutions));
+        parseEnumTypeName(source.substring(argumentStart, i), substitutions),
+      );
       argumentStart = i + 1;
     }
   }
   arguments.add(
-      parseEnumTypeName(source.substring(argumentStart, end), substitutions));
+    parseEnumTypeName(source.substring(argumentStart, end), substitutions),
+  );
   return AppliedRuntimeType(
-      NamedRuntimeType(source.substring(0, start)), arguments);
+    NamedRuntimeType(source.substring(0, start)),
+    arguments,
+  );
 }
 
 /// A nullable generic argument retained by enum instantiations and interfaces.
@@ -311,8 +344,10 @@ RuntimeType nullableEnumType(RuntimeType type) {
 
 /// Instantiates dependent and recursive enum bounds in declaration order.
 List<RuntimeType> instantiateEnumTypeBounds(
-    List<String> parameters, Map<String, RuntimeType?> bounds,
-    {Map<String, RuntimeType> inferred = const {}}) {
+  List<String> parameters,
+  Map<String, RuntimeType?> bounds, {
+  Map<String, RuntimeType> inferred = const {},
+}) {
   final resolved = <String, RuntimeType>{...inferred};
   final active = <String>{};
   late RuntimeType Function(String) resolve;
@@ -323,7 +358,9 @@ List<RuntimeType> instantiateEnumTypeBounds(
     }
     if (type is AppliedRuntimeType) {
       return AppliedRuntimeType(
-          type.baseType, type.typeArguments.map(substitute).toList());
+        type.baseType,
+        type.typeArguments.map(substitute).toList(),
+      );
     }
     return type;
   }
@@ -331,49 +368,65 @@ List<RuntimeType> instantiateEnumTypeBounds(
   resolve = (parameter) {
     if (resolved.containsKey(parameter)) return resolved[parameter]!;
     if (!active.add(parameter)) return const NamedRuntimeType('dynamic');
-    final bound =
-        substitute(bounds[parameter] ?? const NamedRuntimeType('dynamic'));
+    final bound = substitute(
+      bounds[parameter] ?? const NamedRuntimeType('dynamic'),
+    );
     active.remove(parameter);
     return resolved[parameter] = bound;
   };
-  return ownEnumTypeArguments(
-      [for (final parameter in parameters) resolve(parameter)]);
+  return ownEnumTypeArguments([
+    for (final parameter in parameters) resolve(parameter),
+  ]);
 }
 
 /// Checks covariant enum arguments, including nullable and core F-bounds.
 ///
 /// [forBound] permits Dart's dynamic wildcard in bound checks, including
 /// super-bounded instantiate-to-bounds types, without weakening runtime `is`.
-bool enumTypeArgumentSatisfies(RuntimeType actual, RuntimeType expected,
-    {bool forBound = false}) {
+bool enumTypeArgumentSatisfies(
+  RuntimeType actual,
+  RuntimeType expected, {
+  bool forBound = false,
+}) {
   if (expected is NativeCollectionType) {
-    expected =
-        expected.nullable ? nullableEnumType(expected.base) : expected.base;
+    expected = expected.nullable
+        ? nullableEnumType(expected.base)
+        : expected.base;
   }
   if (forBound && isEnumCoreType(actual, 'dynamic')) return true;
   if (actual is TypeParameter && actual.bound != null) {
-    return enumTypeArgumentSatisfies(actual.bound!, expected,
-        forBound: forBound);
+    return enumTypeArgumentSatisfies(
+      actual.bound!,
+      expected,
+      forBound: forBound,
+    );
   }
   if (isEnumCoreType(actual, 'Never') || isEnumCoreType(expected, 'dynamic')) {
     return true;
   }
   if (actual is NativeCollectionType) {
     if (!actual.nullable) {
-      return enumTypeArgumentSatisfies(actual.base, expected,
-          forBound: forBound);
+      return enumTypeArgumentSatisfies(
+        actual.base,
+        expected,
+        forBound: forBound,
+      );
     }
     return expected is NullableEnumArgument &&
-        enumTypeArgumentSatisfies(actual.base, expected.type,
-            forBound: forBound);
+        enumTypeArgumentSatisfies(
+          actual.base,
+          expected.type,
+          forBound: forBound,
+        );
   }
   if (expected is NullableEnumArgument) {
     if (isEnumCoreType(expected.type, 'Object')) return true;
     return isEnumCoreType(actual, 'Null') ||
         enumTypeArgumentSatisfies(
-            actual is NullableEnumArgument ? actual.type : actual,
-            expected.type,
-            forBound: forBound);
+          actual is NullableEnumArgument ? actual.type : actual,
+          expected.type,
+          forBound: forBound,
+        );
   }
   if (isEnumCoreType(actual, 'Null')) return isEnumCoreType(expected, 'Null');
   if (actual is NullableEnumArgument || isEnumCoreType(actual, 'dynamic')) {
@@ -392,16 +445,19 @@ bool enumTypeArgumentSatisfies(RuntimeType actual, RuntimeType expected,
   if (projected == null) return false;
   if (expected is! AppliedRuntimeType) return true;
   if (projected is! AppliedRuntimeType) {
-    return expected.typeArguments
-        .every((argument) => isEnumCoreType(argument, 'dynamic'));
+    return expected.typeArguments.every(
+      (argument) => isEnumCoreType(argument, 'dynamic'),
+    );
   }
   if (projected.typeArguments.length != expected.typeArguments.length) {
     return false;
   }
   for (var index = 0; index < expected.typeArguments.length; index++) {
     if (!enumTypeArgumentSatisfies(
-        projected.typeArguments[index], expected.typeArguments[index],
-        forBound: forBound)) {
+      projected.typeArguments[index],
+      expected.typeArguments[index],
+      forBound: forBound,
+    )) {
       return false;
     }
   }
@@ -409,41 +465,53 @@ bool enumTypeArgumentSatisfies(RuntimeType actual, RuntimeType expected,
 }
 
 bool _enumFunctionSatisfies(
-    FunctionRuntimeType actual, FunctionRuntimeType expected,
-    {required bool forBound}) {
+  FunctionRuntimeType actual,
+  FunctionRuntimeType expected, {
+  required bool forBound,
+}) {
   if (expected.isUntyped || actual.isUntyped) return true;
   if (actual.typeParameterCount != expected.typeParameterCount ||
       actual.requiredPositionalParameterCount >
           expected.requiredPositionalParameterCount ||
       actual.positionalParameterTypes.length <
           expected.positionalParameterTypes.length ||
-      !expected.requiredNamedParameters
-          .containsAll(actual.requiredNamedParameters) ||
-      !actual.namedParameterTypes.keys
-          .toSet()
-          .containsAll(expected.namedParameterTypes.keys)) {
+      !expected.requiredNamedParameters.containsAll(
+        actual.requiredNamedParameters,
+      ) ||
+      !actual.namedParameterTypes.keys.toSet().containsAll(
+        expected.namedParameterTypes.keys,
+      )) {
     return false;
   }
   if (!isEnumCoreType(expected.returnType, 'void') &&
       !isEnumCoreType(actual.returnType, 'dynamic') &&
-      !enumTypeArgumentSatisfies(actual.returnType, expected.returnType,
-          forBound: forBound)) {
+      !enumTypeArgumentSatisfies(
+        actual.returnType,
+        expected.returnType,
+        forBound: forBound,
+      )) {
     return false;
   }
   bool parameterSatisfies(RuntimeType actual, RuntimeType expected) =>
       isEnumCoreType(actual, 'dynamic') ||
       enumTypeArgumentSatisfies(expected, actual, forBound: forBound);
-  for (var index = 0;
-      index < expected.positionalParameterTypes.length;
-      index++) {
-    if (!parameterSatisfies(actual.positionalParameterTypes[index],
-        expected.positionalParameterTypes[index])) {
+  for (
+    var index = 0;
+    index < expected.positionalParameterTypes.length;
+    index++
+  ) {
+    if (!parameterSatisfies(
+      actual.positionalParameterTypes[index],
+      expected.positionalParameterTypes[index],
+    )) {
       return false;
     }
   }
   for (final entry in expected.namedParameterTypes.entries) {
     if (!parameterSatisfies(
-        actual.namedParameterTypes[entry.key]!, entry.value)) {
+      actual.namedParameterTypes[entry.key]!,
+      entry.value,
+    )) {
       return false;
     }
   }
@@ -463,7 +531,9 @@ bool enumTypesEquivalent(RuntimeType first, RuntimeType second) {
     }
     for (var index = 0; index < first.typeArguments.length; index++) {
       if (!enumTypesEquivalent(
-          first.typeArguments[index], second.typeArguments[index])) {
+        first.typeArguments[index],
+        second.typeArguments[index],
+      )) {
         return false;
       }
     }
@@ -479,16 +549,21 @@ bool enumTypesEquivalent(RuntimeType first, RuntimeType second) {
         first.namedParameterTypes.length != second.namedParameterTypes.length ||
         first.requiredNamedParameters.length !=
             second.requiredNamedParameters.length ||
-        !first.requiredNamedParameters
-            .containsAll(second.requiredNamedParameters) ||
+        !first.requiredNamedParameters.containsAll(
+          second.requiredNamedParameters,
+        ) ||
         !enumTypesEquivalent(first.returnType, second.returnType)) {
       return false;
     }
-    for (var index = 0;
-        index < first.positionalParameterTypes.length;
-        index++) {
-      if (!enumTypesEquivalent(first.positionalParameterTypes[index],
-          second.positionalParameterTypes[index])) {
+    for (
+      var index = 0;
+      index < first.positionalParameterTypes.length;
+      index++
+    ) {
+      if (!enumTypesEquivalent(
+        first.positionalParameterTypes[index],
+        second.positionalParameterTypes[index],
+      )) {
         return false;
       }
     }
@@ -511,20 +586,26 @@ int enumTypesHash(RuntimeType type) {
   if (type is AppliedRuntimeType) {
     return type.typeArguments.isEmpty
         ? enumTypesHash(type.baseType)
-        : Object.hash(enumTypesHash(type.baseType),
-            Object.hashAll(type.typeArguments.map(enumTypesHash)));
+        : Object.hash(
+            enumTypesHash(type.baseType),
+            Object.hashAll(type.typeArguments.map(enumTypesHash)),
+          );
   }
   if (type is FunctionRuntimeType) {
     return Object.hash(
-        'function',
-        type.isUntyped,
-        type.typeParameterCount,
-        type.requiredPositionalParameterCount,
-        enumTypesHash(type.returnType),
-        Object.hashAll(type.positionalParameterTypes.map(enumTypesHash)),
-        Object.hashAllUnordered(type.namedParameterTypes.entries.map(
-            (entry) => Object.hash(entry.key, enumTypesHash(entry.value)))),
-        Object.hashAllUnordered(type.requiredNamedParameters));
+      'function',
+      type.isUntyped,
+      type.typeParameterCount,
+      type.requiredPositionalParameterCount,
+      enumTypesHash(type.returnType),
+      Object.hashAll(type.positionalParameterTypes.map(enumTypesHash)),
+      Object.hashAllUnordered(
+        type.namedParameterTypes.entries.map(
+          (entry) => Object.hash(entry.key, enumTypesHash(entry.value)),
+        ),
+      ),
+      Object.hashAllUnordered(type.requiredNamedParameters),
+    );
   }
   return enumNominalTypeHash(type);
 }

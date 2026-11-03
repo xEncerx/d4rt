@@ -260,20 +260,23 @@ const generatedFactoryExpected = <Object?>[
   [0, 0, true, 0, 0],
   true,
   true,
-  true
+  true,
 ];
 
 /// Generates, loads and executes native adapters through public D4rt entry points.
 ///
 /// Passing [retainedDirectory] retains fixtures for the independent runtime gate.
-Future<Map<String, dynamic>> runGeneratedEnumProof(
-    {Directory? retainedDirectory}) async {
-  final directory = retainedDirectory ??
+Future<Map<String, dynamic>> runGeneratedEnumProof({
+  Directory? retainedDirectory,
+}) async {
+  final directory =
+      retainedDirectory ??
       await Directory.systemTemp.createTemp('d4rt-generated-enum-');
   await directory.create(recursive: true);
   try {
-    final packageFile =
-        File('${Directory.current.path}/.dart_tool/package_config.json');
+    final packageFile = File(
+      '${Directory.current.path}/.dart_tool/package_config.json',
+    );
     final configuration =
         jsonDecode(await packageFile.readAsString()) as Map<String, dynamic>;
     final packages = configuration['packages'] as List<dynamic>;
@@ -287,52 +290,60 @@ Future<Map<String, dynamic>> runGeneratedEnumProof(
       'name': 'enum_generated',
       'rootUri': directory.absolute.uri.toString(),
       'packageUri': './',
-      'languageVersion': '3.0'
+      'languageVersion': '3.0',
     });
     final temporaryPackages = File('${directory.path}/package_config.json');
     await temporaryPackages.writeAsString(jsonEncode(configuration));
-    await File('${directory.path}/native.dart')
-        .writeAsString(generatedEnumNativeSource);
+    await File(
+      '${directory.path}/native.dart',
+    ).writeAsString(generatedEnumNativeSource);
     const config = GeneratorConfig(
-        inputPaths: [],
-        outputPath: '',
-        includeAbstractClasses: true,
-        enumFactoryTypeArguments: {
-          'Wired': [
-            ['double']
-          ],
-          'NullablePick': [
-            ['NativeRecord?']
-          ],
-        },
-        additionalImports: ['package:enum_generated/native.dart']);
-    await File('${directory.path}/generator_config.json')
-        .writeAsString(jsonEncode(config.toJson()));
-    final metadata = MetadataCollector(config: config)
-        .collectFromSource(generatedEnumNativeSource);
+      inputPaths: [],
+      outputPath: '',
+      includeAbstractClasses: true,
+      enumFactoryTypeArguments: {
+        'Wired': [
+          ['double'],
+        ],
+        'NullablePick': [
+          ['NativeRecord?'],
+        ],
+      },
+      additionalImports: ['package:enum_generated/native.dart'],
+    );
+    await File(
+      '${directory.path}/generator_config.json',
+    ).writeAsString(jsonEncode(config.toJson()));
+    final metadata = MetadataCollector(
+      config: config,
+    ).collectFromSource(generatedEnumNativeSource);
     final transformed = TransformPipeline(config: config).transform(metadata);
     final emitter = CodeEmitter(config: config);
     final imports = <String>[];
     final registrations = <String>[];
     for (final type in transformed.classes) {
       final file = '${type.name.toLowerCase()}_bridge.dart';
-      await File('${directory.path}/$file')
-          .writeAsString(emitter.emitSingleClass(type));
+      await File(
+        '${directory.path}/$file',
+      ).writeAsString(emitter.emitSingleClass(type));
       imports.add("import 'package:enum_generated/$file';");
       final variable =
           '${type.name[0].toLowerCase()}${type.name.substring(1)}Bridge';
       registrations.add(
-          "interpreter.registerBridgedClass($variable, 'package:generated/enums.dart');");
+        "interpreter.registerBridgedClass($variable, 'package:generated/enums.dart');",
+      );
     }
     for (final type in transformed.enums) {
       final file = '${type.name.toLowerCase()}_bridge.dart';
-      await File('${directory.path}/$file')
-          .writeAsString(emitter.emitSingleEnum(type));
+      await File(
+        '${directory.path}/$file',
+      ).writeAsString(emitter.emitSingleEnum(type));
       imports.add("import 'package:enum_generated/$file';");
       final variable =
           '${type.name[0].toLowerCase()}${type.name.substring(1)}Bridge';
       registrations.add(
-          "interpreter.registerBridgedEnum($variable, 'package:generated/enums.dart');");
+        "interpreter.registerBridgedEnum($variable, 'package:generated/enums.dart');",
+      );
     }
     imports.sort();
     final mainFile = File('${directory.path}/main.dart');
@@ -434,17 +445,21 @@ main() {
     'enumBound': enumBound, 'nativeEnumBound': nativeEnumBound}));
 }
 ''');
-    final formatted = await Process.run(
-        Platform.resolvedExecutable, ['format', directory.path]);
+    final formatted = await Process.run(Platform.resolvedExecutable, [
+      'format',
+      directory.path,
+    ]);
     if (formatted.exitCode != 0) {
       throw StateError('Generated enum formatting failed: ${formatted.stderr}');
     }
-    final process = await Process.run(Platform.resolvedExecutable,
-        ['--packages=${temporaryPackages.path}', mainFile.path],
-        workingDirectory: Directory.current.path);
+    final process = await Process.run(Platform.resolvedExecutable, [
+      '--packages=${temporaryPackages.path}',
+      mainFile.path,
+    ], workingDirectory: Directory.current.path);
     if (process.exitCode != 0) {
       throw StateError(
-          'Generated enum runtime failed (${process.exitCode}): ${process.stderr}\n${process.stdout}');
+        'Generated enum runtime failed (${process.exitCode}): ${process.stderr}\n${process.stdout}',
+      );
     }
     final result =
         jsonDecode((process.stdout as String).trim()) as Map<String, dynamic>;
@@ -455,8 +470,9 @@ main() {
     }
     final modes = result['factoryModes'] as Map<String, dynamic>;
     if (modes.length != 4 ||
-        modes.values.any((value) =>
-            jsonEncode(value) != jsonEncode(generatedFactoryExpected)) ||
+        modes.values.any(
+          (value) => jsonEncode(value) != jsonEncode(generatedFactoryExpected),
+        ) ||
         result['factoryIdentity'] != true ||
         jsonEncode(result['nativeSelection']) != '[1,0,0,1]' ||
         jsonEncode(result['interpreterNominalCollision']) != '[true,true]') {
@@ -467,7 +483,8 @@ main() {
         jsonEncode(result['enumBound']) != '[0,0,true]' ||
         jsonEncode(result['nativeEnumBound']) != '[0,0,true]') {
       throw StateError(
-          'Retained callback or native enum bound mismatch: $result');
+        'Retained callback or native enum bound mismatch: $result',
+      );
     }
     return result;
   } finally {
@@ -477,64 +494,74 @@ main() {
 
 void main() {
   test(
-      'generated enum bridge executes fields setters factories and transitive generic interfaces',
-      () async {
-    final result = await runGeneratedEnumProof();
-    expect(result['direct'], generatedEnumExpected);
-    expect(result['compiled'], generatedEnumExpected);
-    expect(result['nativeIdentity'], isTrue);
-    expect((result['factoryModes'] as Map).values,
-        everyElement(generatedFactoryExpected));
-  });
+    'generated enum bridge executes fields setters factories and transitive generic interfaces',
+    () async {
+      final result = await runGeneratedEnumProof();
+      expect(result['direct'], generatedEnumExpected);
+      expect(result['compiled'], generatedEnumExpected);
+      expect(result['nativeIdentity'], isTrue);
+      expect(
+        (result['factoryModes'] as Map).values,
+        everyElement(generatedFactoryExpected),
+      );
+    },
+  );
   test('invalid compiled tuple configuration fails instead of guessing', () {
     for (final tuples in [
       [
-        ['int', 'String']
+        ['int', 'String'],
       ],
       [
-        ['String']
+        ['String'],
       ],
       [
         ['int'],
-        ['int']
+        ['int'],
       ],
       [
-        ['Missing']
+        ['Missing'],
       ],
       [
-        ['Alias']
+        ['Alias'],
       ],
       [
-        ['List']
+        ['List'],
       ],
       [
-        ['int>ignored']
+        ['int>ignored'],
       ],
     ]) {
       final config = GeneratorConfig(
-          inputPaths: [],
-          outputPath: '',
-          enumFactoryTypeArguments: {'Pick': tuples});
-      final metadata = MetadataCollector(config: config)
-          .collectFromSource(generatedEnumNativeSource);
-      expect(() => TransformPipeline(config: config).transform(metadata),
-          throwsA(anything),
-          reason:
-              'Invalid exact capability $tuples must not compile a fallback.');
+        inputPaths: [],
+        outputPath: '',
+        enumFactoryTypeArguments: {'Pick': tuples},
+      );
+      final metadata = MetadataCollector(
+        config: config,
+      ).collectFromSource(generatedEnumNativeSource);
+      expect(
+        () => TransformPipeline(config: config).transform(metadata),
+        throwsA(anything),
+        reason: 'Invalid exact capability $tuples must not compile a fallback.',
+      );
     }
   });
   test('custom native source bounds reject invalid compiled tuples', () {
     const config = GeneratorConfig(
-        inputPaths: [],
-        outputPath: '',
-        enumFactoryTypeArguments: {
-          'CustomBound': [
-            ['NativeWrong']
-          ]
-        });
-    final metadata = MetadataCollector(config: config)
-        .collectFromSource(generatedEnumNativeSource);
-    expect(() => TransformPipeline(config: config).transform(metadata),
-        throwsA(anything));
+      inputPaths: [],
+      outputPath: '',
+      enumFactoryTypeArguments: {
+        'CustomBound': [
+          ['NativeWrong'],
+        ],
+      },
+    );
+    final metadata = MetadataCollector(
+      config: config,
+    ).collectFromSource(generatedEnumNativeSource);
+    expect(
+      () => TransformPipeline(config: config).transform(metadata),
+      throwsA(anything),
+    );
   });
 }

@@ -282,7 +282,9 @@ class BridgeableEnumFactorySpecialization {
 
   /// Creates a finite specialization.
   const BridgeableEnumFactorySpecialization(
-      this.typeArguments, this.parameters);
+    this.typeArguments,
+    this.parameters,
+  );
 }
 
 /// A bridgeable enum.
@@ -426,12 +428,18 @@ class TransformPipeline {
         'Map': 2,
         'Comparable': 1,
         'Future': 1,
-        'Stream': 1
+        'Stream': 1,
       })
-      ..addEntries(metadata.classes
-          .map((type) => MapEntry(type.name, type.typeParameters.length)))
-      ..addEntries(metadata.enums
-          .map((type) => MapEntry(type.name, type.typeParameters.length)));
+      ..addEntries(
+        metadata.classes.map(
+          (type) => MapEntry(type.name, type.typeParameters.length),
+        ),
+      )
+      ..addEntries(
+        metadata.enums.map(
+          (type) => MapEntry(type.name, type.typeParameters.length),
+        ),
+      );
     for (final name in config.enumFactoryTypeArguments.keys) {
       if (!metadata.enums.any((type) => type.name == name)) {
         throw ArgumentError('Unknown enum factory configuration: $name');
@@ -443,8 +451,10 @@ class TransformPipeline {
         .whereType<BridgeableClass>()
         .toList();
 
-    final enums =
-        metadata.enums.map(_transformEnum).whereType<BridgeableEnum>().toList();
+    final enums = metadata.enums
+        .map(_transformEnum)
+        .whereType<BridgeableEnum>()
+        .toList();
 
     final functions = metadata.functions
         .map(_transformFunction)
@@ -516,17 +526,21 @@ class TransformPipeline {
       if (field.name.startsWith('_') && !config.includePrivateMembers) {
         continue;
       }
-      getters.add(BridgeableGetter(
-        name: field.name,
-        returnType: _mapType(field.type.fullName),
-        accessTemplate: 'target.${field.name}',
-      ));
-      if (!field.isFinal) {
-        setters.add(BridgeableSetter(
+      getters.add(
+        BridgeableGetter(
           name: field.name,
-          parameterType: _mapType(field.type.fullName),
-          assignTemplate: 'target.${field.name} = value',
-        ));
+          returnType: _mapType(field.type.fullName),
+          accessTemplate: 'target.${field.name}',
+        ),
+      );
+      if (!field.isFinal) {
+        setters.add(
+          BridgeableSetter(
+            name: field.name,
+            parameterType: _mapType(field.type.fullName),
+            assignTemplate: 'target.${field.name} = value',
+          ),
+        );
       }
     }
 
@@ -548,17 +562,21 @@ class TransformPipeline {
         if (field.name.startsWith('_') && !config.includePrivateMembers) {
           continue;
         }
-        staticGetters.add(BridgeableGetter(
-          name: field.name,
-          returnType: _mapType(field.type.fullName),
-          accessTemplate: '${meta.name}.${field.name}',
-        ));
-        if (!field.isFinal && !field.isConst) {
-          staticSetters.add(BridgeableSetter(
+        staticGetters.add(
+          BridgeableGetter(
             name: field.name,
-            parameterType: _mapType(field.type.fullName),
-            assignTemplate: '${meta.name}.${field.name} = value',
-          ));
+            returnType: _mapType(field.type.fullName),
+            accessTemplate: '${meta.name}.${field.name}',
+          ),
+        );
+        if (!field.isFinal && !field.isConst) {
+          staticSetters.add(
+            BridgeableSetter(
+              name: field.name,
+              parameterType: _mapType(field.type.fullName),
+              assignTemplate: '${meta.name}.${field.name} = value',
+            ),
+          );
         }
       }
     }
@@ -585,19 +603,26 @@ class TransformPipeline {
   }
 
   BridgeableConstructor? _transformConstructor(
-      ConstructorMetadata meta, ClassMetadata classMeta) {
+    ConstructorMetadata meta,
+    ClassMetadata classMeta,
+  ) {
     if (classMeta.isAbstract && !meta.isFactory) {
       return null;
     }
     _positionalIndex = 0;
     final params = meta.parameters.map(_transformParameter).toList();
 
-    final positionalArgs =
-        params.where((p) => !p.isNamed).map((p) => p.extractionExpr).join(', ');
+    final positionalArgs = params
+        .where((p) => !p.isNamed)
+        .map((p) => p.extractionExpr)
+        .join(', ');
 
-    final namedArgs = params.where((p) => p.isNamed).map((p) {
-      return '${p.name}: ${p.extractionExpr}';
-    }).join(', ');
+    final namedArgs = params
+        .where((p) => p.isNamed)
+        .map((p) {
+          return '${p.name}: ${p.extractionExpr}';
+        })
+        .join(', ');
 
     final allArgs = [
       if (positionalArgs.isNotEmpty) positionalArgs,
@@ -632,12 +657,17 @@ class TransformPipeline {
 
     final params = meta.parameters.map(_transformParameter).toList();
 
-    final positionalArgs =
-        params.where((p) => !p.isNamed).map((p) => p.extractionExpr).join(', ');
+    final positionalArgs = params
+        .where((p) => !p.isNamed)
+        .map((p) => p.extractionExpr)
+        .join(', ');
 
-    final namedArgs = params.where((p) => p.isNamed).map((p) {
-      return '${p.name}: ${p.extractionExpr}';
-    }).join(', ');
+    final namedArgs = params
+        .where((p) => p.isNamed)
+        .map((p) {
+          return '${p.name}: ${p.extractionExpr}';
+        })
+        .join(', ');
 
     final allArgs = [
       if (positionalArgs.isNotEmpty) positionalArgs,
@@ -761,10 +791,7 @@ class TransformPipeline {
       if (inner[i] == '<') depth++;
       if (inner[i] == '>') depth--;
       if (inner[i] == ',' && depth == 0) {
-        return [
-          inner.substring(0, i).trim(),
-          inner.substring(i + 1).trim(),
-        ];
+        return [inner.substring(0, i).trim(), inner.substring(i + 1).trim()];
       }
     }
     return ['dynamic', 'dynamic'];
@@ -805,7 +832,9 @@ class TransformPipeline {
       if (meta.isRequired) {
         if (isFunctionType) {
           extractionExpr = _wrapFunctionType(
-              "namedArgs.required<Callable>('$paramName')", type);
+            "namedArgs.required<Callable>('$paramName')",
+            type,
+          );
         } else if (type == 'dynamic' || isGenericParam) {
           extractionExpr = "namedArgs.required<dynamic>('$paramName')";
         } else if (type.startsWith('List<')) {
@@ -875,7 +904,9 @@ class TransformPipeline {
       if (meta.isRequired) {
         if (isFunctionType) {
           extractionExpr = _wrapFunctionType(
-              "positionalArgs.required<Callable>($index, '$paramName')", type);
+            "positionalArgs.required<Callable>($index, '$paramName')",
+            type,
+          );
         } else if (type == 'dynamic' || isGenericParam) {
           extractionExpr =
               "positionalArgs.required<dynamic>($index, '$paramName')";
@@ -968,8 +999,11 @@ class TransformPipeline {
 
   /// Wraps a Callable expression in a native Dart function closure.
   /// For example: (arg) => InterpreterVisitor.invokeCallback(expr, [arg]).
-  String _wrapFunctionType(String callableExpr, String functionType,
-      {FunctionRuntimeType? signature}) {
+  String _wrapFunctionType(
+    String callableExpr,
+    String functionType, {
+    FunctionRuntimeType? signature,
+  }) {
     if (signature != null) {
       return _wrapFunctionSignature(callableExpr, signature);
     }
@@ -980,16 +1014,22 @@ class TransformPipeline {
     } else if (normalizedType.startsWith('AsyncCallback')) {
       normalizedType = 'Future<void> Function()';
     } else if (normalizedType.startsWith('ValueChanged<')) {
-      final inner =
-          normalizedType.substring(13, normalizedType.lastIndexOf('>'));
+      final inner = normalizedType.substring(
+        13,
+        normalizedType.lastIndexOf('>'),
+      );
       normalizedType = 'void Function($inner)';
     } else if (normalizedType.startsWith('AsyncValueSetter<')) {
-      final inner =
-          normalizedType.substring(17, normalizedType.lastIndexOf('>'));
+      final inner = normalizedType.substring(
+        17,
+        normalizedType.lastIndexOf('>'),
+      );
       normalizedType = 'Future<void> Function($inner)';
     } else if (normalizedType.startsWith('AsyncValueGetter<')) {
-      final inner =
-          normalizedType.substring(17, normalizedType.lastIndexOf('>'));
+      final inner = normalizedType.substring(
+        17,
+        normalizedType.lastIndexOf('>'),
+      );
       normalizedType = 'Future<$inner> Function()';
     } else if (normalizedType.contains('ScrollNotificationPredicate')) {
       normalizedType = 'bool Function(ScrollNotification)';
@@ -1025,7 +1065,8 @@ class TransformPipeline {
           .toList();
 
       // Add cast to return type if not void or dynamic
-      final callExpr = (returnType != 'void' &&
+      final callExpr =
+          (returnType != 'void' &&
               returnType != 'dynamic' &&
               returnType.isNotEmpty)
           ? '($awaitKw InterpreterVisitor.invokeCallback($callableExpr, [%args%]) as $returnType)'
@@ -1050,29 +1091,36 @@ class TransformPipeline {
   }
 
   String _wrapFunctionSignature(
-      String callable, FunctionRuntimeType signature) {
+    String callable,
+    FunctionRuntimeType signature,
+  ) {
     if (signature.isUntyped) {
       throw ArgumentError(
-          'A native enum callback requires a declared signature.');
+        'A native enum callback requires a declared signature.',
+      );
     }
     if (signature.typeParameterCount != 0) {
       throw ArgumentError(
-          'An independently generic native callback is not an enum specialization.');
+        'An independently generic native callback is not an enum specialization.',
+      );
     }
     final formals = <String>[];
     final positional = <String>[];
     final optional = <String>[];
-    for (var index = 0;
-        index < signature.positionalParameterTypes.length;
-        index++) {
+    for (
+      var index = 0;
+      index < signature.positionalParameterTypes.length;
+      index++
+    ) {
       final name = 'arg$index';
       if (index < signature.requiredPositionalParameterCount) {
         formals.add('${signature.positionalParameterTypes[index].name} $name');
         positional.add(name);
       } else {
         optional.add('Object? $name = enumCallbackArgumentAbsent');
-        positional
-            .add('if (!identical($name, enumCallbackArgumentAbsent)) $name');
+        positional.add(
+          'if (!identical($name, enumCallbackArgumentAbsent)) $name',
+        );
       }
     }
     if (optional.isNotEmpty) formals.add('[${optional.join(', ')}]');
@@ -1085,12 +1133,14 @@ class TransformPipeline {
       } else {
         namedFormals.add('Object? ${entry.key} = enumCallbackArgumentAbsent');
         named.add(
-            "if (!identical(${entry.key}, enumCallbackArgumentAbsent)) '${entry.key}': ${entry.key}");
+          "if (!identical(${entry.key}, enumCallbackArgumentAbsent)) '${entry.key}': ${entry.key}",
+        );
       }
     }
     if (namedFormals.isNotEmpty) formals.add('{${namedFormals.join(', ')}}');
     var returnType = signature.returnType;
-    final async = returnType is AppliedRuntimeType &&
+    final async =
+        returnType is AppliedRuntimeType &&
         isEnumCoreType(returnType.baseType, 'Future');
     if (async) {
       returnType = returnType.typeArguments.single;
@@ -1098,7 +1148,8 @@ class TransformPipeline {
     final call =
         '${async ? 'await ' : ''}InterpreterVisitor.invokeCallback($callable, '
         '[${positional.join(', ')}], {${named.join(', ')}})';
-    final result = isEnumCoreType(returnType, 'void') ||
+    final result =
+        isEnumCoreType(returnType, 'void') ||
             isEnumCoreType(returnType, 'dynamic')
         ? call
         : '($call as ${returnType.name})';
@@ -1150,8 +1201,12 @@ class TransformPipeline {
   BridgeableEnum _transformEnum(EnumMetadata meta) {
     _currentBounds
       ..clear()
-      ..addEntries(meta.typeParameters.map((parameter) =>
-          MapEntry(parameter.name, parameter.bound?.fullName ?? 'dynamic')));
+      ..addEntries(
+        meta.typeParameters.map(
+          (parameter) =>
+              MapEntry(parameter.name, parameter.bound?.fullName ?? 'dynamic'),
+        ),
+      );
     final methods = <BridgeableMethod>[];
     final staticMethods = <BridgeableMethod>[];
 
@@ -1204,11 +1259,12 @@ class TransformPipeline {
       factories: _transformEnumFactories(meta),
       libraryUri: _getLibraryUri(meta.annotations),
       documentation: meta.documentation,
-      typeParameters:
-          meta.typeParameters.map((parameter) => parameter.name).toList(),
+      typeParameters: meta.typeParameters
+          .map((parameter) => parameter.name)
+          .toList(),
       typeBounds: {
         for (final parameter in meta.typeParameters)
-          parameter.name: parameter.bound?.fullName ?? 'dynamic'
+          parameter.name: parameter.bound?.fullName ?? 'dynamic',
       },
       supertypes: meta.supertypes,
       supertypeDeclarations: meta.supertypeDeclarations,
@@ -1219,23 +1275,28 @@ class TransformPipeline {
     if (meta.factories.isEmpty) return const [];
     final names = meta.typeParameters.map((type) => type.name).toList();
     final metadata = EnumTypeMetadata(
-        typeParameters: names,
-        typeBounds: {
-          for (final type in meta.typeParameters)
-            type.name: type.bound?.fullName ?? 'dynamic',
-        },
-        supertypeDeclarations: meta.supertypeDeclarations);
+      typeParameters: names,
+      typeBounds: {
+        for (final type in meta.typeParameters)
+          type.name: type.bound?.fullName ?? 'dynamic',
+      },
+      supertypeDeclarations: meta.supertypeDeclarations,
+    );
     final bounds = metadata.resolvedBounds;
     final tuples = <List<RuntimeType>>[];
     void add(List<String> sources, {bool configured = false}) {
-      final tuple =
-          sources.map((source) => _compiledEnumType(source, metadata)).toList();
+      final tuple = sources
+          .map((source) => _compiledEnumType(source, metadata))
+          .toList();
       resolveEnumTypeArguments(meta.name, names, bounds, tuple);
-      final duplicate = tuples.any((previous) =>
-          previous.length == tuple.length &&
-          List.generate(tuple.length,
-                  (i) => enumTypesEquivalent(previous[i], tuple[i]))
-              .every((same) => same));
+      final duplicate = tuples.any(
+        (previous) =>
+            previous.length == tuple.length &&
+            List.generate(
+              tuple.length,
+              (i) => enumTypesEquivalent(previous[i], tuple[i]),
+            ).every((same) => same),
+      );
       if (duplicate) {
         if (configured) {
           throw ArgumentError('Duplicate enum factory tuple for ${meta.name}.');
@@ -1246,13 +1307,17 @@ class TransformPipeline {
     }
 
     // Configured duplicates are errors; overlap with automatic tuples is harmless.
-    for (final tuple in config.enumFactoryTypeArguments[meta.name] ??
-        const <List<String>>[]) {
+    for (final tuple
+        in config.enumFactoryTypeArguments[meta.name] ??
+            const <List<String>>[]) {
       add(tuple, configured: true);
     }
-    add(instantiateEnumTypeBounds(names, bounds)
-        .map((type) => type.name)
-        .toList());
+    add(
+      instantiateEnumTypeBounds(
+        names,
+        bounds,
+      ).map((type) => type.name).toList(),
+    );
     for (final value in meta.values) {
       final explicit = value.typeArguments;
       if (explicit == null) continue; // Never guess native inferred tuples.
@@ -1267,33 +1332,47 @@ class TransformPipeline {
     return [
       for (final factory in meta.factories)
         if (!factory.name.startsWith('_') || config.includePrivateMembers)
-          BridgeableEnumFactory(factory.name, [
-            for (final parameter in factory.parameters)
-              EnumFormalParameter(
-                  parameter.name, _enumFormalType(parameter.type, metadata),
-                  isNamed: parameter.isNamed, isRequired: parameter.isRequired),
-          ], [
-            for (final tuple in tuples)
-              _enumFactorySpecialization(factory, names, tuple, metadata),
-          ])
+          BridgeableEnumFactory(
+            factory.name,
+            [
+              for (final parameter in factory.parameters)
+                EnumFormalParameter(
+                  parameter.name,
+                  _enumFormalType(parameter.type, metadata),
+                  isNamed: parameter.isNamed,
+                  isRequired: parameter.isRequired,
+                ),
+            ],
+            [
+              for (final tuple in tuples)
+                _enumFactorySpecialization(factory, names, tuple, metadata),
+            ],
+          ),
     ];
   }
 
   BridgeableEnumFactorySpecialization _enumFactorySpecialization(
-      ConstructorMetadata factory,
-      List<String> names,
-      List<RuntimeType> tuple,
-      EnumTypeMetadata metadata) {
+    ConstructorMetadata factory,
+    List<String> names,
+    List<RuntimeType> tuple,
+    EnumTypeMetadata metadata,
+  ) {
     _positionalIndex = 0;
     return BridgeableEnumFactorySpecialization(
-        tuple.map((type) => type.name).toList(), [
-      for (final parameter in factory.parameters)
-        _enumFactoryParameter(parameter, names, tuple, metadata)
-    ]);
+      tuple.map((type) => type.name).toList(),
+      [
+        for (final parameter in factory.parameters)
+          _enumFactoryParameter(parameter, names, tuple, metadata),
+      ],
+    );
   }
 
-  BridgeableParameter _enumFactoryParameter(ParameterMetadata parameter,
-      List<String> names, List<RuntimeType> tuple, EnumTypeMetadata metadata) {
+  BridgeableParameter _enumFactoryParameter(
+    ParameterMetadata parameter,
+    List<String> names,
+    List<RuntimeType> tuple,
+    EnumTypeMetadata metadata,
+  ) {
     final index = parameter.isNamed ? null : _positionalIndex++;
     final raw = parameter.isNamed
         ? "namedArgs['${parameter.name}']"
@@ -1302,24 +1381,34 @@ class TransformPipeline {
         ? "namedArgs.containsKey('${parameter.name}')"
         : 'positionalArgs.length > $index';
     final type = substituteEnumType(
-        _enumFormalType(parameter.type, metadata), names, tuple);
+      _enumFormalType(parameter.type, metadata),
+      names,
+      tuple,
+    );
     final typeName = type.name;
     String conversion(RuntimeType type, String expression) {
       if (type is NullableEnumArgument) {
         return '$expression == null ? null : (${conversion(type.type, expression)})';
       }
       if (type is AppliedRuntimeType &&
-          const ['List', 'Set', 'Iterable', 'Map']
-              .contains(type.baseType.name)) {
-        final arguments =
-            type.typeArguments.map((argument) => argument.name).join(', ');
+          const [
+            'List',
+            'Set',
+            'Iterable',
+            'Map',
+          ].contains(type.baseType.name)) {
+        final arguments = type.typeArguments
+            .map((argument) => argument.name)
+            .join(', ');
         return '$expression is ${type.name} ? $expression as ${type.name} '
             ': ($expression as ${type.baseType.name}).cast<$arguments>()';
       }
       if (type is FunctionRuntimeType) {
         final wrapped = _wrapFunctionType(
-            '($expression as Callable)', type.name,
-            signature: type);
+          '($expression as Callable)',
+          type.name,
+          signature: type,
+        );
         return '$expression is Callable ? ($wrapped) : ($expression as ${type.name})';
       }
       return '$expression as ${type.name}';
@@ -1330,12 +1419,13 @@ class TransformPipeline {
         ? '($supplied)'
         : '($present ? ($supplied) : ${parameter.defaultValue ?? 'null'})';
     return BridgeableParameter(
-        name: parameter.name,
-        type: typeName,
-        isNamed: parameter.isNamed,
-        isRequired: parameter.isRequired,
-        defaultValue: parameter.defaultValue,
-        extractionExpr: extraction);
+      name: parameter.name,
+      type: typeName,
+      isNamed: parameter.isNamed,
+      isRequired: parameter.isRequired,
+      defaultValue: parameter.defaultValue,
+      extractionExpr: extraction,
+    );
   }
 
   RuntimeType _compiledEnumType(String source, EnumTypeMetadata metadata) {
@@ -1378,12 +1468,17 @@ class TransformPipeline {
     _positionalIndex = 0;
     final params = meta.parameters.map(_transformParameter).toList();
 
-    final positionalArgs =
-        params.where((p) => !p.isNamed).map((p) => p.extractionExpr).join(', ');
+    final positionalArgs = params
+        .where((p) => !p.isNamed)
+        .map((p) => p.extractionExpr)
+        .join(', ');
 
-    final namedArgs = params.where((p) => p.isNamed).map((p) {
-      return '${p.name}: ${p.extractionExpr}';
-    }).join(', ');
+    final namedArgs = params
+        .where((p) => p.isNamed)
+        .map((p) {
+          return '${p.name}: ${p.extractionExpr}';
+        })
+        .join(', ');
 
     final allArgs = [
       if (positionalArgs.isNotEmpty) positionalArgs,

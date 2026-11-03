@@ -17,7 +17,6 @@ enum HostBox<T extends num> implements HostPayload<T> {
 
   const HostBox(this.value);
   @override
-
   /// The immutable generic payload.
   final T value;
 
@@ -85,7 +84,7 @@ const nativeEnumExpected = <Object?>[
   'integer',
   2,
   4,
-  true
+  true,
 ];
 
 /// Source exercising native and interpreted mixin dispatch and nominal types.
@@ -107,22 +106,25 @@ const nativeMixinExpected = <Object?>['native', 'last', 'own', true, true];
 D4rt nativeMixinInterpreter() {
   final interpreter = D4rt();
   interpreter.registerBridgedClass(
-      BridgedClass(
-        nativeType: NativeLabel,
-        name: 'NativeLabel',
-        canBeUsedAsMixin: true,
-        enumMixinMetadata: EnumMixinMetadata(
-            typeMetadata: EnumTypeMetadata(), constraints: ['Enum']),
-        getters: {
-          'label': (visitor, target) {
-            if (target is! InterpretedEnumValue) {
-              throw StateError('Expected an interpreted enum receiver.');
-            }
-            return 'native';
-          }
-        },
+    BridgedClass(
+      nativeType: NativeLabel,
+      name: 'NativeLabel',
+      canBeUsedAsMixin: true,
+      enumMixinMetadata: EnumMixinMetadata(
+        typeMetadata: EnumTypeMetadata(),
+        constraints: ['Enum'],
       ),
-      'package:host/mixin.dart');
+      getters: {
+        'label': (visitor, target) {
+          if (target is! InterpretedEnumValue) {
+            throw StateError('Expected an interpreted enum receiver.');
+          }
+          return 'native';
+        },
+      },
+    ),
+    'package:host/mixin.dart',
+  );
   return interpreter;
 }
 
@@ -130,137 +132,172 @@ D4rt nativeMixinInterpreter() {
 D4rt nativeEnumInterpreter() {
   final interpreter = D4rt();
   interpreter.registerBridgedClass(
-      BridgedClass(
-        nativeType: HostPayload,
-        name: 'HostPayload',
-        typeParameterCount: 1,
-        getters: {'value': (visitor, target) => (target as HostPayload).value},
-      ),
-      'package:host/enum.dart');
+    BridgedClass(
+      nativeType: HostPayload,
+      name: 'HostPayload',
+      typeParameterCount: 1,
+      getters: {'value': (visitor, target) => (target as HostPayload).value},
+    ),
+    'package:host/enum.dart',
+  );
   interpreter.registerBridgedEnum(
-      BridgedEnumDefinition<HostBox>(
-        name: 'HostBox',
-        values: HostBox.values,
-        typeMetadata: EnumTypeMetadata(
-            typeParameters: ['T'],
-            typeBounds: {'T': 'num'},
-            supertypes: ['HostPayload<T>']),
-        getters: {
-          'value': (visitor, target) => (target as HostBox).value,
-          'name': (visitor, target) => (target as HostBox).name,
-          'external': (visitor, target) => (target as HostBox).external,
-        },
-        setters: {
-          'external': (visitor, target, value) =>
-              (target as HostBox).external = value as int
-        },
-        staticGetters: {'state': (visitor) => HostBox.state},
-        staticSetters: {
-          'state': (visitor, value) => HostBox.state = value as int
-        },
-        factories: {
-          'pick': BridgedEnumFactory(
-            signature: EnumSignature(
-                [const EnumFormalParameter('index', NamedRuntimeType('int'))]),
-            specializations: [
-              BridgedEnumFactorySpecialization(
-                  [const NamedRuntimeType('num')],
-                  (visitor, arguments, named, types) =>
-                      HostBox<num>.pick(arguments.single as int)),
-              BridgedEnumFactorySpecialization(
-                  [const NamedRuntimeType('int')],
-                  (visitor, arguments, named, types) =>
-                      HostBox<int>.pick(arguments.single as int)),
-              BridgedEnumFactorySpecialization(
-                  [const NamedRuntimeType('double')],
-                  (visitor, arguments, named, types) =>
-                      HostBox<double>.pick(arguments.single as int)),
-            ],
-          )
-        },
+    BridgedEnumDefinition<HostBox>(
+      name: 'HostBox',
+      values: HostBox.values,
+      typeMetadata: EnumTypeMetadata(
+        typeParameters: ['T'],
+        typeBounds: {'T': 'num'},
+        supertypes: ['HostPayload<T>'],
       ),
-      'package:host/enum.dart');
+      getters: {
+        'value': (visitor, target) => (target as HostBox).value,
+        'name': (visitor, target) => (target as HostBox).name,
+        'external': (visitor, target) => (target as HostBox).external,
+      },
+      setters: {
+        'external': (visitor, target, value) =>
+            (target as HostBox).external = value as int,
+      },
+      staticGetters: {'state': (visitor) => HostBox.state},
+      staticSetters: {
+        'state': (visitor, value) => HostBox.state = value as int,
+      },
+      factories: {
+        'pick': BridgedEnumFactory(
+          signature: EnumSignature([
+            const EnumFormalParameter('index', NamedRuntimeType('int')),
+          ]),
+          specializations: [
+            BridgedEnumFactorySpecialization(
+              [const NamedRuntimeType('num')],
+              (visitor, arguments, named, types) =>
+                  HostBox<num>.pick(arguments.single as int),
+            ),
+            BridgedEnumFactorySpecialization(
+              [const NamedRuntimeType('int')],
+              (visitor, arguments, named, types) =>
+                  HostBox<int>.pick(arguments.single as int),
+            ),
+            BridgedEnumFactorySpecialization(
+              [const NamedRuntimeType('double')],
+              (visitor, arguments, named, types) =>
+                  HostBox<double>.pick(arguments.single as int),
+            ),
+          ],
+        ),
+      },
+    ),
+    'package:host/enum.dart',
+  );
   return interpreter;
 }
 
 void main() {
-  test('enum type keys have symmetric nominal equality and coherent hashes',
-      () {
-    const source = "import 'package:host/enum.dart'; main()=>HostBox<int>;";
-    final first =
-        nativeEnumInterpreter().execute(source: source) as AppliedRuntimeType;
-    final second =
-        nativeEnumInterpreter().execute(source: source) as AppliedRuntimeType;
-    final plain = AppliedRuntimeType(first.baseType, first.typeArguments);
-    for (final pair in [(first, second), (first, plain), (second, plain)]) {
-      expect(pair.$1 == pair.$2, isTrue);
-      expect(pair.$2 == pair.$1, isTrue);
-      expect(pair.$1.hashCode, pair.$2.hashCode);
-    }
-    expect({first, second, plain}.length, 1);
-    final different = nativeEnumInterpreter().execute(
-        source: "import 'package:host/enum.dart'; main()=>HostBox<double>;");
-    expect(first == different, isFalse);
-    expect(D4rt().execute(source: '''
+  test(
+    'enum type keys have symmetric nominal equality and coherent hashes',
+    () {
+      const source = "import 'package:host/enum.dart'; main()=>HostBox<int>;";
+      final first =
+          nativeEnumInterpreter().execute(source: source) as AppliedRuntimeType;
+      final second =
+          nativeEnumInterpreter().execute(source: source) as AppliedRuntimeType;
+      final plain = AppliedRuntimeType(first.baseType, first.typeArguments);
+      for (final pair in [(first, second), (first, plain), (second, plain)]) {
+        expect(pair.$1 == pair.$2, isTrue);
+        expect(pair.$2 == pair.$1, isTrue);
+        expect(pair.$1.hashCode, pair.$2.hashCode);
+      }
+      expect({first, second, plain}.length, 1);
+      final different = nativeEnumInterpreter().execute(
+        source: "import 'package:host/enum.dart'; main()=>HostBox<double>;",
+      );
+      expect(first == different, isFalse);
+      expect(
+        D4rt().execute(
+          source: '''
       enum E<T extends num> {a<int>(1);const E(this.n);final T n;}
       main() => [E<int> == E<int>, E<int> == E<double>,
         {E<int>, E<int>, E<double>}.length];
-    '''), [true, false, 2]);
-  });
+    ''',
+        ),
+        [true, false, 2],
+      );
+    },
+  );
   test(
-      'native generic constants retain type arguments, interfaces and native results',
-      () {
-    final interpreter = nativeEnumInterpreter();
-    const source = nativeEnumConsumer;
-    const expected = nativeEnumExpected;
-    expect(interpreter.execute(source: source), expected);
-    expect(interpreter.executeCompiled(interpreter.compile(source: source)),
-        expected);
-    expect(
+    'native generic constants retain type arguments, interfaces and native results',
+    () {
+      final interpreter = nativeEnumInterpreter();
+      const source = nativeEnumConsumer;
+      const expected = nativeEnumExpected;
+      expect(interpreter.execute(source: source), expected);
+      expect(
+        interpreter.executeCompiled(interpreter.compile(source: source)),
+        expected,
+      );
+      expect(
         interpreter.execute(
-            source:
-                "import 'package:host/enum.dart'; main()=>HostBox.integer;"),
-        same(HostBox.integer));
-    expect(
+          source: "import 'package:host/enum.dart'; main()=>HostBox.integer;",
+        ),
+        same(HostBox.integer),
+      );
+      expect(
         interpreter.execute(
-            source:
-                "import 'package:host/enum.dart'; main()=>HostBox.pick(0);"),
-        same(HostBox.integer));
-  });
+          source: "import 'package:host/enum.dart'; main()=>HostBox.pick(0);",
+        ),
+        same(HostBox.integer),
+      );
+    },
+  );
 
   test(
-      'native and interpreted mixins preserve application order and receiver adapters',
-      () {
-    final interpreter = nativeMixinInterpreter();
-    expect(
-        interpreter.execute(source: nativeMixinConsumer), nativeMixinExpected);
-    expect(
-        interpreter
-            .executeCompiled(interpreter.compile(source: nativeMixinConsumer)),
-        nativeMixinExpected);
-    expect(() => interpreter.execute(source: r'''
+    'native and interpreted mixins preserve application order and receiver adapters',
+    () {
+      final interpreter = nativeMixinInterpreter();
+      expect(
+        interpreter.execute(source: nativeMixinConsumer),
+        nativeMixinExpected,
+      );
+      expect(
+        interpreter.executeCompiled(
+          interpreter.compile(source: nativeMixinConsumer),
+        ),
+        nativeMixinExpected,
+      );
+      expect(
+        () => interpreter.execute(
+          source: r'''
 import 'package:host/mixin.dart';
 mixin First { static int marker = 7; }
 enum E with First { a }
 main() => E.marker;
-'''), throwsA(anything));
-  });
+''',
+        ),
+        throwsA(anything),
+      );
+    },
+  );
 
   test('native mixin metadata enforces enum construction constraints', () {
     final interpreter = D4rt();
     interpreter.registerBridgedClass(
-        BridgedClass(
-          nativeType: NativeLabel,
-          name: 'NativeLabel',
-          canBeUsedAsMixin: true,
-          enumMixinMetadata: EnumMixinMetadata(
-              typeMetadata: EnumTypeMetadata(), constraints: ['String']),
+      BridgedClass(
+        nativeType: NativeLabel,
+        name: 'NativeLabel',
+        canBeUsedAsMixin: true,
+        enumMixinMetadata: EnumMixinMetadata(
+          typeMetadata: EnumTypeMetadata(),
+          constraints: ['String'],
         ),
-        'package:host/mixin.dart');
+      ),
+      'package:host/mixin.dart',
+    );
     expect(
-        () => interpreter.execute(
-            source:
-                "import 'package:host/mixin.dart'; enum E with NativeLabel { a } main()=>E.a;"),
-        throwsA(anything));
+      () => interpreter.execute(
+        source:
+            "import 'package:host/mixin.dart'; enum E with NativeLabel { a } main()=>E.a;",
+      ),
+      throwsA(anything),
+    );
   });
 }

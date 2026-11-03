@@ -106,11 +106,7 @@ class D4rt {
     String? sourceUri,
   }) {
     _bridgedEnumDefinitions.add({library: definition});
-    bridgeManager.registerEnum(
-      definition,
-      library,
-      sourceUri: sourceUri,
-    );
+    bridgeManager.registerEnum(definition, library, sourceUri: sourceUri);
   }
 
   /// Registers a bridged class definition for use in interpreted code.
@@ -132,11 +128,7 @@ class D4rt {
   }) {
     _bridgedClases.add({library: definition});
     _bridgedDefLookupByType[definition.nativeType] = definition;
-    bridgeManager.registerClass(
-      definition,
-      library,
-      sourceUri: sourceUri,
-    );
+    bridgeManager.registerClass(definition, library, sourceUri: sourceUri);
   }
 
   /// Registers a top-level native function for use in interpreted code.
@@ -380,13 +372,16 @@ class D4rt {
         .where((e) => e.diagnosticCode.severity == DiagnosticSeverity.ERROR)
         .toList();
     if (errors.isNotEmpty) {
-      final errorMessages = errors.map((e) {
-        final location = result.lineInfo.getLocation(e.offset);
-        return "- ${e.message} (line ${location.lineNumber}, column ${location.columnNumber})";
-      }).join("\n");
+      final errorMessages = errors
+          .map((e) {
+            final location = result.lineInfo.getLocation(e.offset);
+            return "- ${e.message} (line ${location.lineNumber}, column ${location.columnNumber})";
+          })
+          .join("\n");
       Logger.error("Parsing errors for the direct source:\n$errorMessages");
       throw SourceCodeException(
-          'Fatal parsing errors for the direct source:\n$errorMessages');
+        'Fatal parsing errors for the direct source:\n$errorMessages',
+      );
     }
 
     final script = PrecompiledScript(
@@ -429,11 +424,13 @@ class D4rt {
   }) {
     if (args != null && positionalArgs != null) {
       throw ArgumentError(
-          'Cannot use both "args" (deprecated) and "positionalArgs". Use only "positionalArgs".');
+        'Cannot use both "args" (deprecated) and "positionalArgs". Use only "positionalArgs".',
+      );
     }
     if (args != null) {
       Logger.warn(
-          '[D4rt.executeCompiled] The "args" parameter is deprecated. Use "positionalArgs" instead.');
+        '[D4rt.executeCompiled] The "args" parameter is deprecated. Use "positionalArgs" instead.',
+      );
       positionalArgs = [args];
     }
 
@@ -491,11 +488,13 @@ class D4rt {
     // Handle deprecated args parameter
     if (args != null && positionalArgs != null) {
       throw ArgumentError(
-          'Cannot use both "args" (deprecated) and "positionalArgs". Use only "positionalArgs".');
+        'Cannot use both "args" (deprecated) and "positionalArgs". Use only "positionalArgs".',
+      );
     }
     if (args != null) {
       Logger.warn(
-          '[D4rt.execute] The "args" parameter is deprecated. Use "positionalArgs" instead.');
+        '[D4rt.execute] The "args" parameter is deprecated. Use "positionalArgs" instead.',
+      );
       positionalArgs = [args];
     }
 
@@ -513,7 +512,8 @@ class D4rt {
 
     if (library != null) {
       Logger.debug(
-          "[D4rt.execute] Attempting to load the $name source via ModuleLoader for URI: $library");
+        "[D4rt.execute] Attempting to load the $name source via ModuleLoader for URI: $library",
+      );
 
       if (!moduleLoader.sources.containsKey(library.toString()) &&
           !allowFileSystemImports) {
@@ -525,23 +525,27 @@ class D4rt {
 
       if (source?.isNotEmpty ?? false) {
         Logger.warn(
-            "[D4rt.execute] The 'source' parameter is not empty but 'library' ($library) is used to load from sources. The 'source' string will be ignored.");
+          "[D4rt.execute] The 'source' parameter is not empty but 'library' ($library) is used to load from sources. The 'source' string will be ignored.",
+        );
       }
 
       late final LoadedModule loadedRootModule;
       try {
         loadedRootModule = moduleLoader.loadModule(Uri.parse(library));
         Logger.debug(
-            "[D4rt.execute] $name source loaded and parsed successfully via ModuleLoader for $library.");
+          "[D4rt.execute] $name source loaded and parsed successfully via ModuleLoader for $library.",
+        );
       } catch (e) {
         if (deadline?.expired ?? false) throw deadline!.exception;
         Logger.error(
-            "[D4rt.execute] Failed to load $name source $library via ModuleLoader: $e");
+          "[D4rt.execute] Failed to load $name source $library via ModuleLoader: $e",
+        );
         if (e is SourceCodeException || e is RuntimeError) {
           rethrow;
         } else {
           throw Exception(
-              "Unexpected failure to load initial module $library: $e");
+            "Unexpected failure to load initial module $library: $e",
+          );
         }
       }
 
@@ -558,7 +562,8 @@ class D4rt {
       throw RuntimeError('No source provided for execution.');
     }
     Logger.debug(
-        "[D4rt.execute] Parsing direct source string (AST cache: $enableAstCache)...");
+      "[D4rt.execute] Parsing direct source string (AST cache: $enableAstCache)...",
+    );
 
     late final CompilationUnit compilationUnit;
     if (enableAstCache && _astCache.containsKey(source)) {
@@ -576,10 +581,12 @@ class D4rt {
           .toList();
 
       if (errors.isNotEmpty) {
-        final errorMessages = errors.map((e) {
-          final location = parseResult.lineInfo.getLocation(e.offset);
-          return 'Line ${location.lineNumber}, Column ${location.columnNumber}: ${e.message}';
-        }).join("\n");
+        final errorMessages = errors
+            .map((e) {
+              final location = parseResult.lineInfo.getLocation(e.offset);
+              return 'Line ${location.lineNumber}, Column ${location.columnNumber}: ${e.message}';
+            })
+            .join("\n");
         throw SourceCodeException('Parsing errors:\n$errorMessages');
       }
 
@@ -638,8 +645,9 @@ class D4rt {
     bool allowFileSystemImports = false,
     void Function(String)? onPrint,
   }) {
-    final Environment executionEnvironment =
-        Environment(enclosing: moduleLoader.globalEnvironment);
+    final Environment executionEnvironment = Environment(
+      enclosing: moduleLoader.globalEnvironment,
+    );
     Logger.debug("[execute] Starting Pass 1: Declaration");
     final declarationVisitor = DeclarationVisitor(executionEnvironment);
     for (final declaration in compilationUnit.declarations) {
@@ -648,27 +656,32 @@ class D4rt {
     Logger.debug("[execute] Finished Pass 1: Declaration");
 
     final visitor = _visitor = InterpreterVisitor(
-        globalEnvironment: executionEnvironment,
-        moduleLoader: moduleLoader,
-        initiallibrary: libraryUri ??
-            (allowFileSystemImports && basePath != null
-                ? basePathDirectoryUri(basePath)
-                : null),
-        deadline: deadline,
-        steps: moduleLoader.steps,
-        onPrint: onPrint ?? this.onPrint);
+      globalEnvironment: executionEnvironment,
+      moduleLoader: moduleLoader,
+      initiallibrary:
+          libraryUri ??
+          (allowFileSystemImports && basePath != null
+              ? basePathDirectoryUri(basePath)
+              : null),
+      deadline: deadline,
+      steps: moduleLoader.steps,
+      onPrint: onPrint ?? this.onPrint,
+    );
     try {
       Logger.debug(" [execute] Starting Pass 2: Interpretation");
       Logger.debug(
-          " [execute] Processing directives (imports, exports, etc.)...");
+        " [execute] Processing directives (imports, exports, etc.)...",
+      );
       for (final directive in compilationUnit.directives) {
         if (directive is ImportDirective) {
           Logger.debug(
-              " [execute]   - Processing ImportDirective: ${directive.uri.stringValue}");
+            " [execute]   - Processing ImportDirective: ${directive.uri.stringValue}",
+          );
           visitor.visitImportDirective(directive);
         } else {
           Logger.debug(
-              " [execute]   - Skipping directive of type: ${directive.runtimeType}");
+            " [execute]   - Skipping directive of type: ${directive.runtimeType}",
+          );
         }
       }
       Logger.debug(" [execute] Finished processing directives.");
@@ -691,7 +704,8 @@ class D4rt {
               if (deadline?.expired ?? false) throw deadline!.exception;
               if (e is ExecutionLimitException) rethrow;
               Logger.warn(
-                  " [execute] Warning while processing extension '${declaration.name}': $e");
+                " [execute] Warning while processing extension '${declaration.name}': $e",
+              );
             }
           }
         }
@@ -748,7 +762,8 @@ class D4rt {
       final functionCallable = executionEnvironment.get(name);
       if (functionCallable is! Callable) {
         throw Exception(
-            "No callable '$name' function found in the test source code.");
+          "No callable '$name' function found in the test source code.",
+        );
       }
 
       List<Object?> interpreterArgs = positionalArgs ?? [];
@@ -760,18 +775,25 @@ class D4rt {
           namedArgs?.isEmpty != false) {
         interpreterArgs = [<String>[]];
         Logger.debug(
-            "[execute] 'main' expects arguments but none provided. Passing empty list.");
+          "[execute] 'main' expects arguments but none provided. Passing empty list.",
+        );
       }
 
       if (interpreterArgs.length > expectedArity) {
         throw RuntimeError(
-            "'$name' function accepts at most $expectedArity positional argument(s), but ${interpreterArgs.length} were provided.");
+          "'$name' function accepts at most $expectedArity positional argument(s), but ${interpreterArgs.length} were provided.",
+        );
       }
 
       Logger.debug(
-          "[execute] Calling '$name' with ${interpreterArgs.length} positional and ${interpreterNamedArgs.length} named arguments");
+        "[execute] Calling '$name' with ${interpreterArgs.length} positional and ${interpreterNamedArgs.length} named arguments",
+      );
       functionResult = invokeFunctionFromHost(
-          functionCallable, visitor, interpreterArgs, interpreterNamedArgs);
+        functionCallable,
+        visitor,
+        interpreterArgs,
+        interpreterNamedArgs,
+      );
       Logger.debug(" [execute] Finished Pass 2: Interpretation");
     } on InternalInterpreterException catch (e) {
       if (deadline?.expired ?? false) throw deadline!.exception;
@@ -797,22 +819,29 @@ class D4rt {
     if (resultValue is Future) {
       _hasExecutedOnce = true;
       if (deadline == null) {
-        return resultValue
-            .then((value) => _bridgeInterpreterValueToNative(value));
+        return resultValue.then(
+          (value) => _bridgeInterpreterValueToNative(value),
+        );
       }
       // Check the monotonic clock on completion, not just in the timer callback:
       // a native Future can finish before an overdue timer is delivered.
-      final bridgedResult = resultValue.then((value) {
-        if (deadline.expired) throw deadline.exception;
-        return _bridgeInterpreterValueToNative(value);
-      }, onError: (Object error, StackTrace stackTrace) {
-        if (deadline.expired) throw deadline.exception;
-        Error.throwWithStackTrace(error, stackTrace);
-      });
-      return bridgedResult.timeout(deadline.remaining, onTimeout: () {
-        deadline.expire();
-        throw deadline.exception;
-      });
+      final bridgedResult = resultValue.then(
+        (value) {
+          if (deadline.expired) throw deadline.exception;
+          return _bridgeInterpreterValueToNative(value);
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (deadline.expired) throw deadline.exception;
+          Error.throwWithStackTrace(error, stackTrace);
+        },
+      );
+      return bridgedResult.timeout(
+        deadline.remaining,
+        onTimeout: () {
+          deadline.expire();
+          throw deadline.exception;
+        },
+      );
     }
     if (deadline?.expired ?? false) throw deadline!.exception;
     _hasExecutedOnce = true;
@@ -925,7 +954,8 @@ class D4rt {
   }) {
     if (_visitor == null || !_hasExecutedOnce) {
       throw RuntimeError(
-          'eval() requires an existing execution context. Call execute() first.');
+        'eval() requires an existing execution context. Call execute() first.',
+      );
     }
 
     if (timeout != null || maxSteps != null || onPrint != null) {
@@ -975,7 +1005,8 @@ class D4rt {
     }
 
     // Try wrapping as expression to get return value
-    final wrappedSource = '''
+    final wrappedSource =
+        '''
       dynamic __eval__() {
         return $expression;
       }
@@ -1018,15 +1049,17 @@ class D4rt {
       Logger.debug("[D4rt.eval] Result: $bridgedResult");
 
       if (bridgedResult is Future) {
-        return bridgedResult
-            .then((value) => _bridgeInterpreterValueToNative(value));
+        return bridgedResult.then(
+          (value) => _bridgeInterpreterValueToNative(value),
+        );
       }
 
       return bridgedResult;
     }
 
     // Try parsing as a statement (no return value expected)
-    final statementSource = '''
+    final statementSource =
+        '''
       void __eval__() {
         $expression
       }
@@ -1068,10 +1101,14 @@ class D4rt {
     }
 
     // All parsing attempts failed
-    final errorMessages = declErrors.map((e) {
-      final location = declarationParseResult.lineInfo.getLocation(e.offset);
-      return "- ${e.message} (line ${location.lineNumber}, column ${location.columnNumber})";
-    }).join("\n");
+    final errorMessages = declErrors
+        .map((e) {
+          final location = declarationParseResult.lineInfo.getLocation(
+            e.offset,
+          );
+          return "- ${e.message} (line ${location.lineNumber}, column ${location.columnNumber})";
+        })
+        .join("\n");
     throw SourceCodeException('Failed to parse expression:\n$errorMessages');
   }
 
@@ -1092,7 +1129,8 @@ class D4rt {
   ]) {
     if (_interpretedInstance == null) {
       throw RuntimeError(
-          "No interpreted instance found. Call setInterpretedInstance first.");
+        "No interpreted instance found. Call setInterpretedInstance first.",
+      );
     }
     if (_visitor == null) {
       throw RuntimeError("No visitor found. Call setVisitor first.");
@@ -1114,23 +1152,32 @@ class D4rt {
             .map((v) => _bridgeNativeValueToInterpreter(v, globalEnv))
             .toList();
 
-        final interpreterNamedArgs = namedArgs.map((key, value) =>
-            MapEntry(key, _bridgeNativeValueToInterpreter(value, globalEnv)));
-        return _tryFunction(() {
-          return interpretedFunction!
-              .bind(instance)
-              .call(_visitor!, interpreterPositionalArgs, interpreterNamedArgs);
-        }, "Error invoking interpreted Method or getter '$name' on '${klass.name}'");
+        final interpreterNamedArgs = namedArgs.map(
+          (key, value) =>
+              MapEntry(key, _bridgeNativeValueToInterpreter(value, globalEnv)),
+        );
+        return _tryFunction(
+          () {
+            return interpretedFunction!
+                .bind(instance)
+                .call(
+                  _visitor!,
+                  interpreterPositionalArgs,
+                  interpreterNamedArgs,
+                );
+          },
+          "Error invoking interpreted Method or getter '$name' on '${klass.name}'",
+        );
       }
 
       final bridgedSuperclass = instance is List
           ? globalEnv.get('List') as BridgedClass
           : instance is Map
-              ? globalEnv.get('Map') as BridgedClass
-              : klass.findBridgedSuperclassDefiningInstanceMethod(name) ??
-                  klass.findBridgedSuperclassDefiningInstanceGetter(name) ??
-                  klass.findBridgedSuperclassDefiningInstanceSetter(name) ??
-                  klass.bridgedSuperclass;
+          ? globalEnv.get('Map') as BridgedClass
+          : klass.findBridgedSuperclassDefiningInstanceMethod(name) ??
+                klass.findBridgedSuperclassDefiningInstanceGetter(name) ??
+                klass.findBridgedSuperclassDefiningInstanceSetter(name) ??
+                klass.bridgedSuperclass;
       final nativeSuperObject = instance is List || instance is Map
           ? instance
           : instance.bridgedSuperObject;
@@ -1139,74 +1186,113 @@ class D4rt {
         final interpreterPositionalArgs = positionalArgs
             .map((v) => _bridgeNativeValueToInterpreter(v, globalEnv))
             .toList();
-        final interpreterNamedArgs = namedArgs.map((key, value) =>
-            MapEntry(key, _bridgeNativeValueToInterpreter(value, globalEnv)));
+        final interpreterNamedArgs = namedArgs.map(
+          (key, value) =>
+              MapEntry(key, _bridgeNativeValueToInterpreter(value, globalEnv)),
+        );
 
         if (nativeSuperObject != null) {
-          final methodAdapter =
-              bridgedSuperclass.findInstanceMethodAdapter(name);
+          final methodAdapter = bridgedSuperclass.findInstanceMethodAdapter(
+            name,
+          );
 
           if (methodAdapter != null) {
-            return _tryFunction(() {
-              return methodAdapter.call(_visitor!, nativeSuperObject,
-                  interpreterPositionalArgs, interpreterNamedArgs);
-            }, "Error invoking bridged method '$name' on superclass '${bridgedSuperclass.name}'");
+            return _tryFunction(
+              () {
+                return methodAdapter.call(
+                  _visitor!,
+                  nativeSuperObject,
+                  interpreterPositionalArgs,
+                  interpreterNamedArgs,
+                );
+              },
+              "Error invoking bridged method '$name' on superclass '${bridgedSuperclass.name}'",
+            );
           }
 
-          final getterAdapter =
-              bridgedSuperclass.findInstanceGetterAdapter(name);
+          final getterAdapter = bridgedSuperclass.findInstanceGetterAdapter(
+            name,
+          );
           if (getterAdapter != null) {
-            return _tryFunction(() {
-              return getterAdapter.call(_visitor!, nativeSuperObject);
-            }, "Error invoking bridged getter '$name' on superclass '${bridgedSuperclass.name}'");
+            return _tryFunction(
+              () {
+                return getterAdapter.call(_visitor!, nativeSuperObject);
+              },
+              "Error invoking bridged getter '$name' on superclass '${bridgedSuperclass.name}'",
+            );
           }
-          final setterAdapter =
-              bridgedSuperclass.findInstanceSetterAdapter(name);
+          final setterAdapter = bridgedSuperclass.findInstanceSetterAdapter(
+            name,
+          );
           if (setterAdapter != null) {
-            return _tryFunction(() {
-              setterAdapter.call(
-                  _visitor!, nativeSuperObject, interpreterPositionalArgs[0]);
-              return null;
-            }, "Error invoking bridged setter '$name' on superclass '${bridgedSuperclass.name}'");
+            return _tryFunction(
+              () {
+                setterAdapter.call(
+                  _visitor!,
+                  nativeSuperObject,
+                  interpreterPositionalArgs[0],
+                );
+                return null;
+              },
+              "Error invoking bridged setter '$name' on superclass '${bridgedSuperclass.name}'",
+            );
           }
         }
 
-        final staticMethodAdapter =
-            bridgedSuperclass.findStaticMethodAdapter(name);
+        final staticMethodAdapter = bridgedSuperclass.findStaticMethodAdapter(
+          name,
+        );
         if (staticMethodAdapter != null) {
-          return _tryFunction(() {
-            return staticMethodAdapter.call(
-                _visitor!, interpreterPositionalArgs, interpreterNamedArgs);
-          }, "Error invoking bridged static method '$name' on superclass '${bridgedSuperclass.name}'");
+          return _tryFunction(
+            () {
+              return staticMethodAdapter.call(
+                _visitor!,
+                interpreterPositionalArgs,
+                interpreterNamedArgs,
+              );
+            },
+            "Error invoking bridged static method '$name' on superclass '${bridgedSuperclass.name}'",
+          );
         }
 
-        final getterStaticAdapter =
-            bridgedSuperclass.findStaticGetterAdapter(name);
+        final getterStaticAdapter = bridgedSuperclass.findStaticGetterAdapter(
+          name,
+        );
         if (getterStaticAdapter != null) {
-          return _tryFunction(() {
-            return getterStaticAdapter.call(_visitor!);
-          }, "Error invoking bridged static getter '$name' on superclass '${bridgedSuperclass.name}'");
+          return _tryFunction(
+            () {
+              return getterStaticAdapter.call(_visitor!);
+            },
+            "Error invoking bridged static getter '$name' on superclass '${bridgedSuperclass.name}'",
+          );
         }
 
-        final staticSetterAdapter =
-            bridgedSuperclass.findStaticSetterAdapter(name);
+        final staticSetterAdapter = bridgedSuperclass.findStaticSetterAdapter(
+          name,
+        );
         if (staticSetterAdapter != null) {
-          return _tryFunction(() {
-            staticSetterAdapter.call(_visitor!, interpreterPositionalArgs[0]);
-            return null;
-          }, "Error invoking bridged staticsetter '$name' on superclass '${bridgedSuperclass.name}'");
+          return _tryFunction(
+            () {
+              staticSetterAdapter.call(_visitor!, interpreterPositionalArgs[0]);
+              return null;
+            },
+            "Error invoking bridged staticsetter '$name' on superclass '${bridgedSuperclass.name}'",
+          );
         }
       }
 
       throw RuntimeError(
-          'Method or getter "$name" not found on instance of class "${klass.name}" or its bridged superclass.');
+        'Method or getter "$name" not found on instance of class "${klass.name}" or its bridged superclass.',
+      );
     }
 
     return result();
   }
 
   Object? _bridgeNativeValueToInterpreter(
-      Object? nativeValue, Environment globalEnv) {
+    Object? nativeValue,
+    Environment globalEnv,
+  ) {
     if (nativeValue == null ||
         nativeValue is String ||
         nativeValue is num ||
@@ -1228,7 +1314,8 @@ class D4rt {
         return BridgedInstance(bridgedClass, nativeValue);
       } else {
         Logger.warn(
-            "BridgedClass '${bridgedDef.name}' not found in global env during bridging.");
+          "BridgedClass '${bridgedDef.name}' not found in global env during bridging.",
+        );
         return nativeValue;
       }
     }
@@ -1238,7 +1325,8 @@ class D4rt {
     }
 
     Logger.warn(
-        "Passing unknown native type $nativeType directly to interpreter.");
+      "Passing unknown native type $nativeType directly to interpreter.",
+    );
     return nativeValue;
   }
 
@@ -1264,7 +1352,12 @@ class D4rt {
     );
     return _tryFunction(
       () => invokeFunctionFromHost(
-          f, visitor, interpreterArgs, interpreterNamedArgs, typeArguments),
+        f,
+        visitor,
+        interpreterArgs,
+        interpreterNamedArgs,
+        typeArguments,
+      ),
       "Error invoking interpreted function '$f'",
     );
   }

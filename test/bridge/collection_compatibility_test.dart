@@ -81,7 +81,7 @@ List<Object?> _fieldProperties(Object value) {
       value.length,
       value.reversed.toList(),
       value.isEmpty,
-      value.isNotEmpty
+      value.isNotEmpty,
     ];
   }
   final map = value as Map<String, int>;
@@ -91,7 +91,7 @@ List<Object?> _fieldProperties(Object value) {
     map.entries.map((entry) => [entry.key, entry.value]).toList(),
     map.length,
     map.isEmpty,
-    map.isNotEmpty
+    map.isNotEmpty,
   ];
 }
 
@@ -144,9 +144,11 @@ class _VirtualMap extends MapView<String, int> {
   @override
   Iterable<int> get values => [88];
   @override
-  int update(String key, int Function(int) update,
-          {int Function()? ifAbsent}) =>
-      key == 'virtual' ? update(30) : ifAbsent!();
+  int update(
+    String key,
+    int Function(int) update, {
+    int Function()? ifAbsent,
+  }) => key == 'virtual' ? update(30) : ifAbsent!();
   @override
   Map<RK, RV> map<RK, RV>(MapEntry<RK, RV> Function(String, int) transform) =>
       Map.fromEntries([transform('virtual', 50)]);
@@ -174,7 +176,7 @@ List<Object?> _readVirtualList(List<int> list) {
     list.iterator.moveNext(),
     list.hashCode,
     _equalsObject(list, 'virtual-list'),
-    list.getRange(0, 1).toList()
+    list.getRange(0, 1).toList(),
   ];
 }
 
@@ -188,7 +190,7 @@ List<Object?> _readVirtualMap(Map<String, int> map) {
     map.update('virtual', (value) => value + 2),
     map.update('missing', (value) => value, ifAbsent: () => 70),
     map.entries.map((entry) => [entry.key, entry.value]).toList(),
-    map.map<String, int>((key, value) => MapEntry(key, value + 1))
+    map.map<String, int>((key, value) => MapEntry(key, value + 1)),
   ];
 }
 
@@ -199,16 +201,18 @@ bool _isNullableIntMap(Object value) => value is Map<String, int?>;
 
 void main() {
   test(
-      'interpreter-derived collections keep compatibility without retyping host inputs',
-      () {
-    final interpreter = D4rt();
-    final host = <String>['10', '20', '30'];
-    interpreter.registertopLevelFunction('source', (v, a, n, t) => host);
-    interpreter.registertopLevelFunction('retain', (v, a, n, t) {
-      expect(v.environment.get('calls'), 0);
-      return a.single;
-    });
-    final observed = interpreter.execute(source: '''
+    'interpreter-derived collections keep compatibility without retyping host inputs',
+    () {
+      final interpreter = D4rt();
+      final host = <String>['10', '20', '30'];
+      interpreter.registertopLevelFunction('source', (v, a, n, t) => host);
+      interpreter.registertopLevelFunction('retain', (v, a, n, t) {
+        expect(v.environment.get('calls'), 0);
+        return a.single;
+      });
+      final observed = interpreter.execute(
+        source:
+            '''
 $_genericClasses
 int calls=0;
 List<int> parsed() {
@@ -230,61 +234,80 @@ main() {
   return [list,direct[0],child[1],list is List<int>,list is List<String>,calls,
     parsedSet().toList(),parsedMap(),fromSet(),fromMap()];
 }
-''');
-    final oracle = host.map(int.parse).toList();
-    expect(observed, [
-      oracle,
-      oracle[0],
-      oracle[1],
-      true,
-      false,
-      host.length,
-      host.map(int.parse).toSet().toList(),
-      oracle.asMap(),
-      host.map(int.parse).toSet().toList(),
-      oracle
-    ]);
-    expect(host, ['10', '20', '30']);
+''',
+      );
+      final oracle = host.map(int.parse).toList();
+      expect(observed, [
+        oracle,
+        oracle[0],
+        oracle[1],
+        true,
+        false,
+        host.length,
+        host.map(int.parse).toSet().toList(),
+        oracle.asMap(),
+        host.map(int.parse).toSet().toList(),
+        oracle,
+      ]);
+      expect(host, ['10', '20', '30']);
 
-    for (final input in <Object>[
-      <String>[],
-      <String>['10'],
-      <int?>[]
-    ]) {
-      final owner = D4rt();
-      owner.registertopLevelFunction('source', (v, a, n, t) => input);
-      for (final expression in [
-        'source()',
-        'source().where((v) => true).toList()'
+      for (final input in <Object>[
+        <String>[],
+        <String>['10'],
+        <int?>[],
       ]) {
-        expect(() => owner.execute(source: '''
+        final owner = D4rt();
+        owner.registertopLevelFunction('source', (v, a, n, t) => input);
+        for (final expression in [
+          'source()',
+          'source().where((v) => true).toList()',
+        ]) {
+          expect(
+            () => owner.execute(
+              source:
+                  '''
 List<int> read() { return $expression; }
 main() => read();
-'''), throwsA(isA<RuntimeError>()));
+''',
+            ),
+            throwsA(isA<RuntimeError>()),
+          );
+        }
       }
-    }
-  });
+    },
+  );
   test(
-      'empty derived collections keep compatibility while declared wrong empties fail',
-      () {
-    expect(D4rt().execute(source: '''
+    'empty derived collections keep compatibility while declared wrong empties fail',
+    () {
+      expect(
+        D4rt().execute(
+          source: '''
 import 'dart:collection';
 main() {
   final derived=<String>[].map((s) => int.parse(s)).toList();
   final view=UnmodifiableListView<int>(derived);
   return [derived is List<int>,(derived as List<int>).length,view.length];
 }
-'''), [true, 0, 0]);
-    expect(() => D4rt().execute(source: '''
+''',
+        ),
+        [true, 0, 0],
+      );
+      expect(
+        () => D4rt().execute(
+          source: '''
 List<int> read() { return <String>[].where((s) => true).toList(); }
 main() => read();
-'''), throwsA(isA<RuntimeError>()));
-  });
+''',
+        ),
+        throwsA(isA<RuntimeError>()),
+      );
+    },
+  );
 
   test(
-      'field-backed collection getters keep state across interpreted and native access',
-      () {
-    const declarations = '''
+    'field-backed collection getters keep state across interpreted and native access',
+    () {
+      const declarations = '''
 import 'dart:collection';
 class FieldMap extends MapView<String,int> {
   FieldMap() : super(<String,int>{'backing':1});
@@ -317,29 +340,37 @@ main(String kind) {
   return [properties,observe(value),value];
 }
 ''';
-    final cases = <String, Object>{
-      'map': _FieldMap(),
-      'inherited-map': _InheritedFieldMap(),
-      'list': _FieldList(),
-      'inherited-list': _InheritedFieldList(),
-    };
-    for (final entry in cases.entries) {
-      final interpreter = D4rt();
-      Object? callbackReceiver;
-      interpreter.registertopLevelFunction('observe', (v, a, n, t) {
-        callbackReceiver = a.single;
-        return _fieldProperties(a.single!);
-      });
-      final result = interpreter
-          .execute(source: declarations, positionalArgs: [entry.key]) as List;
-      final oracle = _fieldProperties(entry.value);
-      expect(result[0], oracle, reason: 'interpreted ${entry.key}');
-      expect(result[1], oracle, reason: 'registered callback ${entry.key}');
-      expect(result[2], same(callbackReceiver));
-      expect(_fieldProperties(result[2]), oracle,
-          reason: 'execute return ${entry.key}');
-    }
-  });
+      final cases = <String, Object>{
+        'map': _FieldMap(),
+        'inherited-map': _InheritedFieldMap(),
+        'list': _FieldList(),
+        'inherited-list': _InheritedFieldList(),
+      };
+      for (final entry in cases.entries) {
+        final interpreter = D4rt();
+        Object? callbackReceiver;
+        interpreter.registertopLevelFunction('observe', (v, a, n, t) {
+          callbackReceiver = a.single;
+          return _fieldProperties(a.single!);
+        });
+        final result =
+            interpreter.execute(
+                  source: declarations,
+                  positionalArgs: [entry.key],
+                )
+                as List;
+        final oracle = _fieldProperties(entry.value);
+        expect(result[0], oracle, reason: 'interpreted ${entry.key}');
+        expect(result[1], oracle, reason: 'registered callback ${entry.key}');
+        expect(result[2], same(callbackReceiver));
+        expect(
+          _fieldProperties(result[2]),
+          oracle,
+          reason: 'execute return ${entry.key}',
+        );
+      }
+    },
+  );
 
   test('late field-backed native getter initializes once only on access', () {
     const declarations = '''
@@ -370,41 +401,48 @@ main() => retain(LazyKeys());
     expect(oracle.reads, 1);
     expect(returned.keys.toList(), oracle.keys.toList());
     expect(
-        (returned as InterpretedInstance)
-            .get('keys', visitor: interpreter.visitor!),
-        ['virtual']);
+      (returned as InterpretedInstance).get(
+        'keys',
+        visitor: interpreter.visitor!,
+      ),
+      ['virtual'],
+    );
     expect((returned as InterpretedInstance).get('reads'), oracle.reads);
   });
 
-  test('nested generic direct and subclass views retain declarations and casts',
-      () {
-    final nativeList = UnmodifiableListView<List<int>>(<List<int>>[
-      [7]
-    ]);
-    final nativeChild = _ListView<List<int>>(<List<int>>[
-      [7]
-    ]);
-    final nativeMap = UnmodifiableMapView<String, List<int>>({
-      'n': [7]
-    });
-    final nativeMapChild = _MapView<String, List<int>>({
-      'n': [7]
-    });
-    final oracle = [
-      for (final list in <Object>[nativeList, nativeChild])
-        [
-          list is List<List<int>>,
-          list is List<List<String>>,
-          (list as List<List<int>>)[0][0]
-        ],
-      for (final map in <Object>[nativeMap, nativeMapChild])
-        [
-          map is Map<String, List<int>>,
-          map is Map<String, List<String>>,
-          (map as Map<String, List<int>>)['n']![0]
-        ]
-    ];
-    expect(D4rt().execute(source: '''
+  test(
+    'nested generic direct and subclass views retain declarations and casts',
+    () {
+      final nativeList = UnmodifiableListView<List<int>>(<List<int>>[
+        [7],
+      ]);
+      final nativeChild = _ListView<List<int>>(<List<int>>[
+        [7],
+      ]);
+      final nativeMap = UnmodifiableMapView<String, List<int>>({
+        'n': [7],
+      });
+      final nativeMapChild = _MapView<String, List<int>>({
+        'n': [7],
+      });
+      final oracle = [
+        for (final list in <Object>[nativeList, nativeChild])
+          [
+            list is List<List<int>>,
+            list is List<List<String>>,
+            (list as List<List<int>>)[0][0],
+          ],
+        for (final map in <Object>[nativeMap, nativeMapChild])
+          [
+            map is Map<String, List<int>>,
+            map is Map<String, List<String>>,
+            (map as Map<String, List<int>>)['n']![0],
+          ],
+      ];
+      expect(
+        D4rt().execute(
+          source:
+              '''
 $_genericClasses
 main() {
   final a = UnmodifiableListView<List<int>>(<List<int>>[<int>[7]]);
@@ -416,34 +454,47 @@ main() {
     for (final map in [c,d])
     [map is Map<String,List<int>>, map is Map<String,List<String>>, (map as Map<String,List<int>>)['n'][0]]];
 }
-'''), oracle);
-    for (final expression in [
-      'a as List<List<String>>',
-      'c as Map<String,List<String>>'
-    ]) {
-      expect(() => D4rt().execute(source: '''
+''',
+        ),
+        oracle,
+      );
+      for (final expression in [
+        'a as List<List<String>>',
+        'c as Map<String,List<String>>',
+      ]) {
+        expect(
+          () => D4rt().execute(
+            source:
+                '''
 $_genericClasses
 main() {
   final a = Values<List<int>>(<List<int>>[<int>[7]]);
   final c = Entries<String,List<int>>(<String,List<int>>{'n': <int>[7]});
   return $expression;
 }
-'''), throwsA(isA<RuntimeError>()));
-    }
-  });
+''',
+          ),
+          throwsA(isA<RuntimeError>()),
+        );
+      }
+    },
+  );
 
   test(
-      'noncore host collections keep existing direct subclass and cast operations',
-      () {
-    final date = DateTime.utc(2025);
-    final interpreter = D4rt();
-    interpreter.registertopLevelFunction(
+    'noncore host collections keep existing direct subclass and cast operations',
+    () {
+      final date = DateTime.utc(2025);
+      final interpreter = D4rt();
+      interpreter.registertopLevelFunction(
         'sources',
         (v, a, n, t) => [
-              <DateTime>[date],
-              <String, DateTime>{'n': date}
-            ]);
-    final observed = interpreter.execute(source: '''
+          <DateTime>[date],
+          <String, DateTime>{'n': date},
+        ],
+      );
+      final observed = interpreter.execute(
+        source:
+            '''
 $_genericClasses
 main() {
   final input = sources();
@@ -456,39 +507,46 @@ main() {
     for (final value in [c,d,input[1]])
     [value is Map<String,DateTime>, value is Map<String,Duration>, (value as Map<String,DateTime>)['n']]];
 }
-''');
-    expect(observed, [
-      for (final value in <Object>[
-        UnmodifiableListView<DateTime>([date]),
-        _ListView<DateTime>([date]),
-        [date]
-      ])
-        [
-          value is List<DateTime>,
-          value is List<Duration>,
-          (value as List<DateTime>)[0]
-        ],
-      for (final value in <Object>[
-        UnmodifiableMapView<String, DateTime>({'n': date}),
-        _MapView<String, DateTime>({'n': date}),
-        {'n': date}
-      ])
-        [
-          value is Map<String, DateTime>,
-          value is Map<String, Duration>,
-          (value as Map<String, DateTime>)['n']
-        ]
-    ]);
-    expect(
+''',
+      );
+      expect(observed, [
+        for (final value in <Object>[
+          UnmodifiableListView<DateTime>([date]),
+          _ListView<DateTime>([date]),
+          [date],
+        ])
+          [
+            value is List<DateTime>,
+            value is List<Duration>,
+            (value as List<DateTime>)[0],
+          ],
+        for (final value in <Object>[
+          UnmodifiableMapView<String, DateTime>({'n': date}),
+          _MapView<String, DateTime>({'n': date}),
+          {'n': date},
+        ])
+          [
+            value is Map<String, DateTime>,
+            value is Map<String, Duration>,
+            (value as Map<String, DateTime>)['n'],
+          ],
+      ]);
+      expect(
         () => interpreter.execute(
-            source: 'main() => sources()[0] as List<Duration>;'),
-        throwsA(isA<RuntimeError>()));
-  });
+          source: 'main() => sources()[0] as List<Duration>;',
+        ),
+        throwsA(isA<RuntimeError>()),
+      );
+    },
+  );
 
   test(
-      'interpreted generic instances stay interpreted rather than fake native types',
-      () {
-    expect(D4rt().execute(source: '''
+    'interpreted generic instances stay interpreted rather than fake native types',
+    () {
+      expect(
+        D4rt().execute(
+          source:
+              '''
 $_genericClasses
 class Box<T> { Box(this.value); final T value; }
 main() {
@@ -501,134 +559,166 @@ main() {
     (c as Map<String,Box<int>>)['n'].value, d['n'].value,
     identical(a[0], b[0]), b is List<Box<int>>, b is List<Box<String>>];
 }
-'''), [7, 7, 7, 7, true, true, false]);
-  });
+''',
+        ),
+        [7, 7, 7, 7, true, true, false],
+      );
+    },
+  );
 
   test(
-      'Null and Never source subtyping agrees with native direct and subclass views',
-      () {
-    final native = [
-      UnmodifiableListView<Null>(<Null>[null]),
-      _ListView<Null>(<Null>[null]),
-      UnmodifiableListView<int>(<Never>[]),
-      _ListView<int>(<Never>[]),
-      UnmodifiableListView<int?>(<Null>[null]),
-      _ListView<int?>(<Null>[null])
-    ];
-    expect(D4rt().execute(source: '''
+    'Null and Never source subtyping agrees with native direct and subclass views',
+    () {
+      final native = [
+        UnmodifiableListView<Null>(<Null>[null]),
+        _ListView<Null>(<Null>[null]),
+        UnmodifiableListView<int>(<Never>[]),
+        _ListView<int>(<Never>[]),
+        UnmodifiableListView<int?>(<Null>[null]),
+        _ListView<int?>(<Null>[null]),
+      ];
+      expect(
+        D4rt().execute(
+          source:
+              '''
 $_genericClasses
 main() => [
   for(final value in [UnmodifiableListView<Null>(<Null>[null]), Values<Null>(<Null>[null]),
     UnmodifiableListView<int>(<Never>[]), Values<int>(<Never>[]),
     UnmodifiableListView<int?>(<Null>[null]), Values<int?>(<Null>[null])])
   [value.length, value is List<Null>, value is List<int>, value is List<int?>]];
-'''), [
-      for (final value in native)
+''',
+        ),
         [
-          value.length,
-          value is List<Null>,
-          value is List<int>,
-          _isNullableIntList(value)
-        ]
-    ]);
-    final nativeMaps = [
-      UnmodifiableMapView<String, Null>(<String, Null>{'n': null}),
-      _MapView<String, Null>(<String, Null>{'n': null}),
-      UnmodifiableMapView<String, int>(<Never, Never>{}),
-      _MapView<String, int>(<Never, Never>{})
-    ];
-    expect(D4rt().execute(source: '''
+          for (final value in native)
+            [
+              value.length,
+              value is List<Null>,
+              value is List<int>,
+              _isNullableIntList(value),
+            ],
+        ],
+      );
+      final nativeMaps = [
+        UnmodifiableMapView<String, Null>(<String, Null>{'n': null}),
+        _MapView<String, Null>(<String, Null>{'n': null}),
+        UnmodifiableMapView<String, int>(<Never, Never>{}),
+        _MapView<String, int>(<Never, Never>{}),
+      ];
+      expect(
+        D4rt().execute(
+          source:
+              '''
 $_genericClasses
 main() => [for(final value in [UnmodifiableMapView<String,Null>(<String,Null>{'n':null}), Entries<String,Null>(<String,Null>{'n':null}),
   UnmodifiableMapView<String,int>(<Never,Never>{}), Entries<String,int>(<Never,Never>{})])
   [value.length, value is Map<String,Null>, value is Map<String,int>, value is Map<String,int?>]];
-'''), [
-      for (final value in nativeMaps)
+''',
+        ),
         [
-          value.length,
-          value is Map<String, Null>,
-          value is Map<String, int>,
-          _isNullableIntMap(value)
-        ]
-    ]);
-    for (final constructor in ['UnmodifiableListView<int>', 'Values<int>']) {
-      expect(
+          for (final value in nativeMaps)
+            [
+              value.length,
+              value is Map<String, Null>,
+              value is Map<String, int>,
+              _isNullableIntMap(value),
+            ],
+        ],
+      );
+      for (final constructor in ['UnmodifiableListView<int>', 'Values<int>']) {
+        expect(
           () => D4rt().execute(
-              source: '$_genericClasses main() => $constructor(<Null>[]);'),
-          throwsA(isA<RuntimeError>()));
-    }
-  });
+            source: '$_genericClasses main() => $constructor(<Null>[]);',
+          ),
+          throwsA(isA<RuntimeError>()),
+        );
+      }
+    },
+  );
 
   test(
-      'host bottom and nullable sources preserve direct and subclass contracts',
-      () {
-    for (final input in <Object>[
-      <Never>[],
-      <Null>[null],
-      <int?>[],
-      <String>[],
-      <String>['1'],
-      <Never, Never>{},
-      <String, Null>{'n': null},
-      <String, int?>{},
-      <int, int>{},
-      <String, String>{},
-    ]) {
-      final interpreter = D4rt();
-      interpreter.registertopLevelFunction('source', (v, a, n, t) => input);
-      final list = input is List;
-      for (final subclass in [false, true]) {
-        final core = list
-            ? (subclass ? 'Values<int>' : 'UnmodifiableListView<int>')
-            : (subclass
-                ? 'Entries<String,int>'
-                : 'UnmodifiableMapView<String,int>');
-        final nullable = list
-            ? (subclass ? 'Values<int?>' : 'UnmodifiableListView<int?>')
-            : (subclass
-                ? 'Entries<String,int?>'
-                : 'UnmodifiableMapView<String,int?>');
-        if (list ? input is List<int> : input is Map<String, int>) {
-          final value = interpreter.execute(
-              source: '$_genericClasses main() => $core(source());');
-          expect(list ? value is List<int> : value is Map<String, int>, isTrue);
-        } else {
-          expect(
+    'host bottom and nullable sources preserve direct and subclass contracts',
+    () {
+      for (final input in <Object>[
+        <Never>[],
+        <Null>[null],
+        <int?>[],
+        <String>[],
+        <String>['1'],
+        <Never, Never>{},
+        <String, Null>{'n': null},
+        <String, int?>{},
+        <int, int>{},
+        <String, String>{},
+      ]) {
+        final interpreter = D4rt();
+        interpreter.registertopLevelFunction('source', (v, a, n, t) => input);
+        final list = input is List;
+        for (final subclass in [false, true]) {
+          final core = list
+              ? (subclass ? 'Values<int>' : 'UnmodifiableListView<int>')
+              : (subclass
+                    ? 'Entries<String,int>'
+                    : 'UnmodifiableMapView<String,int>');
+          final nullable = list
+              ? (subclass ? 'Values<int?>' : 'UnmodifiableListView<int?>')
+              : (subclass
+                    ? 'Entries<String,int?>'
+                    : 'UnmodifiableMapView<String,int?>');
+          if (list ? input is List<int> : input is Map<String, int>) {
+            final value = interpreter.execute(
+              source: '$_genericClasses main() => $core(source());',
+            );
+            expect(
+              list ? value is List<int> : value is Map<String, int>,
+              isTrue,
+            );
+          } else {
+            expect(
               () => interpreter.execute(
-                  source: '$_genericClasses main() => $core(source());'),
-              throwsA(isA<RuntimeError>()));
-        }
-        if (list ? input is List<int?> : input is Map<String, int?>) {
-          final value = interpreter.execute(
-              source: '$_genericClasses main() => $nullable(source());');
-          expect(
-              list ? value is List<int?> : value is Map<String, int?>, isTrue);
-          expect(
-              list ? value is List<int> : value is Map<String, int>, isFalse);
+                source: '$_genericClasses main() => $core(source());',
+              ),
+              throwsA(isA<RuntimeError>()),
+            );
+          }
+          if (list ? input is List<int?> : input is Map<String, int?>) {
+            final value = interpreter.execute(
+              source: '$_genericClasses main() => $nullable(source());',
+            );
+            expect(
+              list ? value is List<int?> : value is Map<String, int?>,
+              isTrue,
+            );
+            expect(
+              list ? value is List<int> : value is Map<String, int>,
+              isFalse,
+            );
+          }
         }
       }
-    }
-  });
+    },
+  );
 
-  test('MapView inherited operations use backing map despite index override',
-      () {
-    List<Object?> read(Map<String, int> value) {
-      final trace = <Object?>[];
-      value.forEach((key, item) => trace.add([key, item]));
-      return [
-        value['n'],
-        value.containsValue(1),
-        value.containsValue(11),
-        value.values.toList(),
-        value.entries.map((entry) => [entry.key, entry.value]).toList(),
-        trace,
-        value.map((key, item) => MapEntry(key, item + 1)),
-        value.cast<String, int>()['n'],
-        value.toString()
-      ];
-    }
+  test(
+    'MapView inherited operations use backing map despite index override',
+    () {
+      List<Object?> read(Map<String, int> value) {
+        final trace = <Object?>[];
+        value.forEach((key, item) => trace.add([key, item]));
+        return [
+          value['n'],
+          value.containsValue(1),
+          value.containsValue(11),
+          value.values.toList(),
+          value.entries.map((entry) => [entry.key, entry.value]).toList(),
+          trace,
+          value.map((key, item) => MapEntry(key, item + 1)),
+          value.cast<String, int>()['n'],
+          value.toString(),
+        ];
+      }
 
-    const source = '''
+      const source = '''
 import 'dart:collection';
 class Adjusted extends MapView<String,int> {
   Adjusted() : super(<String,int>{'n':1});
@@ -636,29 +726,38 @@ class Adjusted extends MapView<String,int> {
 }
 main() => Adjusted();
 ''';
-    final returned = D4rt().execute(source: source) as Map<String, int>;
-    expect(read(returned), read(_AdjustedMap({'n': 1})));
-    expect(D4rt().execute(source: '''
+      final returned = D4rt().execute(source: source) as Map<String, int>;
+      expect(read(returned), read(_AdjustedMap({'n': 1})));
+      expect(
+        D4rt().execute(
+          source: '''
 import 'dart:collection';
 class Adjusted extends MapView<String,int> {
   Adjusted() : super(<String,int>{'n':1});
   int? operator [](Object? key) => (super[key] ?? 0) + 10;
 }
 main() { final value = Adjusted(); return [value['n'], value.containsValue(1), value.containsValue(11), value.values.toList()]; }
-'''), [
-      11,
-      true,
-      false,
-      [1]
-    ]);
-  });
+''',
+        ),
+        [
+          11,
+          true,
+          false,
+          [1],
+        ],
+      );
+    },
+  );
 
-  test('native List virtual calls include callbacks generic and named paths',
-      () {
-    final interpreter = D4rt();
-    interpreter.registertopLevelFunction(
-        'inspect', (v, a, n, t) => _readVirtualList(a.single as List<int>));
-    const declarations = '''
+  test(
+    'native List virtual calls include callbacks generic and named paths',
+    () {
+      final interpreter = D4rt();
+      interpreter.registertopLevelFunction(
+        'inspect',
+        (v, a, n, t) => _readVirtualList(a.single as List<int>),
+      );
+      const declarations = '''
 import 'dart:collection';
 class Virtual extends UnmodifiableListView<int> {
   Virtual() : super(<int>[1,2]);
@@ -676,23 +775,27 @@ class Virtual extends UnmodifiableListView<int> {
   Iterable<int> getRange(int start,int end) => <int>[start+60,end+60];
 }
 ''';
-    final oracle = _readVirtualList(_VirtualList());
-    expect(
+      final oracle = _readVirtualList(_VirtualList());
+      expect(
         interpreter.execute(
-            source: '$declarations main() => inspect(Virtual());'),
-        oracle);
-    final value = interpreter.execute(
-        source: '$declarations main() => Virtual();') as List<int>;
-    expect(_readVirtualList(value), oracle);
-    void failCallback(int _) => throw StateError('callback');
-    expect(() => value.forEach(failCallback), throwsStateError);
-  });
+          source: '$declarations main() => inspect(Virtual());',
+        ),
+        oracle,
+      );
+      final value =
+          interpreter.execute(source: '$declarations main() => Virtual();')
+              as List<int>;
+      expect(_readVirtualList(value), oracle);
+      void failCallback(int _) => throw StateError('callback');
+      expect(() => value.forEach(failCallback), throwsStateError);
+    },
+  );
 
   test(
-      'native Map virtual callbacks and typed interpreted keys match native subclasses',
-      () {
-    final interpreter = D4rt();
-    const declarations = '''
+    'native Map virtual callbacks and typed interpreted keys match native subclasses',
+    () {
+      final interpreter = D4rt();
+      const declarations = '''
 import 'dart:collection';
 class Virtual extends MapView<String,int> {
   Virtual() : super(<String,int>{'backing':1});
@@ -708,18 +811,26 @@ class Keys extends MapView<String,int> {
   Iterable<String> get keys => <String>['virtual'];
 }
 ''';
-    interpreter.registertopLevelFunction('inspect',
-        (v, a, n, t) => _readVirtualMap(a.single as Map<String, int>));
-    expect(
+      interpreter.registertopLevelFunction(
+        'inspect',
+        (v, a, n, t) => _readVirtualMap(a.single as Map<String, int>),
+      );
+      expect(
         interpreter.execute(
-            source: '$declarations main() => inspect(Virtual());'),
-        _readVirtualMap(_VirtualMap()));
-    final keys = interpreter.execute(source: '$declarations main() => Keys();')
-        as Map<String, int>;
-    expect(keys.keys.toList(), _VirtualKeys().keys.toList());
-    expect(
+          source: '$declarations main() => inspect(Virtual());',
+        ),
+        _readVirtualMap(_VirtualMap()),
+      );
+      final keys =
+          interpreter.execute(source: '$declarations main() => Keys();')
+              as Map<String, int>;
+      expect(keys.keys.toList(), _VirtualKeys().keys.toList());
+      expect(
         interpreter.execute(
-            source: '$declarations main() => Keys().keys.toList();'),
-        _VirtualKeys().keys.toList());
-  });
+          source: '$declarations main() => Keys().keys.toList();',
+        ),
+        _VirtualKeys().keys.toList(),
+      );
+    },
+  );
 }

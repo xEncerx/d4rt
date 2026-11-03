@@ -15,15 +15,15 @@ class _AbsentEnumCallbackArgument {
 /// Already owned vectors are reused by specialized references and adapters.
 List<RuntimeType> ownEnumTypeArguments(List<RuntimeType> arguments) =>
     arguments.isEmpty
-        ? const []
-        : arguments is _OwnedEnumTypeArguments
-            ? arguments
-            : _OwnedEnumTypeArguments(arguments);
+    ? const []
+    : arguments is _OwnedEnumTypeArguments
+    ? arguments
+    : _OwnedEnumTypeArguments(arguments);
 
 class _OwnedEnumTypeArguments extends ListBase<RuntimeType> {
   final List<RuntimeType> _values;
   _OwnedEnumTypeArguments(List<RuntimeType> values)
-      : _values = List<RuntimeType>.unmodifiable(values);
+    : _values = List<RuntimeType>.unmodifiable(values);
   @override
   int get length => _values.length;
   @override
@@ -51,8 +51,12 @@ class EnumFormalParameter {
   final bool isRequired;
 
   /// Creates a formal without evaluating its default expression.
-  const EnumFormalParameter(this.name, this.type,
-      {this.isNamed = false, this.isRequired = true});
+  const EnumFormalParameter(
+    this.name,
+    this.type, {
+    this.isNamed = false,
+    this.isRequired = true,
+  });
 }
 
 /// Shared argument inference and shape checking for enum constructors.
@@ -62,44 +66,51 @@ class EnumSignature {
 
   /// Creates an immutable signature from already resolved type templates.
   EnumSignature(List<EnumFormalParameter> parameters)
-      : parameters = List.unmodifiable(parameters);
+    : parameters = List.unmodifiable(parameters);
 
   /// Exposes the specialized callback shape with its actual enum return type.
   FunctionRuntimeType functionType(RuntimeType returnType) =>
       FunctionRuntimeType(
-          returnType: returnType,
-          positionalParameterTypes: [
-            for (final parameter in parameters)
-              if (!parameter.isNamed) parameter.type,
-          ],
-          requiredPositionalParameterCount: parameters
-              .where((parameter) => !parameter.isNamed && parameter.isRequired)
-              .length,
-          namedParameterTypes: {
-            for (final parameter in parameters)
-              if (parameter.isNamed) parameter.name: parameter.type,
-          },
-          requiredNamedParameters: {
-            for (final parameter in parameters)
-              if (parameter.isNamed && parameter.isRequired) parameter.name,
-          });
+        returnType: returnType,
+        positionalParameterTypes: [
+          for (final parameter in parameters)
+            if (!parameter.isNamed) parameter.type,
+        ],
+        requiredPositionalParameterCount: parameters
+            .where((parameter) => !parameter.isNamed && parameter.isRequired)
+            .length,
+        namedParameterTypes: {
+          for (final parameter in parameters)
+            if (parameter.isNamed) parameter.name: parameter.type,
+        },
+        requiredNamedParameters: {
+          for (final parameter in parameters)
+            if (parameter.isNamed && parameter.isRequired) parameter.name,
+        },
+      );
 
   /// Normalizes retained native templates against one owning type namespace.
   EnumSignature resolveTypes(EnumTypeMetadata metadata) => EnumSignature([
-        for (final parameter in parameters)
-          EnumFormalParameter(
-              parameter.name, metadata.resolveType(parameter.type),
-              isNamed: parameter.isNamed, isRequired: parameter.isRequired),
-      ]);
+    for (final parameter in parameters)
+      EnumFormalParameter(
+        parameter.name,
+        metadata.resolveType(parameter.type),
+        isNamed: parameter.isNamed,
+        isRequired: parameter.isRequired,
+      ),
+  ]);
 
   /// Resolves formal templates once when a factory reference is specialized.
   EnumSignature specialize(List<String> names, List<RuntimeType> arguments) {
     if (names.isEmpty || parameters.isEmpty) return this;
     return EnumSignature([
       for (final parameter in parameters)
-        EnumFormalParameter(parameter.name,
-            substituteEnumType(parameter.type, names, arguments),
-            isNamed: parameter.isNamed, isRequired: parameter.isRequired)
+        EnumFormalParameter(
+          parameter.name,
+          substituteEnumType(parameter.type, names, arguments),
+          isNamed: parameter.isNamed,
+          isRequired: parameter.isRequired,
+        ),
     ]);
   }
 
@@ -127,11 +138,12 @@ class EnumSignature {
 
   /// Checks supplied types without inspecting native collection contents.
   void validateTypes(
-      Environment environment,
-      List<String> names,
-      List<RuntimeType> arguments,
-      List<Object?> positional,
-      Map<String, Object?> named) {
+    Environment environment,
+    List<String> names,
+    List<RuntimeType> arguments,
+    List<Object?> positional,
+    Map<String, Object?> named,
+  ) {
     var position = 0;
     for (final parameter in parameters) {
       final supplied = parameter.isNamed
@@ -140,43 +152,58 @@ class EnumSignature {
       final value = parameter.isNamed
           ? named[parameter.name]
           : supplied
-              ? positional[position++]
-              : null;
+          ? positional[position++]
+          : null;
       if (!supplied) continue;
-      _validateType(environment, parameter,
-          substituteEnumType(parameter.type, names, arguments), value);
+      _validateType(
+        environment,
+        parameter,
+        substituteEnumType(parameter.type, names, arguments),
+        value,
+      );
     }
   }
 
   /// Checks evaluated defaults in their existing invocation bindings.
   void validateBoundValues(
-      Environment scope, List<String> names, List<RuntimeType> arguments) {
+    Environment scope,
+    List<String> names,
+    List<RuntimeType> arguments,
+  ) {
     for (final parameter in parameters) {
       _validateType(
-          scope,
-          parameter,
-          substituteEnumType(parameter.type, names, arguments),
-          scope.get(parameter.name));
+        scope,
+        parameter,
+        substituteEnumType(parameter.type, names, arguments),
+        scope.get(parameter.name),
+      );
     }
   }
 
-  void _validateType(Environment environment, EnumFormalParameter parameter,
-      RuntimeType expected, Object? value) {
+  void _validateType(
+    Environment environment,
+    EnumFormalParameter parameter,
+    RuntimeType expected,
+    Object? value,
+  ) {
     if (expected is FunctionRuntimeType && value is Function) return;
     final actual = environment.getRuntimeType(value);
     if (actual == null || !enumTypeArgumentSatisfies(actual, expected)) {
-      throw RuntimeError('Invalid enum factory argument ${parameter.name}: '
-          'expected ${expected.name}, got ${actual?.name}.');
+      throw RuntimeError(
+        'Invalid enum factory argument ${parameter.name}: '
+        'expected ${expected.name}, got ${actual?.name}.',
+      );
     }
   }
 
   /// Infers owner arguments from supplied values, not omitted defaults.
   List<RuntimeType> infer(
-      Environment environment,
-      List<String> names,
-      Map<String, RuntimeType?> bounds,
-      List<Object?> positional,
-      Map<String, Object?> named) {
+    Environment environment,
+    List<String> names,
+    Map<String, RuntimeType?> bounds,
+    List<Object?> positional,
+    Map<String, Object?> named,
+  ) {
     if (names.isEmpty) return const [];
     final lower = <String, RuntimeType>{};
     final upper = <String, RuntimeType>{};
@@ -188,11 +215,16 @@ class EnumSignature {
       final actual = parameter.isNamed
           ? named[parameter.name]
           : supplied
-              ? positional[position++]
-              : null;
+          ? positional[position++]
+          : null;
       if (supplied) {
-        _infer(parameter.type, environment.getRuntimeType(actual), names, lower,
-            upper);
+        _infer(
+          parameter.type,
+          environment.getRuntimeType(actual),
+          names,
+          lower,
+          upper,
+        );
       }
     }
     final inferred = <String, RuntimeType>{};
@@ -203,7 +235,8 @@ class EnumSignature {
           maximum != null &&
           !enumTypeArgumentSatisfies(minimum, maximum)) {
         throw RuntimeError(
-            'Inconsistent enum inference constraints for $name.');
+          'Inconsistent enum inference constraints for $name.',
+        );
       }
       final argument = minimum ?? maximum;
       if (argument != null) inferred[name] = argument;
@@ -211,29 +244,38 @@ class EnumSignature {
     return instantiateEnumTypeBounds(names, bounds, inferred: inferred);
   }
 
-  void _infer(RuntimeType formal, RuntimeType? actual, List<String> names,
-      Map<String, RuntimeType> lower, Map<String, RuntimeType> upper,
-      {bool covariant = true}) {
+  void _infer(
+    RuntimeType formal,
+    RuntimeType? actual,
+    List<String> names,
+    Map<String, RuntimeType> lower,
+    Map<String, RuntimeType> upper, {
+    bool covariant = true,
+  }) {
     if (actual == null || isEnumCoreType(actual, 'dynamic')) {
       if (_containsOwner(formal, names)) {
-        throw RuntimeError('Enum owner inference requires a declared type; '
-            'supply explicit owner type arguments.');
+        throw RuntimeError(
+          'Enum owner inference requires a declared type; '
+          'supply explicit owner type arguments.',
+        );
       }
       return;
     }
     if (actual is NativeCollectionType) {
-      actual =
-          actual.nullable ? NullableEnumArgument(actual.base) : actual.base;
+      actual = actual.nullable
+          ? NullableEnumArgument(actual.base)
+          : actual.base;
     }
     if (formal is NullableEnumArgument) {
       if (isEnumCoreType(actual, 'Null')) return;
       return _infer(
-          formal.type,
-          actual is NullableEnumArgument ? actual.type : actual,
-          names,
-          lower,
-          upper,
-          covariant: covariant);
+        formal.type,
+        actual is NullableEnumArgument ? actual.type : actual,
+        names,
+        lower,
+        upper,
+        covariant: covariant,
+      );
     }
     if (names.contains(formal.name)) {
       final constraints = covariant ? lower : upper;
@@ -241,8 +283,8 @@ class EnumSignature {
       constraints[formal.name] = previous == null
           ? actual
           : covariant
-              ? _join(previous, actual)
-              : _meet(previous, actual);
+          ? _join(previous, actual)
+          : _meet(previous, actual);
     } else if (formal is AppliedRuntimeType) {
       final projected = projectEnumType(actual, formal);
       if (projected is! AppliedRuntimeType ||
@@ -250,34 +292,58 @@ class EnumSignature {
         return;
       }
       for (var index = 0; index < formal.typeArguments.length; index++) {
-        _infer(formal.typeArguments[index], projected.typeArguments[index],
-            names, lower, upper,
-            covariant: covariant);
+        _infer(
+          formal.typeArguments[index],
+          projected.typeArguments[index],
+          names,
+          lower,
+          upper,
+          covariant: covariant,
+        );
       }
     } else if (formal is FunctionRuntimeType &&
         actual is FunctionRuntimeType &&
         actual.isUntyped &&
         _containsOwner(formal, names)) {
       throw RuntimeError(
-          'Enum callback inference requires a declared signature; '
-          'supply explicit owner type arguments.');
+        'Enum callback inference requires a declared signature; '
+        'supply explicit owner type arguments.',
+      );
     } else if (formal is FunctionRuntimeType &&
         actual is FunctionRuntimeType &&
         !actual.isUntyped) {
-      _infer(formal.returnType, actual.returnType, names, lower, upper,
-          covariant: covariant);
-      for (var index = 0;
-          index < formal.positionalParameterTypes.length &&
-              index < actual.positionalParameterTypes.length;
-          index++) {
-        _infer(formal.positionalParameterTypes[index],
-            actual.positionalParameterTypes[index], names, lower, upper,
-            covariant: !covariant);
+      _infer(
+        formal.returnType,
+        actual.returnType,
+        names,
+        lower,
+        upper,
+        covariant: covariant,
+      );
+      for (
+        var index = 0;
+        index < formal.positionalParameterTypes.length &&
+            index < actual.positionalParameterTypes.length;
+        index++
+      ) {
+        _infer(
+          formal.positionalParameterTypes[index],
+          actual.positionalParameterTypes[index],
+          names,
+          lower,
+          upper,
+          covariant: !covariant,
+        );
       }
       for (final entry in formal.namedParameterTypes.entries) {
-        _infer(entry.value, actual.namedParameterTypes[entry.key], names, lower,
-            upper,
-            covariant: !covariant);
+        _infer(
+          entry.value,
+          actual.namedParameterTypes[entry.key],
+          names,
+          lower,
+          upper,
+          covariant: !covariant,
+        );
       }
     }
   }
@@ -286,15 +352,18 @@ class EnumSignature {
     if (names.contains(type.name)) return true;
     if (type is NullableEnumArgument) return _containsOwner(type.type, names);
     if (type is AppliedRuntimeType) {
-      return type.typeArguments
-          .any((argument) => _containsOwner(argument, names));
+      return type.typeArguments.any(
+        (argument) => _containsOwner(argument, names),
+      );
     }
     if (type is FunctionRuntimeType) {
       return _containsOwner(type.returnType, names) ||
-          type.positionalParameterTypes
-              .any((type) => _containsOwner(type, names)) ||
-          type.namedParameterTypes.values
-              .any((type) => _containsOwner(type, names));
+          type.positionalParameterTypes.any(
+            (type) => _containsOwner(type, names),
+          ) ||
+          type.namedParameterTypes.values.any(
+            (type) => _containsOwner(type, names),
+          );
     }
     return false;
   }
@@ -318,14 +387,19 @@ class EnumSignature {
         isEnumCoreType(previous, previous.name)) {
       return const NamedRuntimeType('Object');
     }
-    throw RuntimeError('Ambiguous enum owner inference; '
-        'supply explicit owner type arguments.');
+    throw RuntimeError(
+      'Ambiguous enum owner inference; '
+      'supply explicit owner type arguments.',
+    );
   }
 }
 
 /// Substitutes an enum's ordered type vector into a resolved template.
 RuntimeType substituteEnumType(
-    RuntimeType type, List<String> names, List<RuntimeType> arguments) {
+  RuntimeType type,
+  List<String> names,
+  List<RuntimeType> arguments,
+) {
   if (names.isEmpty) return type;
   final index = names.indexOf(type.name);
   if (index >= 0) return arguments[index];
@@ -339,7 +413,7 @@ RuntimeType substituteEnumType(
   if (type is AppliedRuntimeType) {
     return AppliedRuntimeType(type.baseType, [
       for (final argument in type.typeArguments)
-        substituteEnumType(argument, names, arguments)
+        substituteEnumType(argument, names, arguments),
     ]);
   }
   if (type is FunctionRuntimeType) {
@@ -363,8 +437,12 @@ RuntimeType substituteEnumType(
 }
 
 /// Checks explicit owner arguments, or supplies instantiate-to-bounds arguments.
-List<RuntimeType> resolveEnumTypeArguments(String owner, List<String> names,
-    Map<String, RuntimeType?> bounds, List<RuntimeType>? explicit) {
+List<RuntimeType> resolveEnumTypeArguments(
+  String owner,
+  List<String> names,
+  Map<String, RuntimeType?> bounds,
+  List<RuntimeType>? explicit,
+) {
   if (explicit == null) return instantiateEnumTypeBounds(names, bounds);
   if (explicit.length != names.length) {
     throw RuntimeError('Wrong type argument count for enum $owner.');
@@ -373,10 +451,13 @@ List<RuntimeType> resolveEnumTypeArguments(String owner, List<String> names,
     final bound = bounds[names[i]];
     if (bound != null &&
         !enumTypeArgumentSatisfies(
-            explicit[i], substituteEnumType(bound, names, explicit),
-            forBound: true)) {
+          explicit[i],
+          substituteEnumType(bound, names, explicit),
+          forBound: true,
+        )) {
       throw RuntimeError(
-          'Type ${explicit[i].name} violates enum bound ${bound.name}.');
+        'Type ${explicit[i].name} violates enum bound ${bound.name}.',
+      );
     }
   }
   return ownEnumTypeArguments(explicit);

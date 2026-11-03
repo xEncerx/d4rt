@@ -4,9 +4,10 @@ import 'package:d4rt/d4rt.dart';
 dynamic execute(String source, {List<Object?>? args}) {
   final d4rt = D4rt()..setDebug(false);
   return d4rt.execute(
-      library: 'package:test/main.dart',
-      positionalArgs: args,
-      sources: {'package:test/main.dart': source});
+    library: 'package:test/main.dart',
+    positionalArgs: args,
+    sources: {'package:test/main.dart': source},
+  );
 }
 
 void main() {
@@ -44,11 +45,13 @@ void main() {
 
       expect(
         () => execute(invalidCode),
-        throwsA(isA<RuntimeError>().having(
-          (e) => e.message,
-          'message',
-          contains('does not satisfy bound'),
-        )),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains('does not satisfy bound'),
+          ),
+        ),
       );
     });
 
@@ -77,11 +80,13 @@ void main() {
 
       expect(
         () => execute(invalidCode),
-        throwsA(isA<RuntimeError>().having(
-          (e) => e.message,
-          'message',
-          contains('does not satisfy bound'),
-        )),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains('does not satisfy bound'),
+          ),
+        ),
       );
     });
 
@@ -116,11 +121,13 @@ void main() {
 
       expect(
         () => execute(invalidCode),
-        throwsA(isA<RuntimeError>().having(
-          (e) => e.message,
-          'message',
-          contains('does not satisfy bound'),
-        )),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains('does not satisfy bound'),
+          ),
+        ),
       );
     });
 
@@ -151,17 +158,20 @@ void main() {
 
       expect(
         () => execute(invalidCode),
-        throwsA(isA<RuntimeError>().having(
-          (e) => e.message,
-          'message',
-          contains('does not satisfy bound'),
-        )),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains('does not satisfy bound'),
+          ),
+        ),
       );
     });
 
-    test('Applied generic runtime type is preserved for user-defined classes',
-        () {
-      final code = '''
+    test(
+      'Applied generic runtime type is preserved for user-defined classes',
+      () {
+        final code = '''
         class Box<T> {
           T value;
           Box(this.value);
@@ -173,8 +183,9 @@ void main() {
         }
       ''';
 
-      expect(execute(code), equals([true, true, false]));
-    });
+        expect(execute(code), equals([true, true, false]));
+      },
+    );
 
     test('Generic return type validation uses applied runtime types', () {
       final validCode = '''
@@ -211,11 +222,13 @@ void main() {
 
       expect(
         () => execute(invalidCode),
-        throwsA(isA<RuntimeError>().having(
-          (e) => e.message,
-          'message',
-          contains("can't be returned"),
-        )),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains("can't be returned"),
+          ),
+        ),
       );
     });
 
@@ -248,18 +261,20 @@ void main() {
 
       expect(
         () => execute(invalidCode),
-        throwsA(isA<RuntimeError>().having(
-          (e) => e.message,
-          'message',
-          contains("can't be returned"),
-        )),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            contains("can't be returned"),
+          ),
+        ),
       );
     });
 
     test(
-        'Inferred generic list returns stay scoped through initializers and nested calls',
-        () {
-      final code = '''
+      'Inferred generic list returns stay scoped through initializers and nested calls',
+      () {
+        final code = '''
         enum Kind { first, second }
 
         List<T> echo<T>(List<T> values) {
@@ -299,13 +314,14 @@ void main() {
         }
       ''';
 
-      expect(execute(code), equals(List<bool>.filled(10, true)));
-    });
+        expect(execute(code), equals(List<bool>.filled(10, true)));
+      },
+    );
 
     test(
-        'Incompatible inferred generic list return is rejected inside nested initializer',
-        () {
-      final code = '''
+      'Incompatible inferred generic list return is rejected inside nested initializer',
+      () {
+        final code = '''
         enum Kind { first }
 
         List<T> malformed<T>(List<T> values) {
@@ -324,15 +340,18 @@ void main() {
         main() => Holder(<Kind>[Kind.first]).values;
       ''';
 
-      expect(
-        () => execute(code),
-        throwsA(isA<RuntimeError>().having(
-          (e) => e.message,
-          'message',
-          allOf(contains("can't be returned"), contains("malformed")),
-        )),
-      );
-    });
+        expect(
+          () => execute(code),
+          throwsA(
+            isA<RuntimeError>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains("can't be returned"), contains("malformed")),
+            ),
+          ),
+        );
+      },
+    );
 
     test('Inferred generic list type respects its declared numeric bound', () {
       final code = '''
@@ -345,11 +364,13 @@ void main() {
 
       expect(
         () => execute(code),
-        throwsA(isA<RuntimeError>().having(
-          (e) => e.message,
-          'message',
-          allOf(contains('String'), contains('does not satisfy bound')),
-        )),
+        throwsA(
+          isA<RuntimeError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('String'), contains('does not satisfy bound')),
+          ),
+        ),
       );
     });
 
@@ -375,9 +396,9 @@ void main() {
     });
 
     test(
-        'Explicit generic list returns are checked against their type argument',
-        () {
-      final validCode = '''
+      'Explicit generic list returns are checked against their type argument',
+      () {
+        final validCode = '''
         List<T> echo<T>(List<T> values) {
           return values;
         }
@@ -388,24 +409,27 @@ void main() {
           return [ints[0] == 7, strings[0] == 'label'];
         }
       ''';
-      expect(execute(validCode), equals([true, true]));
+        expect(execute(validCode), equals([true, true]));
 
-      final invalidCode = '''
+        final invalidCode = '''
         List<T> malformed<T>(List<T> values) {
           return <String>['bad'];
         }
 
         main() => malformed<int>(<int>[7]);
       ''';
-      expect(
-        () => execute(invalidCode),
-        throwsA(isA<RuntimeError>().having(
-          (e) => e.message,
-          'message',
-          allOf(contains("can't be returned"), contains('malformed')),
-        )),
-      );
-    });
+        expect(
+          () => execute(invalidCode),
+          throwsA(
+            isA<RuntimeError>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains("can't be returned"), contains('malformed')),
+            ),
+          ),
+        );
+      },
+    );
 
     test('Typed variable declarations annotate empty collections', () {
       final code = '''

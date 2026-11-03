@@ -775,11 +775,7 @@ Stream<int> yieldImportedError() async* {
 ''',
 };
 
-Future<Object?> _run(
-  String operation, {
-  D4rt? d4rt,
-  int input = 9,
-}) async {
+Future<Object?> _run(String operation, {D4rt? d4rt, int input = 9}) async {
   final interpreter = d4rt ?? D4rt();
   final result = interpreter.execute(
     library: 'package:probe/dispatcher.dart',
@@ -836,26 +832,29 @@ void main() {
       );
     });
 
-    test('selects typed catches in source order and preserves the error',
-        () async {
-      for (final operation in ['failImmediately', 'failAfterAwait']) {
-        expect(
-          await _run(operation),
-          equals({
-            'outcome': {
-              'kind': 'expected-catch',
-              'marker':
-                  operation == 'failImmediately' ? 'immediate' : 'delayed',
-              'sameInstanceObserved': true,
-            },
-            'finallyCount': 1,
-            'providerCalls': 1,
-            'nestedCatchCount': 0,
-            'nestedFinallyCount': 0,
-          }),
-        );
-      }
-    });
+    test(
+      'selects typed catches in source order and preserves the error',
+      () async {
+        for (final operation in ['failImmediately', 'failAfterAwait']) {
+          expect(
+            await _run(operation),
+            equals({
+              'outcome': {
+                'kind': 'expected-catch',
+                'marker': operation == 'failImmediately'
+                    ? 'immediate'
+                    : 'delayed',
+                'sameInstanceObserved': true,
+              },
+              'finallyCount': 1,
+              'providerCalls': 1,
+              'nestedCatchCount': 0,
+              'nestedFinallyCount': 0,
+            }),
+          );
+        }
+      },
+    );
 
     test('uses a generic catch only when typed catches do not match', () async {
       expect(
@@ -870,112 +869,115 @@ void main() {
       );
     });
 
-    test('resumes initializer, return, switch, and branch contexts once',
-        () async {
-      final outcomes = <String, Object?>{
-        'initializer': {'kind': 'initializer', 'value': 13},
-        'return': {'kind': 'return', 'value': 14},
-        'branch': {'kind': 'branch', 'value': 'then'},
-        'collection': {
-          'kind': 'collection',
-          'values': [16],
-        },
-      };
+    test(
+      'resumes initializer, return, switch, and branch contexts once',
+      () async {
+        final outcomes = <String, Object?>{
+          'initializer': {'kind': 'initializer', 'value': 13},
+          'return': {'kind': 'return', 'value': 14},
+          'branch': {'kind': 'branch', 'value': 'then'},
+          'collection': {
+            'kind': 'collection',
+            'values': [16],
+          },
+        };
 
-      for (final entry in outcomes.entries) {
+        for (final entry in outcomes.entries) {
+          expect(
+            await _run(entry.key),
+            equals({
+              'outcome': entry.value,
+              'finallyCount': 1,
+              'providerCalls': 1,
+              'nestedCatchCount': 0,
+              'nestedFinallyCount': 0,
+            }),
+          );
+        }
+      },
+    );
+
+    test(
+      'preserves nested imported async frame success and error flow',
+      () async {
         expect(
-          await _run(entry.key),
+          await _run('nestedValue'),
           equals({
-            'outcome': entry.value,
+            'outcome': {'kind': 'nested', 'value': 11},
+            'finallyCount': 1,
+            'providerCalls': 1,
+            'nestedCatchCount': 0,
+            'nestedFinallyCount': 1,
+          }),
+        );
+        expect(
+          await _run('nestedFailure'),
+          equals({
+            'outcome': {
+              'kind': 'expected-catch',
+              'marker': 'nested',
+              'sameInstanceObserved': true,
+            },
+            'finallyCount': 1,
+            'providerCalls': 1,
+            'nestedCatchCount': 1,
+            'nestedFinallyCount': 1,
+          }),
+        );
+        expect(
+          await _run('nestedTryMismatch'),
+          equals({
+            'outcome': {
+              'kind': 'expected-catch',
+              'marker': 'delayed',
+              'sameInstanceObserved': true,
+            },
             'finallyCount': 1,
             'providerCalls': 1,
             'nestedCatchCount': 0,
             'nestedFinallyCount': 0,
           }),
         );
-      }
-    });
-
-    test('preserves nested imported async frame success and error flow',
-        () async {
-      expect(
-        await _run('nestedValue'),
-        equals({
-          'outcome': {'kind': 'nested', 'value': 11},
-          'finallyCount': 1,
-          'providerCalls': 1,
-          'nestedCatchCount': 0,
-          'nestedFinallyCount': 1,
-        }),
-      );
-      expect(
-        await _run('nestedFailure'),
-        equals({
-          'outcome': {
-            'kind': 'expected-catch',
-            'marker': 'nested',
-            'sameInstanceObserved': true,
-          },
-          'finallyCount': 1,
-          'providerCalls': 1,
-          'nestedCatchCount': 1,
-          'nestedFinallyCount': 1,
-        }),
-      );
-      expect(
-        await _run('nestedTryMismatch'),
-        equals({
-          'outcome': {
-            'kind': 'expected-catch',
-            'marker': 'delayed',
-            'sameInstanceObserved': true,
-          },
-          'finallyCount': 1,
-          'providerCalls': 1,
-          'nestedCatchCount': 0,
-          'nestedFinallyCount': 0,
-        }),
-      );
-      expect(
-        await _run('nestedInnerCatch'),
-        equals({
-          'outcome': {
-            'kind': 'inner-catch',
-            'marker': 'delayed',
-            'sameInstanceObserved': true,
-          },
-          'finallyCount': 1,
-          'providerCalls': 1,
-          'nestedCatchCount': 0,
-          'nestedFinallyCount': 0,
-        }),
-      );
-      expect(
-        await _run('returnOverriddenByFailure'),
-        equals({
-          'outcome': {
-            'kind': 'expected-catch',
-            'marker': 'finally',
-            'sameInstanceObserved': true,
-          },
-          'finallyCount': 1,
-          'providerCalls': 1,
-          'nestedCatchCount': 0,
-          'nestedFinallyCount': 2,
-        }),
-      );
-    });
+        expect(
+          await _run('nestedInnerCatch'),
+          equals({
+            'outcome': {
+              'kind': 'inner-catch',
+              'marker': 'delayed',
+              'sameInstanceObserved': true,
+            },
+            'finallyCount': 1,
+            'providerCalls': 1,
+            'nestedCatchCount': 0,
+            'nestedFinallyCount': 0,
+          }),
+        );
+        expect(
+          await _run('returnOverriddenByFailure'),
+          equals({
+            'outcome': {
+              'kind': 'expected-catch',
+              'marker': 'finally',
+              'sameInstanceObserved': true,
+            },
+            'finallyCount': 1,
+            'providerCalls': 1,
+            'nestedCatchCount': 0,
+            'nestedFinallyCount': 2,
+          }),
+        );
+      },
+    );
 
     test(
-        'unmatched errors complete once and run finally without a side channel',
-        () async {
-      final d4rt = D4rt();
-      final sideChannelErrors = <Object>[];
-      Object? completedError;
-      var errorCompletions = 0;
+      'unmatched errors complete once and run finally without a side channel',
+      () async {
+        final d4rt = D4rt();
+        final sideChannelErrors = <Object>[];
+        Object? completedError;
+        var errorCompletions = 0;
 
-      await runZonedGuarded(
-        () async {
+        await runZonedGuarded(() async {
           final result = d4rt.execute(
             library: 'package:probe/dispatcher.dart',
             sources: _sources,
@@ -983,23 +985,27 @@ void main() {
             allowFileSystemImports: false,
           );
           expect(result, isA<Future<void>>());
-          await (result as Future<Object?>).then<void>(
-            (_) => fail('Expected dispatchUnhandled to fail.'),
-            onError: (Object error, StackTrace _) {
-              errorCompletions++;
-              completedError = error;
-            },
-          ).timeout(const Duration(seconds: 2));
+          await (result as Future<Object?>)
+              .then<void>(
+                (_) => fail('Expected dispatchUnhandled to fail.'),
+                onError: (Object error, StackTrace _) {
+                  errorCompletions++;
+                  completedError = error;
+                },
+              )
+              .timeout(const Duration(seconds: 2));
           await Future<void>.delayed(const Duration(milliseconds: 10));
-        },
-        (error, _) => sideChannelErrors.add(error),
-      );
+        }, (error, _) => sideChannelErrors.add(error));
 
-      expect(errorCompletions, 1);
-      expect(sideChannelErrors, isEmpty);
-      expect(d4rt.eval('readUnhandledFinallyCount()'), 1);
-      expect(identical(completedError, d4rt.eval('readLastFailure()')), isTrue);
-    });
+        expect(errorCompletions, 1);
+        expect(sideChannelErrors, isEmpty);
+        expect(d4rt.eval('readUnhandledFinallyCount()'), 1);
+        expect(
+          identical(completedError, d4rt.eval('readLastFailure()')),
+          isTrue,
+        );
+      },
+    );
 
     test('isolates concurrent fresh interpreter executions', () async {
       final results = await Future.wait<Object?>([
@@ -1028,108 +1034,114 @@ void main() {
       );
     });
 
-    test('retains invocation argument prefixes across multiple awaits',
-        () async {
-      expect(
-        await _runNamed('evaluateCompound', positionalArgs: ['invocation']),
-        equals({
-          'value': [1, 2, 3],
-          'providerCalls': 2,
-          'synchronousPrefixCalls': 1,
-          'combinedCalls': 1,
-          'order': [
-            'sync:1',
-            'async-start:2',
-            'async-end:2',
-            'async-start:3',
-            'async-end:3',
-            'combine',
-          ],
-        }),
-      );
-    });
+    test(
+      'retains invocation argument prefixes across multiple awaits',
+      () async {
+        expect(
+          await _runNamed('evaluateCompound', positionalArgs: ['invocation']),
+          equals({
+            'value': [1, 2, 3],
+            'providerCalls': 2,
+            'synchronousPrefixCalls': 1,
+            'combinedCalls': 1,
+            'order': [
+              'sync:1',
+              'async-start:2',
+              'async-end:2',
+              'async-start:3',
+              'async-end:3',
+              'combine',
+            ],
+          }),
+        );
+      },
+    );
 
-    test('retains binary and nested invocation prefixes across suspensions',
-        () async {
-      expect(
-        await _runNamed('evaluateCompound', positionalArgs: ['expression']),
-        equals({
-          'value': 93,
-          'providerCalls': 2,
-          'synchronousPrefixCalls': 1,
-          'combinedCalls': 0,
-          'order': [
-            'sync:30',
-            'async-start:31',
-            'async-end:31',
-            'async-start:32',
-            'async-end:32',
-          ],
-        }),
-      );
-      expect(
-        await _runNamed(
-          'evaluateCompound',
-          positionalArgs: ['nestedInvocation'],
-        ),
-        equals({
-          'value': [40, 42, 44],
-          'providerCalls': 3,
-          'synchronousPrefixCalls': 2,
-          'combinedCalls': 2,
-          'order': [
-            'sync:40',
-            'sync:41',
-            'async-start:42',
-            'async-end:42',
-            'async-start:43',
-            'async-end:43',
-            'combine',
-            'async-start:44',
-            'async-end:44',
-            'combine',
-          ],
-        }),
-      );
-    });
+    test(
+      'retains binary and nested invocation prefixes across suspensions',
+      () async {
+        expect(
+          await _runNamed('evaluateCompound', positionalArgs: ['expression']),
+          equals({
+            'value': 93,
+            'providerCalls': 2,
+            'synchronousPrefixCalls': 1,
+            'combinedCalls': 0,
+            'order': [
+              'sync:30',
+              'async-start:31',
+              'async-end:31',
+              'async-start:32',
+              'async-end:32',
+            ],
+          }),
+        );
+        expect(
+          await _runNamed(
+            'evaluateCompound',
+            positionalArgs: ['nestedInvocation'],
+          ),
+          equals({
+            'value': [40, 42, 44],
+            'providerCalls': 3,
+            'synchronousPrefixCalls': 2,
+            'combinedCalls': 2,
+            'order': [
+              'sync:40',
+              'sync:41',
+              'async-start:42',
+              'async-end:42',
+              'async-start:43',
+              'async-end:43',
+              'combine',
+              'async-start:44',
+              'async-end:44',
+              'combine',
+            ],
+          }),
+        );
+      },
+    );
 
-    test('retains collection and map prefixes across multiple awaits',
-        () async {
-      expect(
-        await _runNamed('evaluateCompound', positionalArgs: ['collection']),
-        equals({
-          'value': [4, 5, 6, 7],
-          'providerCalls': 2,
-          'synchronousPrefixCalls': 2,
-          'combinedCalls': 0,
-          'order': [
-            'sync:4',
-            'async-start:5',
-            'async-end:5',
-            'sync:6',
-            'async-start:7',
-            'async-end:7',
-          ],
-        }),
-      );
-      expect(
-        await _runNamed('evaluateCompound', positionalArgs: ['map']),
-        equals({
-          'value': {10: 11, 12: 13},
-          'providerCalls': 2,
-          'synchronousPrefixCalls': 2,
-          'combinedCalls': 0,
-          'order': [
-            'sync:10',
-            'async-start:11',
-            'async-end:11',
-            'async-start:12',
-            'async-end:12',
-            'sync:13',
-          ],
-        }),
-      );
-    });
+    test(
+      'retains collection and map prefixes across multiple awaits',
+      () async {
+        expect(
+          await _runNamed('evaluateCompound', positionalArgs: ['collection']),
+          equals({
+            'value': [4, 5, 6, 7],
+            'providerCalls': 2,
+            'synchronousPrefixCalls': 2,
+            'combinedCalls': 0,
+            'order': [
+              'sync:4',
+              'async-start:5',
+              'async-end:5',
+              'sync:6',
+              'async-start:7',
+              'async-end:7',
+            ],
+          }),
+        );
+        expect(
+          await _runNamed('evaluateCompound', positionalArgs: ['map']),
+          equals({
+            'value': {10: 11, 12: 13},
+            'providerCalls': 2,
+            'synchronousPrefixCalls': 2,
+            'combinedCalls': 0,
+            'order': [
+              'sync:10',
+              'async-start:11',
+              'async-end:11',
+              'async-start:12',
+              'async-end:12',
+              'sync:13',
+            ],
+          }),
+        );
+      },
+    );
 
     test('retains set literal prefixes across multiple awaits', () async {
       expect(
@@ -1190,91 +1202,101 @@ void main() {
       );
     });
 
-    test('resumes a switch after completed case statements exactly once',
-        () async {
-      expect(
-        await _runNamed('evaluateSwitchProgress'),
-        equals({
-          'outcome': {'awaited': 55, 'sameCanonical': true},
-          'selectorCalls': 1,
-          'allocations': 1,
-          'observations': 1,
-        }),
-      );
-    });
+    test(
+      'resumes a switch after completed case statements exactly once',
+      () async {
+        expect(
+          await _runNamed('evaluateSwitchProgress'),
+          equals({
+            'outcome': {'awaited': 55, 'sameCanonical': true},
+            'selectorCalls': 1,
+            'allocations': 1,
+            'observations': 1,
+          }),
+        );
+      },
+    );
 
-    test('preserves switch progress when an inner try catches await failure',
-        () async {
-      expect(
-        await _runNamed('evaluateSwitchCaughtErrorProgress'),
-        equals({
-          'outcome': {'caught': true, 'sameCanonical': true},
-          'selectorCalls': 1,
-          'allocations': 1,
-          'observations': 1,
-        }),
-      );
-    });
+    test(
+      'preserves switch progress when an inner try catches await failure',
+      () async {
+        expect(
+          await _runNamed('evaluateSwitchCaughtErrorProgress'),
+          equals({
+            'outcome': {'caught': true, 'sameCanonical': true},
+            'selectorCalls': 1,
+            'allocations': 1,
+            'observations': 1,
+          }),
+        );
+      },
+    );
 
-    test('evaluates an awaited property target before its awaited value',
-        () async {
-      expect(
-        await _runNamed('evaluateAssignment', positionalArgs: ['property']),
-        equals({
-          'value': 21,
-          'slots': [20, 30],
-          'events': [
-            'target:start',
-            'target:end',
-            'rhs:start',
-            'rhs:end',
-            'property:set:21',
-          ],
-        }),
-      );
-    });
+    test(
+      'evaluates an awaited property target before its awaited value',
+      () async {
+        expect(
+          await _runNamed('evaluateAssignment', positionalArgs: ['property']),
+          equals({
+            'value': 21,
+            'slots': [20, 30],
+            'events': [
+              'target:start',
+              'target:end',
+              'rhs:start',
+              'rhs:end',
+              'property:set:21',
+            ],
+          }),
+        );
+      },
+    );
 
-    test('evaluates awaited index target, index, and value in Dart order',
-        () async {
-      expect(
-        await _runNamed('evaluateAssignment', positionalArgs: ['index']),
-        equals({
-          'value': 10,
-          'slots': [20, 41],
-          'events': [
-            'target:start',
-            'target:end',
-            'index:start',
-            'index:end',
-            'rhs:start',
-            'rhs:end',
-            'index:set:1:41',
-          ],
-        }),
-      );
-    });
+    test(
+      'evaluates awaited index target, index, and value in Dart order',
+      () async {
+        expect(
+          await _runNamed('evaluateAssignment', positionalArgs: ['index']),
+          equals({
+            'value': 10,
+            'slots': [20, 41],
+            'events': [
+              'target:start',
+              'target:end',
+              'index:start',
+              'index:end',
+              'rhs:start',
+              'rhs:end',
+              'index:set:1:41',
+            ],
+          }),
+        );
+      },
+    );
 
-    test('reads compound property before evaluating its awaited value',
-        () async {
-      expect(
-        await _runNamed(
-          'evaluateAssignment',
-          positionalArgs: ['compoundProperty'],
-        ),
-        equals({
-          'value': 15,
-          'slots': [20, 30],
-          'events': [
-            'target:start',
-            'target:end',
-            'property:get',
-            'rhs:start',
-            'rhs:end',
-            'property:set:15',
-          ],
-        }),
-      );
-    });
+    test(
+      'reads compound property before evaluating its awaited value',
+      () async {
+        expect(
+          await _runNamed(
+            'evaluateAssignment',
+            positionalArgs: ['compoundProperty'],
+          ),
+          equals({
+            'value': 15,
+            'slots': [20, 30],
+            'events': [
+              'target:start',
+              'target:end',
+              'property:get',
+              'rhs:start',
+              'rhs:end',
+              'property:set:15',
+            ],
+          }),
+        );
+      },
+    );
 
     test('reads compound index before evaluating its awaited value', () async {
       expect(
@@ -1299,320 +1321,340 @@ void main() {
       );
     });
 
-    test('skips an awaited value when a null-aware compound read is non-null',
-        () async {
-      expect(
-        await _runNamed(
-          'evaluateAssignment',
-          positionalArgs: ['nullAwareCompound'],
-        ),
-        equals({
-          'value': 10,
-          'slots': [20, 30],
-          'events': [
-            'target:start',
-            'target:end',
-            'property:get',
-          ],
-        }),
-      );
-    });
+    test(
+      'skips an awaited value when a null-aware compound read is non-null',
+      () async {
+        expect(
+          await _runNamed(
+            'evaluateAssignment',
+            positionalArgs: ['nullAwareCompound'],
+          ),
+          equals({
+            'value': 10,
+            'slots': [20, 30],
+            'events': ['target:start', 'target:end', 'property:get'],
+          }),
+        );
+      },
+    );
 
-    test('preserves a pending error through a successful awaited finally',
-        () async {
-      expect(
-        await _runNamed('preserveErrorThroughAwaitedFinally'),
-        equals({
-          'kind': 'caught',
-          'sameError': true,
-          'cleanupStarts': 1,
-          'cleanupEnds': 1,
-        }),
-      );
-    });
+    test(
+      'preserves a pending error through a successful awaited finally',
+      () async {
+        expect(
+          await _runNamed('preserveErrorThroughAwaitedFinally'),
+          equals({
+            'kind': 'caught',
+            'sameError': true,
+            'cleanupStarts': 1,
+            'cleanupEnds': 1,
+          }),
+        );
+      },
+    );
 
     test('matches prefixed catch types by imported class identity', () async {
       expect(await _runNamed('catchPrefixedBaseType'), 'sdk-catch');
     });
 
-    test('releases completed expression state before the next evaluation',
-        () async {
-      expect(
-        await _runNamed('evaluateCompound', positionalArgs: ['repeated']),
-        equals({
-          'value': [
-            [0, 20],
-            [1, 21],
-          ],
-          'providerCalls': 2,
-          'synchronousPrefixCalls': 2,
-          'combinedCalls': 0,
-          'order': [
-            'sync:0',
-            'async-start:20',
-            'async-end:20',
-            'sync:1',
-            'async-start:21',
-            'async-end:21',
-          ],
-        }),
-      );
-    });
-
-    test('returns through all outer finalizers before and after suspension',
-        () async {
-      expect(
-        await _runNamed(
-          'returnThroughOuterFinalizers',
-          positionalArgs: [false],
-        ),
-        equals({
-          'value': 81,
-          'innerFinallyCount': 1,
-          'outerFinallyCount': 1,
-        }),
-      );
-      expect(
-        await _runNamed(
-          'returnThroughOuterFinalizers',
-          positionalArgs: [true],
-        ),
-        equals({
-          'value': 82,
-          'innerFinallyCount': 1,
-          'outerFinallyCount': 1,
-        }),
-      );
-    });
-
-    test('finally return overrides an earlier return and async error',
-        () async {
-      expect(
-        await _runNamed(
-          'runFinallyReturnOverride',
-          positionalArgs: ['return'],
-        ),
-        equals({'value': 92, 'overridingFinallyCount': 1}),
-      );
-      expect(
-        await _runNamed(
-          'runFinallyReturnOverride',
-          positionalArgs: ['error'],
-        ),
-        equals({'value': 93, 'overridingFinallyCount': 1}),
-      );
-    });
-
-    test('yield await emits the resolved imported value exactly once',
-        () async {
-      final result = D4rt().execute(
-        library: 'package:probe/dispatcher.dart',
-        sources: _sources,
-        name: 'yieldImportedValue',
-        allowFileSystemImports: false,
-      );
-
-      expect(result, isA<Stream<Object?>>());
-      expect(
-        await (result as Stream<Object?>)
-            .toList()
-            .timeout(const Duration(seconds: 2)),
-        [44],
-      );
-    });
-
-    test('yield await reports the original imported error on the stream',
-        () async {
-      final d4rt = D4rt();
-      final result = d4rt.execute(
-        library: 'package:probe/dispatcher.dart',
-        sources: _sources,
-        name: 'yieldImportedError',
-        allowFileSystemImports: false,
-      );
-      final values = <Object?>[];
-      final errors = <Object>[];
-      final done = Completer<void>();
-
-      expect(result, isA<Stream<Object?>>());
-      (result as Stream<Object?>).listen(
-        values.add,
-        onError: (Object error) => errors.add(error),
-        onDone: done.complete,
-      );
-      await done.future.timeout(const Duration(seconds: 2));
-
-      expect(values, isEmpty);
-      expect(errors, hasLength(1));
-      expect(identical(errors.single, d4rt.eval('readLastFailure()')), isTrue);
-    });
-
-    test('switch expression resumes an awaited selector without replay',
-        () async {
-      expect(
-        await _runNamed('evaluateSwitchExpressionSelector'),
-        equals({
-          'value': 'selected',
-          'events': ['selector:start', 'selector:end', 'result'],
-        }),
-      );
-    });
-
-    test('switch expression retains its matched case across an awaited guard',
-        () async {
-      expect(
-        await _runNamed('evaluateSwitchExpressionGuard'),
-        equals({
-          'value': 'selected',
-          'events': ['selector', 'guard:start', 'guard:end', 'result'],
-        }),
-      );
-    });
-
-    test('switch expression resumes an awaited result without replay',
-        () async {
-      expect(
-        await _runNamed('evaluateSwitchExpressionResult'),
-        equals({
-          'value': 'selected!',
-          'events': [
-            'selector',
-            'result-prefix',
-            'result-await:start',
-            'result-await:end',
-          ],
-        }),
-      );
-    });
-
-    test('collection if retains its selected branch across suspension',
-        () async {
-      expect(
-        await _runNamed('evaluateCollectionIf'),
-        equals({
-          'values': ['ab'],
-          'events': [
-            'if:condition',
-            'if:branch-prefix',
-            'if:branch-await:start',
-            'if:branch-await:end',
-          ],
-        }),
-      );
-    });
-
-    test('collection for retains iteration progress across body awaits',
-        () async {
-      expect(
-        await _runNamed('evaluateCollectionFor'),
-        equals({
-          'values': [11, 22, 33],
-          'events': [
-            'for:iterable',
-            'for:prefix:1',
-            'for:await:1:start',
-            'for:await:1:end',
-            'for:prefix:2',
-            'for:await:2:start',
-            'for:await:2:end',
-            'for:prefix:3',
-            'for:await:3:start',
-            'for:await:3:end',
-          ],
-        }),
-      );
-    });
+    test(
+      'releases completed expression state before the next evaluation',
+      () async {
+        expect(
+          await _runNamed('evaluateCompound', positionalArgs: ['repeated']),
+          equals({
+            'value': [
+              [0, 20],
+              [1, 21],
+            ],
+            'providerCalls': 2,
+            'synchronousPrefixCalls': 2,
+            'combinedCalls': 0,
+            'order': [
+              'sync:0',
+              'async-start:20',
+              'async-end:20',
+              'sync:1',
+              'async-start:21',
+              'async-end:21',
+            ],
+          }),
+        );
+      },
+    );
 
     test(
-        'cancelling an async generator stops after await and runs finally once',
-        () async {
-      final d4rt = D4rt();
-      final result = d4rt.execute(
-        library: 'package:probe/dispatcher.dart',
-        sources: _sources,
-        name: 'cancellableGenerator',
-        allowFileSystemImports: false,
-      );
-      final values = <Object?>[];
-      final firstValue = Completer<void>();
+      'returns through all outer finalizers before and after suspension',
+      () async {
+        expect(
+          await _runNamed(
+            'returnThroughOuterFinalizers',
+            positionalArgs: [false],
+          ),
+          equals({'value': 81, 'innerFinallyCount': 1, 'outerFinallyCount': 1}),
+        );
+        expect(
+          await _runNamed(
+            'returnThroughOuterFinalizers',
+            positionalArgs: [true],
+          ),
+          equals({'value': 82, 'innerFinallyCount': 1, 'outerFinallyCount': 1}),
+        );
+      },
+    );
 
-      expect(result, isA<Stream<Object?>>());
-      final subscription = (result as Stream<Object?>).listen((value) {
-        values.add(value);
-        if (!firstValue.isCompleted) firstValue.complete();
-      });
-      await firstValue.future.timeout(const Duration(seconds: 2));
+    test(
+      'finally return overrides an earlier return and async error',
+      () async {
+        expect(
+          await _runNamed(
+            'runFinallyReturnOverride',
+            positionalArgs: ['return'],
+          ),
+          equals({'value': 92, 'overridingFinallyCount': 1}),
+        );
+        expect(
+          await _runNamed(
+            'runFinallyReturnOverride',
+            positionalArgs: ['error'],
+          ),
+          equals({'value': 93, 'overridingFinallyCount': 1}),
+        );
+      },
+    );
 
-      var reachedAwait = false;
-      for (var attempt = 0; attempt < 200; attempt++) {
-        final events = d4rt.eval('readGeneratorEvents()') as List<Object?>;
-        if (events.contains('before-await')) {
-          reachedAwait = true;
-          break;
+    test(
+      'yield await emits the resolved imported value exactly once',
+      () async {
+        final result = D4rt().execute(
+          library: 'package:probe/dispatcher.dart',
+          sources: _sources,
+          name: 'yieldImportedValue',
+          allowFileSystemImports: false,
+        );
+
+        expect(result, isA<Stream<Object?>>());
+        expect(
+          await (result as Stream<Object?>).toList().timeout(
+            const Duration(seconds: 2),
+          ),
+          [44],
+        );
+      },
+    );
+
+    test(
+      'yield await reports the original imported error on the stream',
+      () async {
+        final d4rt = D4rt();
+        final result = d4rt.execute(
+          library: 'package:probe/dispatcher.dart',
+          sources: _sources,
+          name: 'yieldImportedError',
+          allowFileSystemImports: false,
+        );
+        final values = <Object?>[];
+        final errors = <Object>[];
+        final done = Completer<void>();
+
+        expect(result, isA<Stream<Object?>>());
+        (result as Stream<Object?>).listen(
+          values.add,
+          onError: (Object error) => errors.add(error),
+          onDone: done.complete,
+        );
+        await done.future.timeout(const Duration(seconds: 2));
+
+        expect(values, isEmpty);
+        expect(errors, hasLength(1));
+        expect(
+          identical(errors.single, d4rt.eval('readLastFailure()')),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'switch expression resumes an awaited selector without replay',
+      () async {
+        expect(
+          await _runNamed('evaluateSwitchExpressionSelector'),
+          equals({
+            'value': 'selected',
+            'events': ['selector:start', 'selector:end', 'result'],
+          }),
+        );
+      },
+    );
+
+    test(
+      'switch expression retains its matched case across an awaited guard',
+      () async {
+        expect(
+          await _runNamed('evaluateSwitchExpressionGuard'),
+          equals({
+            'value': 'selected',
+            'events': ['selector', 'guard:start', 'guard:end', 'result'],
+          }),
+        );
+      },
+    );
+
+    test(
+      'switch expression resumes an awaited result without replay',
+      () async {
+        expect(
+          await _runNamed('evaluateSwitchExpressionResult'),
+          equals({
+            'value': 'selected!',
+            'events': [
+              'selector',
+              'result-prefix',
+              'result-await:start',
+              'result-await:end',
+            ],
+          }),
+        );
+      },
+    );
+
+    test(
+      'collection if retains its selected branch across suspension',
+      () async {
+        expect(
+          await _runNamed('evaluateCollectionIf'),
+          equals({
+            'values': ['ab'],
+            'events': [
+              'if:condition',
+              'if:branch-prefix',
+              'if:branch-await:start',
+              'if:branch-await:end',
+            ],
+          }),
+        );
+      },
+    );
+
+    test(
+      'collection for retains iteration progress across body awaits',
+      () async {
+        expect(
+          await _runNamed('evaluateCollectionFor'),
+          equals({
+            'values': [11, 22, 33],
+            'events': [
+              'for:iterable',
+              'for:prefix:1',
+              'for:await:1:start',
+              'for:await:1:end',
+              'for:prefix:2',
+              'for:await:2:start',
+              'for:await:2:end',
+              'for:prefix:3',
+              'for:await:3:start',
+              'for:await:3:end',
+            ],
+          }),
+        );
+      },
+    );
+
+    test(
+      'cancelling an async generator stops after await and runs finally once',
+      () async {
+        final d4rt = D4rt();
+        final result = d4rt.execute(
+          library: 'package:probe/dispatcher.dart',
+          sources: _sources,
+          name: 'cancellableGenerator',
+          allowFileSystemImports: false,
+        );
+        final values = <Object?>[];
+        final firstValue = Completer<void>();
+
+        expect(result, isA<Stream<Object?>>());
+        final subscription = (result as Stream<Object?>).listen((value) {
+          values.add(value);
+          if (!firstValue.isCompleted) firstValue.complete();
+        });
+        await firstValue.future.timeout(const Duration(seconds: 2));
+
+        var reachedAwait = false;
+        for (var attempt = 0; attempt < 200; attempt++) {
+          final events = d4rt.eval('readGeneratorEvents()') as List<Object?>;
+          if (events.contains('before-await')) {
+            reachedAwait = true;
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 1));
         }
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-      }
-      expect(reachedAwait, isTrue);
-      await subscription.cancel().timeout(const Duration(seconds: 2));
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(reachedAwait, isTrue);
+        await subscription.cancel().timeout(const Duration(seconds: 2));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
 
-      expect(values, [1]);
-      expect(
-        d4rt.eval('readGeneratorEvents()'),
-        ['start', 'before-await', 'finally-start', 'finally-end'],
-      );
-    });
+        expect(values, [1]);
+        expect(d4rt.eval('readGeneratorEvents()'), [
+          'start',
+          'before-await',
+          'finally-start',
+          'finally-end',
+        ]);
+      },
+    );
 
-    test('cancelling yield star detaches its stream and runs finalizers once',
-        () async {
-      final d4rt = D4rt();
-      final result = d4rt.execute(
-        library: 'package:probe/dispatcher.dart',
-        sources: _sources,
-        name: 'cancellableDelegatingGenerator',
-        allowFileSystemImports: false,
-      );
-      final values = <Object?>[];
-      final firstValue = Completer<void>();
+    test(
+      'cancelling yield star detaches its stream and runs finalizers once',
+      () async {
+        final d4rt = D4rt();
+        final result = d4rt.execute(
+          library: 'package:probe/dispatcher.dart',
+          sources: _sources,
+          name: 'cancellableDelegatingGenerator',
+          allowFileSystemImports: false,
+        );
+        final values = <Object?>[];
+        final firstValue = Completer<void>();
 
-      expect(result, isA<Stream<Object?>>());
-      final subscription = (result as Stream<Object?>).listen((value) {
-        values.add(value);
-        if (!firstValue.isCompleted) firstValue.complete();
-      });
-      await firstValue.future.timeout(const Duration(seconds: 2));
+        expect(result, isA<Stream<Object?>>());
+        final subscription = (result as Stream<Object?>).listen((value) {
+          values.add(value);
+          if (!firstValue.isCompleted) firstValue.complete();
+        });
+        await firstValue.future.timeout(const Duration(seconds: 2));
 
-      var reachedAwait = false;
-      for (var attempt = 0; attempt < 200; attempt++) {
-        final events = d4rt.eval('readGeneratorEvents()') as List<Object?>;
-        if (events.contains('inner:before-await')) {
-          reachedAwait = true;
-          break;
+        var reachedAwait = false;
+        for (var attempt = 0; attempt < 200; attempt++) {
+          final events = d4rt.eval('readGeneratorEvents()') as List<Object?>;
+          if (events.contains('inner:before-await')) {
+            reachedAwait = true;
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 1));
         }
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-      }
-      expect(reachedAwait, isTrue);
-      await subscription.cancel().timeout(const Duration(seconds: 2));
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(reachedAwait, isTrue);
+        await subscription.cancel().timeout(const Duration(seconds: 2));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
 
-      expect(values, [1]);
-      expect(
-        d4rt.eval('readGeneratorEvents()'),
-        [
+        expect(values, [1]);
+        expect(d4rt.eval('readGeneratorEvents()'), [
           'outer:start',
           'inner:start',
           'inner:before-await',
           'inner:finally',
           'outer:finally-start',
           'outer:finally-end',
-        ],
-      );
-    });
+        ]);
+      },
+    );
 
-    test('public compiled, eval, and direct invocation paths return Futures',
-        () async {
-      final d4rt = D4rt();
-      final function = d4rt.execute(source: '''
+    test(
+      'public compiled, eval, and direct invocation paths return Futures',
+      () async {
+        final d4rt = D4rt();
+        final function =
+            d4rt.execute(
+                  source: '''
 Future<int> work(int value) async {
   return await Future.value(value);
 }
@@ -1622,29 +1664,34 @@ Future<void> fallThrough() async {
 }
 
 main() => work;
-''') as InterpretedFunction;
+''',
+                )
+                as InterpretedFunction;
 
-      final invoked = d4rt.invokeInterpretedFunction(function, [51]);
-      expect(invoked, isA<Future<Object?>>());
-      expect(await (invoked as Future<Object?>), 51);
+        final invoked = d4rt.invokeInterpretedFunction(function, [51]);
+        expect(invoked, isA<Future<Object?>>());
+        expect(await (invoked as Future<Object?>), 51);
 
-      final evaluated = d4rt.eval('work(52)');
-      expect(evaluated, isA<Future<Object?>>());
-      expect(await (evaluated as Future<Object?>), 52);
+        final evaluated = d4rt.eval('work(52)');
+        expect(evaluated, isA<Future<Object?>>());
+        expect(await (evaluated as Future<Object?>), 52);
 
-      final fallenThrough = d4rt.eval('fallThrough()');
-      expect(fallenThrough, isA<Future<Object?>>());
-      expect(await (fallenThrough as Future<Object?>), isNull);
+        final fallenThrough = d4rt.eval('fallThrough()');
+        expect(fallenThrough, isA<Future<Object?>>());
+        expect(await (fallenThrough as Future<Object?>), isNull);
 
-      final compiledD4rt = D4rt();
-      final script = compiledD4rt.compile(source: '''
+        final compiledD4rt = D4rt();
+        final script = compiledD4rt.compile(
+          source: '''
 Future<int> main() async {
   return await Future.value(53);
 }
-''');
-      final compiled = compiledD4rt.executeCompiled(script);
-      expect(compiled, isA<Future<Object?>>());
-      expect(await (compiled as Future<Object?>), 53);
-    });
+''',
+        );
+        final compiled = compiledD4rt.executeCompiled(script);
+        expect(compiled, isA<Future<Object?>>());
+        expect(await (compiled as Future<Object?>), 53);
+      },
+    );
   });
 }

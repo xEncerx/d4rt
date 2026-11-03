@@ -8,8 +8,11 @@ abstract class EnumTypeReference extends AppliedRuntimeType {
   /// Resolves factories and the normal string representation of a type object.
   Object? getStaticMember(String member, InterpreterVisitor visitor) {
     if (member == 'toString') {
-      return NativeFunction((visitor, args, named, types) => name,
-          arity: 0, name: '$name.toString');
+      return NativeFunction(
+        (visitor, args, named, types) => name,
+        arity: 0,
+        name: '$name.toString',
+      );
     }
     return resolveFactory(member, visitor);
   }
@@ -32,10 +35,11 @@ class InterpretedEnum implements RuntimeType, Callable {
   final Map<String, InterpretedEnumValue> _values = {};
 
   /// The read-only unique constants created by this declaration.
-  late final Map<String, InterpretedEnumValue> values =
-      UnmodifiableMapView(_values);
+  late final Map<String, InterpretedEnumValue> values = UnmodifiableMapView(
+    _values,
+  );
   final Map<String, InterpretedEnumValue Function(InterpreterVisitor)>
-      _constantInitializers = {};
+  _constantInitializers = {};
   // Active entries retain a single allocation permit until their value is created.
   final Map<String, bool> _initializingConstants = {};
 
@@ -88,19 +92,27 @@ class InterpretedEnum implements RuntimeType, Callable {
 
   /// Creates an enum declaration to populate in the interpretation pass.
   InterpretedEnum(
-      this.name, this.declarationEnvironment, List<String> valueNames,
-      {this.typeParameterNames = const [], this.declaration})
-      : valueNames = List.unmodifiable(valueNames);
+    this.name,
+    this.declarationEnvironment,
+    List<String> valueNames, {
+    this.typeParameterNames = const [],
+    this.declaration,
+  }) : valueNames = List.unmodifiable(valueNames);
 
   /// Creates the declaration-pass placeholder without evaluating members.
   InterpretedEnum.placeholder(
-      this.name, this.declarationEnvironment, List<String> valueNames,
-      {this.typeParameterNames = const [], this.declaration})
-      : valueNames = List.unmodifiable(valueNames);
+    this.name,
+    this.declarationEnvironment,
+    List<String> valueNames, {
+    this.typeParameterNames = const [],
+    this.declaration,
+  }) : valueNames = List.unmodifiable(valueNames);
 
   /// Populates exactly once in the original library scope, including forward reads.
   Object? populateDeclaration(
-      InterpreterVisitor visitor, Object? Function() populate) {
+    InterpreterVisitor visitor,
+    Object? Function() populate,
+  ) {
     if (_populated || _populating) return null;
     final previous = visitor.environment;
     visitor.environment = declarationEnvironment;
@@ -133,20 +145,27 @@ class InterpretedEnum implements RuntimeType, Callable {
     for (final constant in valueNames) {
       _ensureConstant(constant);
     }
-    final list = List<InterpretedEnumValue>.unmodifiable(valueNames.map(
+    final list = List<InterpretedEnumValue>.unmodifiable(
+      valueNames.map(
         (name) =>
             values[name] ??
-            (throw RuntimeError('Enum $this is not initialized.'))));
+            (throw RuntimeError('Enum $this is not initialized.')),
+      ),
+    );
     markInterpreterOwnedCollection(list);
     final listType = declarationEnvironment.get('List') as RuntimeType;
     declarationEnvironment.annotateRuntimeType(
-        list, AppliedRuntimeType(listType, [instantiate(null)]));
+      list,
+      AppliedRuntimeType(listType, [instantiate(null)]),
+    );
     return _valuesList = list;
   }
 
   /// Registers a constant initializer; forward references share this owner.
-  void declareConstantInitializer(String constant,
-      InterpretedEnumValue Function(InterpreterVisitor) initialize) {
+  void declareConstantInitializer(
+    String constant,
+    InterpretedEnumValue Function(InterpreterVisitor) initialize,
+  ) {
     if (!valueNames.contains(constant) ||
         _constantInitializers.containsKey(constant)) {
       throw RuntimeError('Invalid or duplicate enum constant $constant.');
@@ -168,7 +187,8 @@ class InterpretedEnum implements RuntimeType, Callable {
       final visitor = InterpreterVisitor.currentCollectionVisitor;
       if (visitor == null) {
         throw RuntimeError(
-            'An invocation is required for enum initialization.');
+          'An invocation is required for enum initialization.',
+        );
       }
       final value = initialize(visitor);
       if (!identical(value.parentEnum, this) ||
@@ -184,21 +204,30 @@ class InterpretedEnum implements RuntimeType, Callable {
   }
 
   /// Creates a lexical member boundary; locals enclosing it can shadow members.
-  Environment memberEnvironment(
-          {InterpretedEnumValue? receiver,
-          Environment? enclosing,
-          RuntimeType? owner}) =>
-      EnumMemberEnvironment(this, receiver, owner,
-          enclosing: enclosing ?? declarationEnvironment);
+  Environment memberEnvironment({
+    InterpretedEnumValue? receiver,
+    Environment? enclosing,
+    RuntimeType? owner,
+  }) => EnumMemberEnvironment(
+    this,
+    receiver,
+    owner,
+    enclosing: enclosing ?? declarationEnvironment,
+  );
 
   /// Registers a static field without evaluating its initializer.
-  void declareStaticField(String name, VariableDeclaration variable,
-      VariableDeclarationList declaration) {
+  void declareStaticField(
+    String name,
+    VariableDeclaration variable,
+    VariableDeclarationList declaration,
+  ) {
     _staticFields[name] = _EnumStaticField(
-        variable.initializer, declaration.type,
-        isLate: declaration.lateKeyword != null,
-        isFinal: declaration.isFinal || declaration.isConst,
-        isConst: declaration.isConst);
+      variable.initializer,
+      declaration.type,
+      isLate: declaration.lateKeyword != null,
+      isFinal: declaration.isFinal || declaration.isConst,
+      isConst: declaration.isConst,
+    );
   }
 
   /// Whether a member is a compile-time constant owned by this declaration.
@@ -281,17 +310,25 @@ class InterpretedEnum implements RuntimeType, Callable {
   @override
   RuntimeType get callableRuntimeType => FunctionRuntimeType.untyped();
   @override
-  Object? call(InterpreterVisitor visitor, List<Object?> positionalArguments,
-          [Map<String, Object?> namedArguments = const {},
-          List<RuntimeType>? typeArguments]) =>
-      invokeFactory(
-          visitor, '', positionalArguments, namedArguments, typeArguments);
+  Object? call(
+    InterpreterVisitor visitor,
+    List<Object?> positionalArguments, [
+    Map<String, Object?> namedArguments = const {},
+    List<RuntimeType>? typeArguments,
+  ]) => invokeFactory(
+    visitor,
+    '',
+    positionalArguments,
+    namedArguments,
+    typeArguments,
+  );
 
   /// Reads one own static member, preserving lookup and execution errors.
   Object? getStaticMember(String member, InterpreterVisitor visitor) {
     if (!identical(InterpreterVisitor.currentCollectionVisitor, visitor)) {
-      return visitor
-          .runCollectionInvocation(() => getStaticMember(member, visitor));
+      return visitor.runCollectionInvocation(
+        () => getStaticMember(member, visitor),
+      );
     }
     _ensureDeclaration(visitor);
     if (member == 'new') member = '';
@@ -310,20 +347,27 @@ class InterpretedEnum implements RuntimeType, Callable {
     if (constructors.containsKey(member)) {
       if (!constructors[member]!.isFactory) {
         throw RuntimeError(
-            'Generative enum constructors cannot be called or torn off.');
+          'Generative enum constructors cannot be called or torn off.',
+        );
       }
-      return (_factoryReferences ??= {})
-          .putIfAbsent(member, () => EnumFactoryTearoff(this, member));
+      return (_factoryReferences ??= {}).putIfAbsent(
+        member,
+        () => EnumFactoryTearoff(this, member),
+      );
     }
     throw RuntimeError('Undefined static member $name.$member.');
   }
 
   /// Writes a static field or invokes its setter against the live owning state.
   void setStaticMember(
-      String member, Object? value, InterpreterVisitor visitor) {
+    String member,
+    Object? value,
+    InterpreterVisitor visitor,
+  ) {
     if (!identical(InterpreterVisitor.currentCollectionVisitor, visitor)) {
       visitor.runCollectionInvocation(
-          () => setStaticMember(member, value, visitor));
+        () => setStaticMember(member, value, visitor),
+      );
       return;
     }
     final setter = staticSetters[member];
@@ -341,7 +385,9 @@ class InterpretedEnum implements RuntimeType, Callable {
 
   /// Checks generic mixin arguments using the enum's substituted type context.
   void validateMixinArguments(
-      InterpretedClass mixin, List<RuntimeType> arguments) {
+    InterpretedClass mixin,
+    List<RuntimeType> arguments,
+  ) {
     if (arguments.length != mixin.typeParameterNames.length) {
       throw RuntimeError('Wrong enum mixin type argument count.');
     }
@@ -352,9 +398,11 @@ class InterpretedEnum implements RuntimeType, Callable {
     for (final parameter in mixin.typeParameterNames) {
       final bound = mixin.typeParameterBounds[parameter];
       if (bound != null &&
-          !enumTypeArgumentSatisfies(scope.get(parameter) as RuntimeType,
-              substituteEnumType(bound, mixin.typeParameterNames, arguments),
-              forBound: true)) {
+          !enumTypeArgumentSatisfies(
+            scope.get(parameter) as RuntimeType,
+            substituteEnumType(bound, mixin.typeParameterNames, arguments),
+            forBound: true,
+          )) {
         throw RuntimeError('Invalid enum mixin type argument $parameter.');
       }
     }
@@ -371,10 +419,14 @@ class InterpretedEnum implements RuntimeType, Callable {
     final target = substituteEnumType(expected, typeParameterNames, arguments);
     for (final mixin in mixinTypes) {
       final resolved = substituteEnumType(mixin, typeParameterNames, arguments);
-      final base =
-          resolved is AppliedRuntimeType ? resolved.baseType : resolved;
-      final projected = projectEnumType(resolved, target,
-          nativeMetadata: nativeMixinTypeMetadata[base]);
+      final base = resolved is AppliedRuntimeType
+          ? resolved.baseType
+          : resolved;
+      final projected = projectEnumType(
+        resolved,
+        target,
+        nativeMetadata: nativeMixinTypeMetadata[base],
+      );
       if (projected != null && enumTypeArgumentSatisfies(projected, target)) {
         return true;
       }
@@ -393,35 +445,46 @@ class InterpretedEnum implements RuntimeType, Callable {
 
   /// Infers owner arguments through the shared normalized enum signature.
   List<RuntimeType>? inferTypeArguments(
-      InterpreterVisitor visitor,
-      FormalParameterList? parameters,
-      List<Object?> arguments,
-      Map<String, Object?> named) {
-    return signatureFor(parameters).infer(visitor.environment,
-        typeParameterNames, typeParameterBounds, arguments, named);
+    InterpreterVisitor visitor,
+    FormalParameterList? parameters,
+    List<Object?> arguments,
+    Map<String, Object?> named,
+  ) {
+    return signatureFor(parameters).infer(
+      visitor.environment,
+      typeParameterNames,
+      typeParameterBounds,
+      arguments,
+      named,
+    );
   }
 
   /// Retains one resolved formal contract for each real constructor declaration.
   EnumSignature signatureFor(FormalParameterList? parameters) {
     if (parameters == null) return EnumSignature(const []);
     return _signatures.putIfAbsent(
-        parameters,
-        () => EnumSignature([
-              for (final parameter in parameters.parameters)
-                EnumFormalParameter(
-                    parameter.name?.lexeme ?? '', _formalType(parameter),
-                    isNamed: parameter.isNamed,
-                    isRequired: parameter.isRequiredPositional ||
-                        parameter.isRequiredNamed),
-            ]));
+      parameters,
+      () => EnumSignature([
+        for (final parameter in parameters.parameters)
+          EnumFormalParameter(
+            parameter.name?.lexeme ?? '',
+            _formalType(parameter),
+            isNamed: parameter.isNamed,
+            isRequired:
+                parameter.isRequiredPositional || parameter.isRequiredNamed,
+          ),
+      ]),
+    );
   }
 
   /// Checks evaluated constructor defaults and supplied values before its body.
   void validateBoundConstructorArguments(
-      FormalParameterList? parameters, Environment scope) {
+    FormalParameterList? parameters,
+    Environment scope,
+  ) {
     final signature = signatureFor(parameters);
     final types = [
-      for (final name in typeParameterNames) scope.get(name) as RuntimeType
+      for (final name in typeParameterNames) scope.get(name) as RuntimeType,
     ];
     signature.validateBoundValues(scope, typeParameterNames, types);
   }
@@ -432,17 +495,20 @@ class InterpretedEnum implements RuntimeType, Callable {
         parameter.functionTypedSuffix != null) {
       final suffix = parameter.functionTypedSuffix!;
       final function = resolveFunctionRuntimeType(
-          parameter.type, suffix.formalParameters, _signatureEnvironment,
-          typeParameterCount:
-              suffix.typeParameters?.typeParameters.length ?? 0);
+        parameter.type,
+        suffix.formalParameters,
+        _signatureEnvironment,
+        typeParameterCount: suffix.typeParameters?.typeParameters.length ?? 0,
+      );
       return suffix.question == null ? function : nullableEnumType(function);
     }
     if (parameter is RegularFormalParameter) annotation = parameter.type;
     if (parameter is FieldFormalParameter) {
       annotation = parameter.type;
       for (final field in fieldDeclarations) {
-        if (field.fields.variables
-            .any((field) => field.name.lexeme == parameter.name.lexeme)) {
+        if (field.fields.variables.any(
+          (field) => field.name.lexeme == parameter.name.lexeme,
+        )) {
           annotation ??= field.fields.type;
         }
       }
@@ -455,14 +521,19 @@ class InterpretedEnum implements RuntimeType, Callable {
   /// Resolves omitted arguments and checks bounds with the shared enum contract.
   List<RuntimeType> validateTypeArguments(List<RuntimeType>? arguments) =>
       resolveEnumTypeArguments(
-          name, typeParameterNames, typeParameterBounds, arguments);
+        name,
+        typeParameterNames,
+        typeParameterBounds,
+        arguments,
+      );
 
   /// The actual instantiated type of an enum constant or a type annotation.
   RuntimeType instantiate(List<RuntimeType>? arguments) {
     if (typeParameterNames.isEmpty) {
       if (arguments != null && arguments.isNotEmpty) {
         throw RuntimeError(
-            'Non-generic enum $name cannot take type arguments.');
+          'Non-generic enum $name cannot take type arguments.',
+        );
       }
       return this;
     }
@@ -471,7 +542,10 @@ class InterpretedEnum implements RuntimeType, Callable {
 
   /// Binds a receiver's enum and applied-mixin parameters to a method scope.
   void bindTypeParameters(
-      RuntimeType owner, List<RuntimeType> arguments, Environment environment) {
+    RuntimeType owner,
+    List<RuntimeType> arguments,
+    Environment environment,
+  ) {
     for (var i = 0; i < typeParameterNames.length; i++) {
       environment.define(typeParameterNames[i], arguments[i]);
     }
@@ -480,9 +554,13 @@ class InterpretedEnum implements RuntimeType, Callable {
         if (mixin is AppliedRuntimeType && identical(mixin.baseType, owner)) {
           for (var i = 0; i < owner.typeParameterNames.length; i++) {
             environment.define(
-                owner.typeParameterNames[i],
-                substituteEnumType(
-                    mixin.typeArguments[i], typeParameterNames, arguments));
+              owner.typeParameterNames[i],
+              substituteEnumType(
+                mixin.typeArguments[i],
+                typeParameterNames,
+                arguments,
+              ),
+            );
           }
         }
       }
@@ -490,36 +568,56 @@ class InterpretedEnum implements RuntimeType, Callable {
   }
 
   /// Calls a non-const factory without allocating an enum instance.
-  Object? invokeFactory(InterpreterVisitor visitor, String constructorName,
-      List<Object?> arguments, Map<String, Object?> named,
-      [List<RuntimeType>? types]) {
+  Object? invokeFactory(
+    InterpreterVisitor visitor,
+    String constructorName,
+    List<Object?> arguments,
+    Map<String, Object?> named, [
+    List<RuntimeType>? types,
+  ]) {
     if (!identical(InterpreterVisitor.currentCollectionVisitor, visitor)) {
-      return visitor.runCollectionInvocation(() =>
-          invokeFactory(visitor, constructorName, arguments, named, types));
+      return visitor.runCollectionInvocation(
+        () => invokeFactory(visitor, constructorName, arguments, named, types),
+      );
     }
     return _invokeFactory(
-        visitor, constructorName, arguments, named, types, {});
+      visitor,
+      constructorName,
+      arguments,
+      named,
+      types,
+      {},
+    );
   }
 
   Object? _invokeFactory(
-      InterpreterVisitor visitor,
-      String constructorName,
-      List<Object?> arguments,
-      Map<String, Object?> named,
-      List<RuntimeType>? types,
-      Set<InterpretedFunction> redirects) {
+    InterpreterVisitor visitor,
+    String constructorName,
+    List<Object?> arguments,
+    Map<String, Object?> named,
+    List<RuntimeType>? types,
+    Set<InterpretedFunction> redirects,
+  ) {
     _ensureDeclaration(visitor);
     final constructor = constructors[constructorName];
     if (constructor == null || !constructor.isFactory) {
       throw RuntimeError(
-          'Only enum factories can be invoked outside constant entries.');
+        'Only enum factories can be invoked outside constant entries.',
+      );
     }
-    final resolvedTypes = validateTypeArguments(types ??
-        inferTypeArguments(visitor, constructor.parameters, arguments, named));
+    final resolvedTypes = validateTypeArguments(
+      types ??
+          inferTypeArguments(visitor, constructor.parameters, arguments, named),
+    );
     final signature = signatureFor(constructor.parameters);
     signature.validateArguments(arguments, named);
-    signature.validateTypes(visitor.environment, typeParameterNames,
-        resolvedTypes, arguments, named);
+    signature.validateTypes(
+      visitor.environment,
+      typeParameterNames,
+      resolvedTypes,
+      arguments,
+      named,
+    );
     final target = constructor.redirectedConstructor;
     final Object? result;
     if (target != null) {
@@ -543,8 +641,14 @@ class InterpretedEnum implements RuntimeType, Callable {
       final redirectedTypes = type.typeArguments?.arguments
           .map((argument) => resolveRuntimeTypeArgument(argument, scope))
           .toList();
-      result = targetEnum._invokeFactory(visitor, targetName, arguments, named,
-          redirectedTypes ?? resolvedTypes, redirects);
+      result = targetEnum._invokeFactory(
+        visitor,
+        targetName,
+        arguments,
+        named,
+        redirectedTypes ?? resolvedTypes,
+        redirects,
+      );
     } else {
       result = constructor.call(visitor, arguments, named, resolvedTypes);
     }
@@ -552,7 +656,8 @@ class InterpretedEnum implements RuntimeType, Callable {
         !identical(result.parentEnum, this) ||
         !result.valueType.isSubtypeOf(instantiate(resolvedTypes))) {
       throw RuntimeError(
-          'Enum factory $name.$constructorName must return an existing constant of its type.');
+        'Enum factory $name.$constructorName must return an existing constant of its type.',
+      );
     }
     return result;
   }
@@ -562,8 +667,9 @@ class InterpretedEnum implements RuntimeType, Callable {
     if (methods.containsKey(member) ||
         getters.containsKey(member) ||
         setters.containsKey(member) ||
-        fieldDeclarations.any((field) =>
-            field.fields.variables.any((v) => v.name.lexeme == member))) {
+        fieldDeclarations.any(
+          (field) => field.fields.variables.any((v) => v.name.lexeme == member),
+        )) {
       return true;
     }
     for (final type in mixinTypes.reversed) {
@@ -581,8 +687,13 @@ class InterpretedEnum implements RuntimeType, Callable {
         return true;
       }
     }
-    return const ['index', 'name', 'hashCode', 'toString', 'runtimeType']
-        .contains(member);
+    return const [
+      'index',
+      'name',
+      'hashCode',
+      'toString',
+      'runtimeType',
+    ].contains(member);
   }
 
   /// Whether the enum supplies a concrete member of the required interface kind.
@@ -594,8 +705,11 @@ class InterpretedEnum implements RuntimeType, Callable {
     };
     if (own != null) return !own.isAbstract;
     if (kind == 'getter' &&
-        fieldDeclarations.any((field) => field.fields.variables
-            .any((variable) => variable.name.lexeme == member))) {
+        fieldDeclarations.any(
+          (field) => field.fields.variables.any(
+            (variable) => variable.name.lexeme == member,
+          ),
+        )) {
       return true;
     }
     for (final type in mixinTypes.reversed) {
@@ -623,8 +737,11 @@ class InterpretedEnum implements RuntimeType, Callable {
 
   /// Looks up a declared member in last-mixin-wins order.
   Object? readInstanceMember(
-      InterpretedEnumValue receiver, String member, InterpreterVisitor visitor,
-      {int? beforeMixin}) {
+    InterpretedEnumValue receiver,
+    String member,
+    InterpreterVisitor visitor, {
+    int? beforeMixin,
+  }) {
     if (beforeMixin == null) {
       if (receiver._fields.containsKey(member)) return receiver._fields[member];
       final getter = getters[member];
@@ -648,7 +765,11 @@ class InterpretedEnum implements RuntimeType, Callable {
         final method = base.findInstanceMethodAdapter(member);
         if (method != null) {
           return BridgedEnumMixinMethodCallable(
-              receiver, method, member, base.name);
+            receiver,
+            method,
+            member,
+            base.name,
+          );
         }
       }
     }
@@ -658,18 +779,24 @@ class InterpretedEnum implements RuntimeType, Callable {
       'hashCode' => receiver.hashCode,
       'runtimeType' => receiver.valueType,
       'toString' => NativeFunction(
-          (_, args, named, types) => receiver.toString(),
-          arity: 0,
-          name: 'toString'),
+        (_, args, named, types) => receiver.toString(),
+        arity: 0,
+        name: 'toString',
+      ),
       _ => throw RuntimeError(
-          "Undefined property '$member' on enum value '$receiver'."),
+        "Undefined property '$member' on enum value '$receiver'.",
+      ),
     };
   }
 
   /// Writes the nearest concrete setter, respecting a super lookup boundary.
-  void writeInstanceMember(InterpretedEnumValue receiver, String member,
-      Object? value, InterpreterVisitor visitor,
-      {int? beforeMixin}) {
+  void writeInstanceMember(
+    InterpretedEnumValue receiver,
+    String member,
+    Object? value,
+    InterpreterVisitor visitor, {
+    int? beforeMixin,
+  }) {
     if (beforeMixin == null) {
       final setter = setters[member];
       if (setter != null && !setter.isAbstract) {
@@ -719,8 +846,9 @@ abstract class EnumFactoryCallable implements Callable {
   EnumFactoryCallable bindContext(RuntimeType? context) {
     if (isBound || context is! FunctionRuntimeType) return this;
     final returnType = context.returnType;
-    final result =
-        returnType is NullableEnumArgument ? returnType.type : returnType;
+    final result = returnType is NullableEnumArgument
+        ? returnType.type
+        : returnType;
     if (result is! AppliedRuntimeType) return this;
     if (!identical(result.baseType, enumOwner)) return this;
     return bindTypeArguments(result.typeArguments);
@@ -737,11 +865,13 @@ class EnumFactoryTearoff extends EnumFactoryCallable {
   final List<RuntimeType>? _typeArguments;
 
   /// Creates a factory reference without constructing an enum instance.
-  EnumFactoryTearoff(this.enumType, this.constructorName,
-      {List<RuntimeType>? typeArguments})
-      : _typeArguments = typeArguments == null
-            ? null
-            : enumType.validateTypeArguments(typeArguments);
+  EnumFactoryTearoff(
+    this.enumType,
+    this.constructorName, {
+    List<RuntimeType>? typeArguments,
+  }) : _typeArguments = typeArguments == null
+           ? null
+           : enumType.validateTypeArguments(typeArguments);
 
   /// Fixes explicit generic arguments instead of inferring them at invocation.
   @override
@@ -758,17 +888,24 @@ class EnumFactoryTearoff extends EnumFactoryCallable {
   late final RuntimeType _runtimeType = _typeArguments == null
       ? FunctionRuntimeType.untyped()
       : enumType
-          .signatureFor(enumType.constructors[constructorName]!.parameters)
-          .specialize(enumType.typeParameterNames, _typeArguments)
-          .functionType(enumType.instantiate(_typeArguments));
+            .signatureFor(enumType.constructors[constructorName]!.parameters)
+            .specialize(enumType.typeParameterNames, _typeArguments)
+            .functionType(enumType.instantiate(_typeArguments));
   @override
   RuntimeType get callableRuntimeType => _runtimeType;
   @override
-  Object? call(InterpreterVisitor visitor, List<Object?> positionalArguments,
-          [Map<String, Object?> namedArguments = const {},
-          List<RuntimeType>? typeArguments]) =>
-      enumType.invokeFactory(visitor, constructorName, positionalArguments,
-          namedArguments, _typeArguments ?? typeArguments);
+  Object? call(
+    InterpreterVisitor visitor,
+    List<Object?> positionalArguments, [
+    Map<String, Object?> namedArguments = const {},
+    List<RuntimeType>? typeArguments,
+  ]) => enumType.invokeFactory(
+    visitor,
+    constructorName,
+    positionalArguments,
+    namedArguments,
+    _typeArguments ?? typeArguments,
+  );
 }
 
 /// A captured lexical boundary backed by live enum member state.
@@ -788,9 +925,12 @@ class EnumMemberEnvironment extends Environment {
   final RuntimeType? memberOwner;
 
   /// Creates a member scope without copying any writable state.
-  EnumMemberEnvironment(this.enumType, this.receiver, this.memberOwner,
-      {required Environment enclosing})
-      : super(enclosing: enclosing);
+  EnumMemberEnvironment(
+    this.enumType,
+    this.receiver,
+    this.memberOwner, {
+    required Environment enclosing,
+  }) : super(enclosing: enclosing);
 
   InterpretedClass? get _mixinOwner =>
       memberOwner is InterpretedClass ? memberOwner as InterpretedClass : null;
@@ -799,17 +939,17 @@ class EnumMemberEnvironment extends Environment {
     return owner == null
         ? enumType.hasStaticMember(name)
         : owner.staticFields.containsKey(name) ||
-            owner.staticMethods.containsKey(name) ||
-            owner.staticGetters.containsKey(name) ||
-            owner.staticSetters.containsKey(name);
+              owner.staticMethods.containsKey(name) ||
+              owner.staticGetters.containsKey(name) ||
+              owner.staticSetters.containsKey(name);
   }
 
   bool _hasInstance(String name) =>
       receiver != null &&
       (name == 'name'
           ? enumType.hasConcreteInstanceMember(name, 'getter') ||
-              enumType.hasConcreteInstanceMember(name, 'method') ||
-              enumType.hasConcreteInstanceMember(name, 'setter')
+                enumType.hasConcreteInstanceMember(name, 'method') ||
+                enumType.hasConcreteInstanceMember(name, 'setter')
           : enumType.hasInstanceMember(name));
   bool _defaultName(String name) =>
       name == 'name' &&
@@ -872,8 +1012,8 @@ class EnumMemberEnvironment extends Environment {
   @override
   Environment? findDefiningEnvironment(String name) =>
       isDefinedLocally(name) || _has(name)
-          ? this
-          : super.findDefiningEnvironment(name);
+      ? this
+      : super.findDefiningEnvironment(name);
 }
 
 /// A reified enum instantiation with substituted interface and mixin types.
@@ -883,8 +1023,10 @@ class EnumRuntimeType extends EnumTypeReference {
 
   @override
   Object? resolveFactory(String member, InterpreterVisitor visitor) {
-    final result =
-        (baseType as InterpretedEnum).getStaticMember(member, visitor);
+    final result = (baseType as InterpretedEnum).getStaticMember(
+      member,
+      visitor,
+    );
     if (result is! EnumFactoryTearoff) {
       throw RuntimeError('Instantiated enum types expose factories only.');
     }
@@ -896,13 +1038,14 @@ class EnumRuntimeType extends EnumTypeReference {
       enumTypeArgumentSatisfies(this, other);
 }
 
-bool _enumSubtype(InterpretedEnum definition, List<RuntimeType> arguments,
-        RuntimeType other) =>
-    enumTypeArgumentSatisfies(
-        arguments.isEmpty
-            ? definition
-            : AppliedRuntimeType(definition, arguments),
-        other);
+bool _enumSubtype(
+  InterpretedEnum definition,
+  List<RuntimeType> arguments,
+  RuntimeType other,
+) => enumTypeArgumentSatisfies(
+  arguments.isEmpty ? definition : AppliedRuntimeType(definition, arguments),
+  other,
+);
 
 class _EnumStaticField {
   final Expression? initializer;
@@ -914,8 +1057,13 @@ class _EnumStaticField {
   bool _initialized = false;
   bool _initializing = false;
   Object? _value;
-  _EnumStaticField(this.initializer, this.annotation,
-      {required this.isLate, required this.isFinal, required this.isConst});
+  _EnumStaticField(
+    this.initializer,
+    this.annotation, {
+    required this.isLate,
+    required this.isFinal,
+    required this.isConst,
+  });
   Object? read(InterpretedEnum owner, InterpreterVisitor visitor, String name) {
     if (_initialized) return _value;
     if (_initializing) throw StackOverflowError();
@@ -941,8 +1089,12 @@ class _EnumStaticField {
     }
   }
 
-  void write(Object? value, InterpretedEnum owner, InterpreterVisitor visitor,
-      String name) {
+  void write(
+    Object? value,
+    InterpretedEnum owner,
+    InterpreterVisitor visitor,
+    String name,
+  ) {
     if (isFinal && (!isLate || initializer != null || _initialized)) {
       throw RuntimeError('Cannot assign final enum field $name.');
     }
@@ -956,12 +1108,17 @@ class _EnumStaticField {
 }
 
 void _checkEnumFieldValue(
-    String name, Object? value, RuntimeType? expected, Environment scope) {
+  String name,
+  Object? value,
+  RuntimeType? expected,
+  Environment scope,
+) {
   if (expected == null) return;
   final actual = scope.getRuntimeType(value);
   if (actual == null || !enumTypeArgumentSatisfies(actual, expected)) {
     throw RuntimeError(
-        'Invalid value for enum field $name: expected ${expected.name}.');
+      'Invalid value for enum field $name: expected ${expected.name}.',
+    );
   }
   if ((value is List || value is Map || value is Set) &&
       actual is! AppliedRuntimeType &&
@@ -990,37 +1147,47 @@ class InterpretedEnumValue implements RuntimeValue {
 
   /// Creates a constant under the enum declaration's construction authority.
   factory InterpretedEnumValue(
-      InterpretedEnum parentEnum, String name, int index,
-      {List<RuntimeType> typeArguments = const []}) {
+    InterpretedEnum parentEnum,
+    String name,
+    int index, {
+    List<RuntimeType> typeArguments = const [],
+  }) {
     if (index < 0 ||
         index >= parentEnum.valueNames.length ||
         parentEnum.valueNames[index] != name ||
         parentEnum._initializingConstants[name] != true) {
       throw RuntimeError(
-          'Enum values can only be allocated once by their owning entry initializer.');
+        'Enum values can only be allocated once by their owning entry initializer.',
+      );
     }
     parentEnum._initializingConstants[name] = false;
     return InterpretedEnumValue._(parentEnum, name, index, typeArguments);
   }
   InterpretedEnumValue._(
-      this.parentEnum, this.name, this.index, List<RuntimeType> typeArguments)
-      : typeArguments = List.unmodifiable(typeArguments);
+    this.parentEnum,
+    this.name,
+    this.index,
+    List<RuntimeType> typeArguments,
+  ) : typeArguments = List.unmodifiable(typeArguments);
 
   /// Checks the field invariant and seals the constant against direct writes.
   void finishInitialization() {
     if (!_initializing || parentEnum._initializingConstants[name] != false) {
       throw RuntimeError(
-          'Only the owning initializer can seal an enum constant.');
+        'Only the owning initializer can seal an enum constant.',
+      );
     }
     if (!valueType.isSubtypeOf(parentEnum.instantiate(null))) {
       throw RuntimeError(
-          'Enum constants must conform to the declared values element type.');
+        'Enum constants must conform to the declared values element type.',
+      );
     }
     for (final field in parentEnum.fieldDeclarations) {
       for (final variable in field.fields.variables) {
         if (!_fields.containsKey(variable.name.lexeme)) {
           throw RuntimeError(
-              'Uninitialized enum field ${variable.name.lexeme}.');
+            'Uninitialized enum field ${variable.name.lexeme}.',
+          );
         }
       }
     }
@@ -1028,8 +1195,12 @@ class InterpretedEnumValue implements RuntimeValue {
   }
 
   /// Runs a generative constructor while detecting redirect cycles.
-  Object? initialize(InterpreterVisitor visitor, String constructor,
-      List<Object?> args, Map<String, Object?> named) {
+  Object? initialize(
+    InterpreterVisitor visitor,
+    String constructor,
+    List<Object?> args,
+    Map<String, Object?> named,
+  ) {
     if (!_initializing || !_activeConstructors.add(constructor)) {
       throw RuntimeError('Invalid enum constructor redirection.');
     }
@@ -1059,8 +1230,9 @@ class InterpretedEnumValue implements RuntimeValue {
     if (_initializing && visitor == null) {
       FieldDeclaration? declaration;
       for (final field in parentEnum.fieldDeclarations) {
-        if (field.fields.variables
-            .any((variable) => variable.name.lexeme == member)) {
+        if (field.fields.variables.any(
+          (variable) => variable.name.lexeme == member,
+        )) {
           declaration = field;
           break;
         }
@@ -1105,6 +1277,11 @@ class EnumSuper {
 
   /// Invokes the inherited setter without permitting constant field mutation.
   void set(String name, Object? value, InterpreterVisitor visitor) =>
-      receiver.parentEnum.writeInstanceMember(receiver, name, value, visitor,
-          beforeMixin: beforeMixin);
+      receiver.parentEnum.writeInstanceMember(
+        receiver,
+        name,
+        value,
+        visitor,
+        beforeMixin: beforeMixin,
+      );
 }

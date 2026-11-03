@@ -10,8 +10,9 @@ class BridgedEnumFactorySpecialization {
 
   /// Creates an immutable capability; types must describe compiled native types.
   BridgedEnumFactorySpecialization(
-      List<RuntimeType> typeArguments, this.adapter)
-      : typeArguments = ownEnumTypeArguments(typeArguments);
+    List<RuntimeType> typeArguments,
+    this.adapter,
+  ) : typeArguments = ownEnumTypeArguments(typeArguments);
 
   bool _matches(List<RuntimeType> requested) {
     if (requested.length != typeArguments.length) return false;
@@ -53,16 +54,16 @@ class BridgedEnumFactory {
   final EnumTypeMetadata? _resolvedMetadata;
 
   /// Creates a factory with a finite set of real native implementations.
-  BridgedEnumFactory(
-      {required EnumSignature signature,
-      required List<BridgedEnumFactorySpecialization> specializations})
-      : this._resolved(signature, specializations, null);
+  BridgedEnumFactory({
+    required EnumSignature signature,
+    required List<BridgedEnumFactorySpecialization> specializations,
+  }) : this._resolved(signature, specializations, null);
 
   BridgedEnumFactory._resolved(
-      this.signature,
-      List<BridgedEnumFactorySpecialization> specializations,
-      this._resolvedMetadata)
-      : specializations = List.unmodifiable(specializations) {
+    this.signature,
+    List<BridgedEnumFactorySpecialization> specializations,
+    this._resolvedMetadata,
+  ) : specializations = List.unmodifiable(specializations) {
     if (specializations.isEmpty) {
       throw ArgumentError('Factory has no specializations.');
     }
@@ -78,16 +79,13 @@ class BridgedEnumFactory {
   /// Resolves native nominal templates once for the registered enum namespace.
   BridgedEnumFactory resolveTypes(EnumTypeMetadata? metadata) {
     if (metadata == null || identical(metadata, _resolvedMetadata)) return this;
-    return BridgedEnumFactory._resolved(
-      signature.resolveTypes(metadata),
-      [
-        for (final specialization in specializations)
-          BridgedEnumFactorySpecialization(
-              metadata.arguments(specialization.typeArguments),
-              specialization.adapter),
-      ],
-      metadata,
-    );
+    return BridgedEnumFactory._resolved(signature.resolveTypes(metadata), [
+      for (final specialization in specializations)
+        BridgedEnumFactorySpecialization(
+          metadata.arguments(specialization.typeArguments),
+          specialization.adapter,
+        ),
+    ], metadata);
   }
 
   /// Validates compiled capabilities against the registered enum bounds.
@@ -97,24 +95,36 @@ class BridgedEnumFactory {
         owner.typeMetadata!.arguments(specialization.typeArguments);
       } else {
         resolveEnumTypeArguments(
-            owner.name, const [], const {}, specialization.typeArguments);
+          owner.name,
+          const [],
+          const {},
+          specialization.typeArguments,
+        );
       }
     }
   }
 
   BridgedEnumFactoryAdapter _select(
-      BridgedEnum owner, String name, List<RuntimeType> arguments) {
+    BridgedEnum owner,
+    String name,
+    List<RuntimeType> arguments,
+  ) {
     for (final specialization in specializations) {
       if (specialization._matches(arguments)) return specialization.adapter;
     }
-    throw RuntimeError('Unsupported native enum factory ${owner.name}.$name'
-        '<${arguments.map((type) => type.name).join(', ')}>: '
-        'register or generate this exact compiled specialization.');
+    throw RuntimeError(
+      'Unsupported native enum factory ${owner.name}.$name'
+      '<${arguments.map((type) => type.name).join(', ')}>: '
+      'register or generate this exact compiled specialization.',
+    );
   }
 
   /// Creates a tear-off, selecting an explicit specialization only once.
-  EnumFactoryCallable bind(BridgedEnum owner, String name,
-      [List<RuntimeType>? types]) {
+  EnumFactoryCallable bind(
+    BridgedEnum owner,
+    String name, [
+    List<RuntimeType>? types,
+  ]) {
     final resolvedFactory = resolveTypes(owner.typeMetadata);
     if (!identical(resolvedFactory, this)) {
       return resolvedFactory.bind(owner, name, types);
@@ -122,10 +132,16 @@ class BridgedEnumFactory {
     if (types == null) {
       return _NativeEnumFactoryCallable(owner, name, this, null, null);
     }
-    final resolved = owner.typeMetadata?.arguments(types) ??
+    final resolved =
+        owner.typeMetadata?.arguments(types) ??
         resolveEnumTypeArguments(owner.name, const [], const {}, types);
     return _NativeEnumFactoryCallable(
-        owner, name, this, resolved, _select(owner, name, resolved));
+      owner,
+      name,
+      this,
+      resolved,
+      _select(owner, name, resolved),
+    );
   }
 }
 
@@ -137,11 +153,17 @@ class _NativeEnumFactoryCallable extends EnumFactoryCallable {
   final BridgedEnumFactoryAdapter? boundAdapter;
   final EnumSignature signature;
   _NativeEnumFactoryCallable(
-      this.owner, this.name, this.factory, this.boundTypes, this.boundAdapter)
-      : signature = boundTypes == null
-            ? factory.signature
-            : factory.signature.specialize(
-                owner.typeMetadata?.typeParameters ?? const [], boundTypes);
+    this.owner,
+    this.name,
+    this.factory,
+    this.boundTypes,
+    this.boundAdapter,
+  ) : signature = boundTypes == null
+          ? factory.signature
+          : factory.signature.specialize(
+              owner.typeMetadata?.typeParameters ?? const [],
+              boundTypes,
+            );
   @override
   RuntimeType get enumOwner => owner;
   @override
@@ -162,32 +184,42 @@ class _NativeEnumFactoryCallable extends EnumFactoryCallable {
   @override
   RuntimeType get callableRuntimeType => _runtimeType;
   @override
-  Object? call(InterpreterVisitor visitor, List<Object?> positional,
-      [Map<String, Object?> named = const {}, List<RuntimeType>? types]) {
+  Object? call(
+    InterpreterVisitor visitor,
+    List<Object?> positional, [
+    Map<String, Object?> named = const {},
+    List<RuntimeType>? types,
+  ]) {
     visitor.checkDeadline();
     signature.validateArguments(positional, named);
     if (boundTypes != null && types != null && types.isNotEmpty) {
       throw RuntimeError(
-          'Bound enum factory cannot take method type arguments.');
+        'Bound enum factory cannot take method type arguments.',
+      );
     }
     final metadata = owner.typeMetadata;
-    final arguments = boundTypes ??
+    final arguments =
+        boundTypes ??
         (metadata == null
             ? resolveEnumTypeArguments(owner.name, const [], const {}, types)
-            : metadata.arguments(types ??
-                factory.signature.infer(
-                    visitor.environment,
-                    metadata.typeParameters,
-                    metadata.resolvedBounds,
-                    positional,
-                    named)));
+            : metadata.arguments(
+                types ??
+                    factory.signature.infer(
+                      visitor.environment,
+                      metadata.typeParameters,
+                      metadata.resolvedBounds,
+                      positional,
+                      named,
+                    ),
+              ));
     final adapter = boundAdapter ?? factory._select(owner, name, arguments);
     signature.validateTypes(
-        visitor.environment,
-        isBound ? const [] : metadata?.typeParameters ?? const [],
-        arguments,
-        positional,
-        named);
+      visitor.environment,
+      isBound ? const [] : metadata?.typeParameters ?? const [],
+      arguments,
+      positional,
+      named,
+    );
     final Object? result;
     try {
       result = adapter(visitor, positional, named, arguments);
@@ -197,15 +229,17 @@ class _NativeEnumFactoryCallable extends EnumFactoryCallable {
     final value = result is BridgedEnumValue
         ? result
         : result is Enum
-            ? owner.values[result.name]
-            : null;
+        ? owner.values[result.name]
+        : null;
     if (value == null ||
         !identical(value.enumType, owner) ||
         !identical(owner.values[value.name], value) ||
         (result is Enum && !identical(result, value.nativeValue)) ||
         !_resultMatches(value.typeArguments, arguments)) {
-      throw RuntimeError('Native enum factory ${owner.name}.$name must return '
-          'an existing constant of its enum type.');
+      throw RuntimeError(
+        'Native enum factory ${owner.name}.$name must return '
+        'an existing constant of its enum type.',
+      );
     }
     return result;
   }
