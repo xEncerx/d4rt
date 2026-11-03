@@ -1,4 +1,5 @@
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/utils/debug_description.dart';
 
 /// Represents a late variable that supports lazy initialization
 class LateVariable {
@@ -18,9 +19,11 @@ class LateVariable {
         // Lazy initialization
         _value = _initializer();
         _isInitialized = true;
-        Logger.debug(
-          "[LateVariable] Lazy initialized '$_name' with value: $_value",
-        );
+        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+          Logger.debug(
+            "[LateVariable] Lazy initialized '$_name' with value: ${describeDebugValue(_value)}",
+          );
+        }
       } else {
         // Late variable without initializer accessed before assignment
         throw LateInitializationError(
@@ -40,7 +43,11 @@ class LateVariable {
     }
     _value = value;
     _isInitialized = true;
-    Logger.debug("[LateVariable] Assigned '$_name' = $value");
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[LateVariable] Assigned '$_name' = ${describeDebugValue(value)}",
+      );
+    }
   }
 
   /// Set the value

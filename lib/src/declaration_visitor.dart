@@ -69,9 +69,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
       node.withClause?.mixinTypes ?? const [],
     );
     environment.define(className, placeholder);
-    Logger.debug(
-      "[DeclarationVisitor] Defined placeholder for class '$className' in env: [38;5;244m${environment.hashCode}[0m",
-    );
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[DeclarationVisitor] Defined placeholder for class '$className' in env: [38;5;244m${identityHashCode(environment)}[0m",
+      );
+    }
   }
 
   @override
@@ -114,9 +116,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
       node.onClause?.superclassConstraints ?? const [],
     );
     environment.define(mixinName, placeholder);
-    Logger.debug(
-      "[DeclarationVisitor] Defined placeholder for mixin '$mixinName' in env: [38;5;244m${environment.hashCode}[0m",
-    );
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[DeclarationVisitor] Defined placeholder for mixin '$mixinName' in env: [38;5;244m${identityHashCode(environment)}[0m",
+      );
+    }
   }
 
   @override
@@ -142,9 +146,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
 
     // Define the enum type placeholder in the current environment
     environment.define(enumName, enumPlaceholder);
-    Logger.debug(
-      "[DeclarationVisitor] Defined placeholder for enum '$enumName' with value order [${valueNames.join(', ')}] in env: [38;5;244m${environment.hashCode}[0m",
-    );
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[DeclarationVisitor] Defined placeholder for enum '$enumName' with value order [${valueNames.join(', ')}] in env: [38;5;244m${identityHashCode(environment)}[0m",
+      );
+    }
 
     // Do NOT process members or constants here. That happens in Pass 2 (InterpreterVisitor).
   }
@@ -153,9 +159,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
   @override
   void visitFunctionDeclaration(FunctionDeclaration node) {
     final functionName = node.name.lexeme;
-    Logger.debug(
-      "[DeclarationVisitor.visitFunctionDeclaration] Processing function: $functionName",
-    );
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[DeclarationVisitor.visitFunctionDeclaration] Processing function: $functionName",
+      );
+    }
 
     if (environment.isDefinedLocally(functionName)) {
       return;
@@ -166,9 +174,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
     final typeParameters = node.functionExpression.typeParameters;
 
     if (typeParameters != null) {
-      Logger.debug(
-        "[DeclarationVisitor.visitFunctionDeclaration] Function '$functionName' has ${typeParameters.typeParameters.length} type parameters",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[DeclarationVisitor.visitFunctionDeclaration] Function '$functionName' has ${typeParameters.typeParameters.length} type parameters",
+        );
+      }
 
       // Create a temporary environment for type resolution
       tempEnvironment = Environment(enclosing: environment);
@@ -181,9 +191,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
         final typeParamPlaceholder = TypeParameter(paramName);
         tempEnvironment.define(paramName, typeParamPlaceholder);
 
-        Logger.debug(
-          "[DeclarationVisitor.visitFunctionDeclaration]   Defined type parameter '$paramName' in temp environment",
-        );
+        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+          Logger.debug(
+            "[DeclarationVisitor.visitFunctionDeclaration]   Defined type parameter '$paramName' in temp environment",
+          );
+        }
       }
     }
 
@@ -233,10 +245,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
     final isAsync = node.functionExpression.body.isAsynchronous;
 
     if (returnTypeNode is NamedType) {
-      final typeSource = returnTypeNode.toSource();
-      Logger.debug(
-        "[DeclarationVisitor.visitFunctionDeclaration]   Return type node: $typeSource",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[DeclarationVisitor.visitFunctionDeclaration]   Return type node: ${returnTypeNode.toSource()}",
+        );
+      }
 
       try {
         if (isAsync && returnTypeNode.name.lexeme == 'Future') {
@@ -260,7 +273,7 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
         }
       } on RuntimeError catch (e) {
         Logger.warn(
-          "[DeclarationVisitor.visitFunctionDeclaration]     Type '$typeSource' not found in environment (RuntimeError: ${e.message}). Using placeholder.",
+          "[DeclarationVisitor.visitFunctionDeclaration]     Type '${returnTypeNode.toSource()}' not found in environment (RuntimeError: ${e.message}). Using placeholder.",
         );
         declaredReturnType = BridgedClass(
           nativeType: Object,
@@ -285,9 +298,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
       declaredReturnType,
       isNullable,
     );
-    Logger.debug(
-      "[DeclarationVisitor.visitFunctionDeclaration]   Defining function '$functionName' with declaredReturnType: ${declaredReturnType.name} (Hash: ${declaredReturnType.hashCode})",
-    );
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[DeclarationVisitor.visitFunctionDeclaration]   Defining function '$functionName' with return annotation: ${returnTypeNode?.toSource() ?? 'inferred'} (type identity: ${identityHashCode(declaredReturnType)})",
+      );
+    }
     environment.defineFunction(functionName, function);
   }
 
@@ -309,9 +324,11 @@ class DeclarationVisitor extends GeneralizingAstVisitor<void> {
             variable.initializer!,
           );
         }
-        Logger.debug(
-          "[DeclarationVisitor] Defined top-level variable placeholder '${variable.name.lexeme}' in env: ${environment.hashCode}",
-        );
+        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+          Logger.debug(
+            "[DeclarationVisitor] Defined top-level variable placeholder '${variable.name.lexeme}' in env: ${identityHashCode(environment)}",
+          );
+        }
       }
     }
   }

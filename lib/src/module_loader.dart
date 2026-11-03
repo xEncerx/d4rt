@@ -14,6 +14,7 @@ import 'package:d4rt/src/stdlib/math.dart';
 import 'package:d4rt/src/stdlib/stdlib_io.dart'
     if (dart.library.html) 'package:d4rt/src/stdlib/stdlib_web.dart';
 import 'package:d4rt/src/stdlib/typed_data.dart';
+import 'package:d4rt/src/utils/debug_description.dart';
 import 'package:d4rt/src/utils/platform/filesystem.dart';
 
 // Represent an module of source code loaded and parsed.
@@ -24,6 +25,10 @@ class LoadedModule {
   final Environment
   exportedEnvironment; // The environment of the exported symbols
   final InterpreterVisitor interpreter;
+
+  // Retain the source key already required by loading. Cache diagnostics must
+  // not stringify an arbitrary caller-provided Uri again.
+  String? _diagnosticUri;
 
   LoadedModule(
     this.uri,
@@ -83,9 +88,11 @@ class ModuleLoader {
   }) : _metadataOnly = metadataOnly,
        steps = InvocationSteps(maxSteps),
        _rootOnPrint = rootOnPrint {
-    Logger.debug(
-      "[ModuleLoader] Initialized with ${sources.length} preloaded sources.",
-    );
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[ModuleLoader] Initialized with ${sources.length} preloaded sources.",
+      );
+    }
   }
 
   bool _isPublicName(String name) => !name.startsWith('_');
@@ -224,15 +231,19 @@ class ModuleLoader {
       if (combinator is ShowCombinator) {
         showNames ??= {};
         showNames.addAll(combinator.shownNames.map((id) => id.name));
-        Logger.debug(
-          "[ModuleLoader loadModule for $ownerUri]   $directiveType combinator: show ${combinator.shownNames.map((id) => id.name).join(', ')}",
-        );
+        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+          Logger.debug(
+            "[ModuleLoader loadModule for ${describeDebugValue(ownerUri)}]   $directiveType combinator: show ${combinator.shownNames.map((id) => id.name).join(', ')}",
+          );
+        }
       } else if (combinator is HideCombinator) {
         hideNames ??= {};
         hideNames.addAll(combinator.hiddenNames.map((id) => id.name));
-        Logger.debug(
-          "[ModuleLoader loadModule for $ownerUri]   $directiveType combinator: hide ${combinator.hiddenNames.map((id) => id.name).join(', ')}",
-        );
+        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+          Logger.debug(
+            "[ModuleLoader loadModule for ${describeDebugValue(ownerUri)}]   $directiveType combinator: hide ${combinator.hiddenNames.map((id) => id.name).join(', ')}",
+          );
+        }
       }
     }
 
@@ -254,9 +265,11 @@ class ModuleLoader {
       final prefixedEnv = importedModule.exportedEnvironment
           .shallowCopyFiltered(showNames: showNames, hideNames: hideNames);
       targetEnvironment.definePrefixedImport(prefix, prefixedEnv);
-      Logger.debug(
-        "[ModuleLoader loadModule for $ownerUri]   Successfully defined prefixed import '$prefix' from ${resolvedImportUri.toString()} into ${ownerUri.toString()} (show: ${showNames?.join(", ")}, hide: ${hideNames?.join(", ")}).",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[ModuleLoader] Defined prefixed import '$prefix' from ${importedModule._diagnosticUri ?? describeDebugValue(importedModule)} (show: ${showNames?.join(", ")}, hide: ${hideNames?.join(", ")}).",
+        );
+      }
       return;
     }
 
@@ -265,9 +278,11 @@ class ModuleLoader {
       hideNames: hideNames,
     );
     targetEnvironment.importEnvironment(visible, hide: localNames);
-    Logger.debug(
-      "[ModuleLoader loadModule for $ownerUri]   Successfully imported environment from ${resolvedImportUri.toString()} into ${ownerUri.toString()} (show: ${showNames?.join(", ")}, hide: ${hideNames?.join(", ")}).",
-    );
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[ModuleLoader] Imported ${importedModule._diagnosticUri ?? describeDebugValue(importedModule)} (show: ${showNames?.join(", ")}, hide: ${hideNames?.join(", ")}).",
+      );
+    }
   }
 
   void _checkFileSystemSourceReadPermission(Uri fileUri) {
@@ -313,10 +328,13 @@ class ModuleLoader {
     _checkModulePermissions(uri);
 
     if (_moduleCache.containsKey(uri)) {
-      Logger.debug(
-        "[ModuleLoader loadModule for $uri] Module '${uri.toString()}' found in cache.",
-      );
-      return _moduleCache[uri]!;
+      final cached = _moduleCache[uri]!;
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[ModuleLoader] Module '${cached._diagnosticUri}' found in cache.",
+        );
+      }
+      return cached;
     }
 
     if (_loadingModules.contains(uri)) {
@@ -329,13 +347,14 @@ class ModuleLoader {
     _moduleLoadStack.add(uri);
 
     try {
-      Logger.debug(
-        "[ModuleLoader loadModule for $uri] Loading module: ${uri.toString()}",
-      );
       final moduleEnvironment = _ModuleEnvironment(
         enclosing: globalEnvironment,
       );
-      String sourceCode = _fetchModuleSource(uri, moduleEnvironment);
+      final uriString = uri.toString();
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug("[ModuleLoader] Loading module: $uriString");
+      }
+      String sourceCode = _fetchModuleSource(uri, uriString, moduleEnvironment);
       CompilationUnit ast = _parseSource(uri, sourceCode);
       if (_metadataOnly) {
         AnalysisMetadata.declare(ast, moduleEnvironment);
@@ -379,9 +398,11 @@ class ModuleLoader {
           .shallowCopyFiltered(hideNames: privateNames);
       final localNames = moduleEnvironment.values.keys.toSet();
 
-      Logger.debug(
-        "[ModuleLoader loadModule for $uri] Processing import directives...",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[ModuleLoader loadModule for $uriString] Processing import directives...",
+        );
+      }
       for (final directive in ast.directives) {
         if (directive is! ImportDirective) {
           continue;
@@ -399,9 +420,11 @@ class ModuleLoader {
             importedUriString,
             from: uri,
           );
-          Logger.debug(
-            "[ModuleLoader loadModule for $uri]   Importing from ${uri.toString()}: URI '$importedUriString', resolved to '${resolvedImportUri.toString()}'",
-          );
+          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+            Logger.debug(
+              "[ModuleLoader loadModule for $uriString] Importing '$importedUriString'",
+            );
+          }
           final importedModule = loadModule(resolvedImportUri);
           final prefix = directive.prefix?.name;
 
@@ -431,9 +454,11 @@ class ModuleLoader {
           rethrow;
         }
       }
-      Logger.debug(
-        "[ModuleLoader loadModule for $uri] Finished processing import directives.",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[ModuleLoader loadModule for $uriString] Finished processing import directives.",
+        );
+      }
 
       // Metadata mode shares loading and namespace rules, but never dispatches
       // declarations to the executable visitor.
@@ -469,9 +494,11 @@ class ModuleLoader {
         // Class-like declarations can execute static initializers, including
         // native iteration that invokes interpreted callbacks.
         moduleInterpreter.runCollectionInvocation(() {
-          Logger.debug(
-            "[ModuleLoader loadModule for $uri] Processing class/mixin declarations to populate constructors...",
-          );
+          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+            Logger.debug(
+              "[ModuleLoader loadModule for $uriString] Processing class/mixin declarations to populate constructors...",
+            );
+          }
           // First process all mixin declarations to ensure they're fully initialized
           // before classes try to use them
           for (final declaration in ast.declarations) {
@@ -524,14 +551,18 @@ class ModuleLoader {
               }
             }
           }
-          Logger.debug(
-            "[ModuleLoader loadModule for $uri] Finished processing class/mixin/extension declarations.",
-          );
+          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+            Logger.debug(
+              "[ModuleLoader loadModule for $uriString] Finished processing class/mixin/extension declarations.",
+            );
+          }
         });
 
-        Logger.debug(
-          "[ModuleLoader loadModule for $uri] Executing InterpreterVisitor pass for initializers...",
-        );
+        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+          Logger.debug(
+            "[ModuleLoader loadModule for $uriString] Executing InterpreterVisitor pass for initializers...",
+          );
+        }
         moduleInterpreter.runCollectionInvocation(() {
           for (final declaration in ast.declarations) {
             if (declaration is TopLevelVariableDeclaration) {
@@ -548,15 +579,19 @@ class ModuleLoader {
             }
           }
         });
-        Logger.debug(
-          "[ModuleLoader loadModule for $uri] Finished InterpreterVisitor pass for initializers.",
-        );
+        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+          Logger.debug(
+            "[ModuleLoader loadModule for $uriString] Finished InterpreterVisitor pass for initializers.",
+          );
+        }
       }
 
       // Process the export directives of this module to populate its exportedEnvironment
-      Logger.debug(
-        "[ModuleLoader loadModule for $uri] Processing export directives for ${uri.toString()}...",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[ModuleLoader loadModule for $uriString] Processing export directives...",
+        );
+      }
       for (final directive in ast.directives) {
         if (directive is ExportDirective) {
           final exportedUriString = directive.uri.stringValue;
@@ -571,9 +606,11 @@ class ModuleLoader {
               exportedUriString,
               from: uri,
             );
-            Logger.debug(
-              "[ModuleLoader loadModule for $uri]   Exporting from ${uri.toString()}: URI '$exportedUriString', resolved to '${resolvedExportUri.toString()}'",
-            );
+            if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+              Logger.debug(
+                "[ModuleLoader loadModule for $uriString] Exporting '$exportedUriString'",
+              );
+            }
             LoadedModule subModule = loadModule(resolvedExportUri);
 
             final combinators = _extractCombinators(
@@ -588,9 +625,11 @@ class ModuleLoader {
               show: combinators.showNames,
               hide: combinators.hideNames,
             );
-            Logger.debug(
-              "[ModuleLoader loadModule for $uri]   Successfully merged exported environment from ${resolvedExportUri.toString()} into ${uri.toString()} (show: ${combinators.showNames?.join(", ")}, hide: ${combinators.hideNames?.join(", ")}).",
-            );
+            if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+              Logger.debug(
+                "[ModuleLoader loadModule for $uriString] Merged exports from ${subModule._diagnosticUri} (show: ${combinators.showNames?.join(", ")}, hide: ${combinators.hideNames?.join(", ")}).",
+              );
+            }
           } catch (e, s) {
             Logger.error(
               "[ModuleLoader loadModule for $uri] Error processing export directive for '$exportedUriString' from ${uri.toString()}: $e\nStackTrace: $s",
@@ -607,9 +646,11 @@ class ModuleLoader {
           }
         }
       }
-      Logger.debug(
-        "[ModuleLoader loadModule for $uri] Finished processing export directives for ${uri.toString()}.",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[ModuleLoader loadModule for $uriString] Finished processing export directives.",
+        );
+      }
 
       final loadedModule = LoadedModule(
         uri,
@@ -618,10 +659,11 @@ class ModuleLoader {
         exportedEnvironment,
         moduleInterpreter,
       );
+      loadedModule._diagnosticUri = uriString;
       _moduleCache[uri] = loadedModule;
-      Logger.debug(
-        "[ModuleLoader loadModule for $uri] Module '${uri.toString()}' chargé et mis en cache.",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug("[ModuleLoader] Module '$uriString' loaded and cached.");
+      }
       return loadedModule;
     } finally {
       _loadingModules.remove(uri);
@@ -633,15 +675,18 @@ class ModuleLoader {
     }
   }
 
-  String _fetchModuleSource(Uri uri, Environment namespace) {
-    final uriString = uri.toString();
-    Logger.debug(
-      "[ModuleLoader] Récupération de la source pour: $uriString depuis sources.",
-    );
+  String _fetchModuleSource(Uri uri, String uriString, Environment namespace) {
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[ModuleLoader] Récupération de la source pour: $uriString depuis sources.",
+      );
+    }
 
     // First check if the exact URI is in the preloaded sources
     if (sources.containsKey(uriString)) {
-      Logger.debug("[ModuleLoader] Source found for $uriString in sources.");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug("[ModuleLoader] Source found for $uriString in sources.");
+      }
       return sources[uriString]!;
     }
 
@@ -650,17 +695,21 @@ class ModuleLoader {
     if (allowFileSystemImports) {
       final fileUri = attemptedFileUri;
       if (fileUri != null) {
-        final filePath = absolutePathFromFileUri(fileUri);
         if (fileUriExistsSync(fileUri)) {
           _checkFileSystemSourceReadPermission(fileUri);
-          Logger.debug(
-            "[ModuleLoader] Source loaded from filesystem for ${fileUri.toString()}.",
-          );
+          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+            Logger.debug(
+              "[ModuleLoader] Source loaded from filesystem for $uriString.",
+            );
+          }
           return readFileUriAsStringSync(fileUri);
         }
-        Logger.debug(
-          "[ModuleLoader] Filesystem import enabled, but no file found at $filePath.",
-        );
+        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+          final filePath = absolutePathFromFileUri(fileUri);
+          Logger.debug(
+            "[ModuleLoader] Filesystem import enabled, but no file found at $filePath.",
+          );
+        }
       }
     }
 
@@ -763,13 +812,15 @@ class ModuleLoader {
   }
 
   CompilationUnit _parseSource(Uri uri, String sourceCode) {
-    Logger.debug("[ModuleLoader] Parsing source for module: ${uri.toString()}");
     // Ensure the path passed to parseString is meaningful for errors.
     // If the URI is opaque (ex: custom scheme), toFilePath may fail.
     // Use uri.path or uri.toString() as a fallback.
     String pathToReport = uri.isScheme('file')
         ? uri.toFilePath()
         : uri.toString();
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug("[ModuleLoader] Parsing source for module: $pathToReport");
+    }
 
     final result = parseString(
       content: sourceCode,
@@ -795,9 +846,9 @@ class ModuleLoader {
         "Parsing errors in module $pathToReport:\\n$errorMessages",
       );
     }
-    Logger.debug(
-      "[ModuleLoader] Module ${uri.toString()} parsed successfully.",
-    );
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug("[ModuleLoader] Module $pathToReport parsed successfully.");
+    }
     return result.unit;
   }
 }

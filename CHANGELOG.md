@@ -7,6 +7,7 @@
 - Separate native isolate spawning/control from communication; require code-evaluation authority for spawnUri.
 - Default CLI execution to scoped read-only filesystem access with explicit capability opt-ins; preserve script arguments after the target boundary.
 - Require current code-evaluation authority for host `eval()` calls; explicitly grant it for CLI eval and REPL, retaining selected policy on reset.
+- Avoid disabled and level-filtered debug diagnostic work and redundant runtime lookups while preserving native bridge and live collection dispatch.
 
 ### Fixed
 - Fix permission comparison and revocation, scoped access checks, and filesystem path matching.

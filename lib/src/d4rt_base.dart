@@ -21,6 +21,7 @@ import 'package:d4rt/src/runtime_types.dart';
 import 'package:d4rt/src/script.dart';
 import 'package:d4rt/src/security/permissions.dart';
 import 'package:d4rt/src/stdlib/stdlib.dart';
+import 'package:d4rt/src/utils/debug_description.dart';
 import 'package:d4rt/src/utils/logger/logger.dart';
 import 'package:d4rt/src/utils/platform/filesystem.dart';
 
@@ -246,7 +247,11 @@ class D4rt {
   /// ```
   void grant(Permission permission) {
     _grantedPermissions.add(permission);
-    Logger.debug("[D4rt.grant] Granted permission: ${permission.description}");
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[D4rt.grant] Granted permission: ${describeDebugValue(permission)}",
+      );
+    }
   }
 
   /// Revokes a previously granted permission.
@@ -254,7 +259,11 @@ class D4rt {
   /// [permission] The permission to revoke.
   void revoke(Permission permission) {
     _grantedPermissions.remove(permission);
-    Logger.debug("[D4rt.revoke] Revoked permission: ${permission.description}");
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[D4rt.revoke] Revoked permission: ${describeDebugValue(permission)}",
+      );
+    }
   }
 
   /// Checks if a specific permission is granted.
@@ -508,12 +517,16 @@ class D4rt {
       onPrint: onPrint ?? this.onPrint,
       configureLoadedRoot: library != null,
     );
-    Logger.debug("[D4rt.execute] Starting execution. library: $library");
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug("[D4rt.execute] Starting execution. library: $library");
+    }
 
     if (library != null) {
-      Logger.debug(
-        "[D4rt.execute] Attempting to load the $name source via ModuleLoader for URI: $library",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[D4rt.execute] Attempting to load the $name source via ModuleLoader for URI: $library",
+        );
+      }
 
       if (!moduleLoader.sources.containsKey(library.toString()) &&
           !allowFileSystemImports) {
@@ -532,9 +545,11 @@ class D4rt {
       late final LoadedModule loadedRootModule;
       try {
         loadedRootModule = moduleLoader.loadModule(Uri.parse(library));
-        Logger.debug(
-          "[D4rt.execute] $name source loaded and parsed successfully via ModuleLoader for $library.",
-        );
+        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+          Logger.debug(
+            "[D4rt.execute] $name source loaded and parsed successfully via ModuleLoader for $library.",
+          );
+        }
       } catch (e) {
         if (deadline?.expired ?? false) throw deadline!.exception;
         Logger.error(
@@ -561,13 +576,17 @@ class D4rt {
     if (source == null) {
       throw RuntimeError('No source provided for execution.');
     }
-    Logger.debug(
-      "[D4rt.execute] Parsing direct source string (AST cache: $enableAstCache)...",
-    );
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug(
+        "[D4rt.execute] Parsing direct source string (AST cache: $enableAstCache)...",
+      );
+    }
 
     late final CompilationUnit compilationUnit;
     if (enableAstCache && _astCache.containsKey(source)) {
-      Logger.debug("[D4rt.execute] Reusing cached AST for source.");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug("[D4rt.execute] Reusing cached AST for source.");
+      }
       compilationUnit = _astCache[source]!.compilationUnit;
     } else {
       final parseResult = parseString(
@@ -598,7 +617,11 @@ class D4rt {
           basePath: basePath,
         );
       }
-      Logger.debug("[D4rt.execute] Direct source string parsed successfully.");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[D4rt.execute] Direct source string parsed successfully.",
+        );
+      }
     }
 
     return _executeCompilationUnit(
@@ -648,12 +671,16 @@ class D4rt {
     final Environment executionEnvironment = Environment(
       enclosing: moduleLoader.globalEnvironment,
     );
-    Logger.debug("[execute] Starting Pass 1: Declaration");
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug("[execute] Starting Pass 1: Declaration");
+    }
     final declarationVisitor = DeclarationVisitor(executionEnvironment);
     for (final declaration in compilationUnit.declarations) {
       declaration.accept<void>(declarationVisitor);
     }
-    Logger.debug("[execute] Finished Pass 1: Declaration");
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug("[execute] Finished Pass 1: Declaration");
+    }
 
     final visitor = _visitor = InterpreterVisitor(
       globalEnvironment: executionEnvironment,
@@ -668,33 +695,49 @@ class D4rt {
       onPrint: onPrint ?? this.onPrint,
     );
     try {
-      Logger.debug(" [execute] Starting Pass 2: Interpretation");
-      Logger.debug(
-        " [execute] Processing directives (imports, exports, etc.)...",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(" [execute] Starting Pass 2: Interpretation");
+      }
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          " [execute] Processing directives (imports, exports, etc.)...",
+        );
+      }
       for (final directive in compilationUnit.directives) {
         if (directive is ImportDirective) {
-          Logger.debug(
-            " [execute]   - Processing ImportDirective: ${directive.uri.stringValue}",
-          );
+          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+            Logger.debug(
+              " [execute]   - Processing ImportDirective: ${directive.uri.stringValue}",
+            );
+          }
           visitor.visitImportDirective(directive);
         } else {
-          Logger.debug(
-            " [execute]   - Skipping directive of type: ${directive.runtimeType}",
-          );
+          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+            Logger.debug(
+              " [execute]   - Skipping directive of type: ${describeDebugNode(directive)}",
+            );
+          }
         }
       }
-      Logger.debug(" [execute] Finished processing directives.");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(" [execute] Finished processing directives.");
+      }
 
-      Logger.debug(" [execute] Processing ALL declarations sequentially");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(" [execute] Processing ALL declarations sequentially");
+      }
 
-      Logger.debug(" [execute] Top-level declarations for Pass 2:");
-      for (final declaration in compilationUnit.declarations) {
-        Logger.debug(" [execute]   - ${declaration.runtimeType}");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(" [execute] Top-level declarations for Pass 2:");
+        for (final declaration in compilationUnit.declarations) {
+          Logger.debug(" [execute]   - ${describeDebugNode(declaration)}");
+        }
       }
 
       // Pre-process extensions first so they are available for all other code
-      Logger.debug(" [execute] Pre-processing extensions...");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(" [execute] Pre-processing extensions...");
+      }
       visitor.runCollectionInvocation(() {
         for (final declaration in compilationUnit.declarations) {
           if (declaration is ExtensionDeclaration) {
@@ -710,7 +753,9 @@ class D4rt {
           }
         }
       });
-      Logger.debug(" [execute] Finished pre-processing extensions");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(" [execute] Finished pre-processing extensions");
+      }
 
       // Process all other declarations
       visitor.runCollectionInvocation(() {
@@ -720,7 +765,9 @@ class D4rt {
           }
         }
       });
-      Logger.debug(" [execute] Finished processing declarations");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(" [execute] Finished processing declarations");
+      }
     } on InternalInterpreterException catch (e) {
       if (deadline?.expired ?? false) throw deadline!.exception;
       if (e.originalThrownValue is RuntimeError) {
@@ -758,7 +805,9 @@ class D4rt {
   }) {
     Object? functionResult;
     try {
-      Logger.debug("[execute] Looking for $name function");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug("[execute] Looking for $name function");
+      }
       final functionCallable = executionEnvironment.get(name);
       if (functionCallable is! Callable) {
         throw Exception(
@@ -774,9 +823,11 @@ class D4rt {
           interpreterArgs.isEmpty &&
           namedArgs?.isEmpty != false) {
         interpreterArgs = [<String>[]];
-        Logger.debug(
-          "[execute] 'main' expects arguments but none provided. Passing empty list.",
-        );
+        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+          Logger.debug(
+            "[execute] 'main' expects arguments but none provided. Passing empty list.",
+          );
+        }
       }
 
       if (interpreterArgs.length > expectedArity) {
@@ -785,16 +836,20 @@ class D4rt {
         );
       }
 
-      Logger.debug(
-        "[execute] Calling '$name' with ${interpreterArgs.length} positional and ${interpreterNamedArgs.length} named arguments",
-      );
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[execute] Calling '$name' with ${interpreterArgs.length} positional and ${interpreterNamedArgs.length} named arguments",
+        );
+      }
       functionResult = invokeFunctionFromHost(
         functionCallable,
         visitor,
         interpreterArgs,
         interpreterNamedArgs,
       );
-      Logger.debug(" [execute] Finished Pass 2: Interpretation");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(" [execute] Finished Pass 2: Interpretation");
+      }
     } on InternalInterpreterException catch (e) {
       if (deadline?.expired ?? false) throw deadline!.exception;
       if (e.originalThrownValue is RuntimeError) {
@@ -886,7 +941,9 @@ class D4rt {
     Map<String, String>? sources,
     bool includeBuiltins = false,
   }) {
-    Logger.debug("[D4rt.analyze] Starting analysis...");
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug("[D4rt.analyze] Starting analysis...");
+    }
 
     // Keep the complete analysis graph invocation-local. Neither success nor a
     // parse/import failure may replace the active executable context.
@@ -912,7 +969,9 @@ class D4rt {
       }
     }
 
-    Logger.debug("[D4rt.analyze] Analysis complete.");
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug("[D4rt.analyze] Analysis complete.");
+    }
     return AnalysisMetadata.buildResult(metadata);
   }
 
@@ -977,7 +1036,9 @@ class D4rt {
       );
     }
 
-    Logger.debug("[D4rt.eval] Evaluating: $expression");
+    if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+      Logger.debug("[D4rt.eval] Evaluating: $expression");
+    }
     final executionEnvironment = _visitor!.globalEnvironment;
 
     // First, try to parse as a top-level declaration (function, class, variable)
@@ -1008,7 +1069,9 @@ class D4rt {
         declaration.accept<Object?>(_visitor!);
       }
 
-      Logger.debug("[D4rt.eval] Processed declaration(s)");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug("[D4rt.eval] Processed declaration(s)");
+      }
       return null;
     }
 
@@ -1054,7 +1117,11 @@ class D4rt {
       }
 
       final bridgedResult = _bridgeInterpreterValueToNative(result);
-      Logger.debug("[D4rt.eval] Result: $bridgedResult");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug(
+          "[D4rt.eval] Result: ${describeDebugValue(bridgedResult)}",
+        );
+      }
 
       if (bridgedResult is Future) {
         return bridgedResult.then(
@@ -1104,7 +1171,9 @@ class D4rt {
         }
       }
 
-      Logger.debug("[D4rt.eval] Executed statement");
+      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+        Logger.debug("[D4rt.eval] Executed statement");
+      }
       return null;
     }
 
