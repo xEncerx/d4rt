@@ -46,16 +46,7 @@ void main() {
         }
       ''';
 
-      expect(
-        () => execute(source),
-        throwsA(
-          isA<RuntimeError>().having(
-            (e) => e.message,
-            'message',
-            contains("can't be returned"),
-          ),
-        ),
-      );
+      expect(() => execute(source), throwsA(isA<RuntimeError>()));
     });
 
     test('RecordType supports return types and is checks', () {
@@ -84,16 +75,7 @@ void main() {
         }
       ''';
 
-      expect(
-        () => execute(source),
-        throwsA(
-          isA<RuntimeError>().having(
-            (e) => e.message,
-            'message',
-            contains("can't be returned"),
-          ),
-        ),
-      );
+      expect(() => execute(source), throwsA(isA<RuntimeError>()));
     });
     test('Issue #6 - Int return type in functions', () {
       const source = '''

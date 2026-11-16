@@ -16,13 +16,18 @@ void main() {
 
         main() async {
           int count = 0;
+          final timerDone = Completer<void>();
+          final futureDone = Completer<void>();
           Timer.run(() {
             count += 10;
+            timerDone.complete();
           });
-          unawaited(Future.delayed(Duration(milliseconds: 10), () {
+          unawaited(Future.value().then((_) {
             count += 5;
+            futureDone.complete();
           }));
-          await Future.delayed(Duration(milliseconds: 50));
+          await timerDone.future;
+          await futureDone.future;
           return count;
         }
       ''',

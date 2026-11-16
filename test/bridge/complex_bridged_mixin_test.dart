@@ -47,7 +47,7 @@ void main() {
             final result = {
               'input': input,
               'processed_by': name,
-              'timestamp': DateTime.now().toIso8601String(),
+              'timestamp': DateTime.utc(2020).toIso8601String(),
             };
             
             // Mathematical calculations

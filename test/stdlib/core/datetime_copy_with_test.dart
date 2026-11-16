@@ -10,7 +10,7 @@ void main() {
         import 'dart:core';
 
         main() {
-          final dt = DateTime(2023, 5, 10, 14, 30);
+          final dt = DateTime.utc(2023, 5, 10, 14, 30);
           final updated = dt.copyWith(year: 2024, day: 25);
           return [updated.year, updated.month, updated.day, updated.hour, updated.minute];
         }

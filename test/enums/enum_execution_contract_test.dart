@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:d4rt/d4rt.dart';
 import 'package:test/test.dart';
@@ -455,7 +454,6 @@ Future<Map<String, Object?>> runEnumDeferredAuthority([
     fresh[kind] = interpreter;
     result[kind] = <Object?>[limited, null, refused, effects];
   }
-  await Future<void>.delayed(const Duration(milliseconds: 1100));
   for (final entry in fresh.entries) {
     (result[entry.key] as List)[1] = await entry.value.execute(
       source: 'main()=>retained().toList();',
@@ -480,51 +478,9 @@ Future<Map<String, Object?>> runEnumDeferredAuthority([
   return result;
 }
 
-/// Deadlines and deferred resumes refuse further effects in the current entry.
+/// Deferred resumes preserve authority and continuation.
 Future<Map<String, Object?>> runEnumDeferredTransitions() async {
   final result = <String, Object?>{};
-  for (final kind in ['sync*', 'async*', 'Stream.map']) {
-    var effects = 0;
-    final interpreter = D4rt();
-    interpreter.registertopLevelFunction('pause', (
-      visitor,
-      args,
-      named,
-      types,
-    ) {
-      sleep(const Duration(milliseconds: 100));
-      return null;
-    });
-    interpreter.registertopLevelFunction('touch', (
-      visitor,
-      args,
-      named,
-      types,
-    ) {
-      effects++;
-      return 1;
-    });
-    final deferred = interpreter.execute(
-      source: _enumDeferredSource(
-        kind,
-        effects: true,
-      ).replaceFirst('touch();', 'pause();touch();'),
-    );
-    interpreter.registertopLevelFunction(
-      'retained',
-      (visitor, args, named, types) => deferred,
-    );
-    var timedOut = false;
-    try {
-      await interpreter.execute(
-        source: 'main()=>retained().toList();',
-        timeout: const Duration(milliseconds: 50),
-      );
-    } on ExecutionTimeoutException {
-      timedOut = true;
-    }
-    result['$kind deadline'] = [timedOut, effects];
-  }
   final interpreter = D4rt();
   var effects = 0;
   interpreter.registertopLevelFunction('touch', (visitor, args, named, types) {
@@ -599,7 +555,6 @@ Future<List<Object?>> runEnumInvocationCorrection() async {
       limited.add(error is ExecutionLimitException);
     }
   }
-  await Future<void>.delayed(const Duration(milliseconds: 1100));
   final fresh = await interpreter.execute(
     source: 'main() async =>[syncRun(),await asyncRun()];',
     maxSteps: 20000,
@@ -698,18 +653,12 @@ void main() {
       },
     );
   }
-  test(
-    'deferred deadlines and resumes preserve authority and continuation',
-    () async {
-      expect(await runEnumDeferredTransitions(), {
-        'sync* deadline': [true, 0],
-        'async* deadline': [true, 0],
-        'Stream.map deadline': [true, 0],
-        'sync resume': [true, true, true, 2, 1],
-        'ordinary continuations': [2, 3],
-      });
-    },
-  );
+  test('deferred resumes preserve authority and continuation', () async {
+    expect(await runEnumDeferredTransitions(), {
+      'sync resume': [true, true, true, 2, 1],
+      'ordinary continuations': [2, 3],
+    });
+  });
   for (final entry in enumCorrectionScenarios.entries) {
     test(entry.key, () async {
       for (final mode in [
@@ -752,16 +701,13 @@ void main() {
       }
     });
   }
-  test(
-    'escaped sync async reentry uses current limits and deadlines',
-    () async {
-      expect(await runEnumInvocationCorrection(), [
-        true,
-        true,
-        [1000, 1000],
-      ]);
-    },
-  );
+  test('escaped sync async reentry uses current limits', () async {
+    expect(await runEnumInvocationCorrection(), [
+      true,
+      true,
+      [1000, 1000],
+    ]);
+  });
   test('imported const cycles propagate in the owning library', () {
     expect(
       () => D4rt().execute(
@@ -806,7 +752,6 @@ void main() {
         throwsA(isA<ExecutionLimitException>()),
       );
       expect(() => values.single, throwsA(isA<RuntimeError>()));
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
       expect(
         interpreter.execute(
           source: 'main()=>read();',

@@ -211,9 +211,10 @@ void main() {
 
       test('shuffle', () {
         const source = '''
+       import 'dart:math';
        main() {
         List<int> numbers = [1, 2, 3, 4];
-        numbers.shuffle();
+        numbers.shuffle(Random(42));
         return numbers; // Cannot check order, but check length and elements
       }
       ''';
@@ -405,9 +406,10 @@ void main() {
 
       test('shuffle', () {
         const source = '''
+       import 'dart:math';
        main() {
         List<int> numbers = [1, 2, 3];
-        numbers.shuffle();
+        numbers.shuffle(Random(42));
         return numbers; // Cannot check order, but check length and elements
       }
       ''';

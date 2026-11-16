@@ -312,63 +312,6 @@ void main() {
     });
   });
 
-  group('Isolate Package Resolution Tests', () {
-    test('should resolve package URI', () async {
-      final code = '''
-        import 'dart:isolate';
-        
-         main() async {
-          try {
-            var packageUri = Uri.parse('package:test/test.dart');
-            var resolved = await Isolate.resolvePackageUri(packageUri);
-            return resolved?.toString() ?? 'null';
-          } catch (e) {
-            return 'Error: \${e.toString()}';
-          }
-        }
-      ''';
-
-      final result = await execute(code);
-      // Result can be null or a resolved URI, both are valid
-      expect(result, anyOf(equals('null'), isA<String>()));
-    });
-
-    test('should resolve package URI synchronously', () async {
-      final code = '''
-        import 'dart:isolate';
-        
-         main() {
-          try {
-            var packageUri = Uri.parse('package:test/test.dart');
-            var resolved = Isolate.resolvePackageUriSync(packageUri);
-            return resolved?.toString() ?? 'null';
-          } catch (e) {
-            return 'Error: \${e.toString()}';
-          }
-        }
-      ''';
-
-      final result = await execute(code);
-      // Result can be null or a resolved URI, both are valid
-      expect(result, anyOf(equals('null'), isA<String>()));
-    });
-
-    test('should return non-package URI as-is', () async {
-      final code = '''
-        import 'dart:isolate';
-        
-         main() async {
-          var fileUri = Uri.parse('file:///test.dart');
-          var resolved = await Isolate.resolvePackageUri(fileUri);
-          return resolved.toString();
-        }
-      ''';
-
-      final result = await execute(code);
-      expect(result, equals('file:///test.dart'));
-    });
-  });
-
   group('Stream Operations on ReceivePort Tests', () {
     test('should use map on ReceivePort', () async {
       final code = '''

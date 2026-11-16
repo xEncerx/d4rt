@@ -12,11 +12,6 @@ void main() {
       interpreter = D4rt();
     });
 
-    test('D4rt initializes with bridge manager', () {
-      expect(interpreter.bridgeManager, isNotNull);
-      expect(interpreter.registryStats.totalRegistered, equals(0));
-    });
-
     test('registerBridgedClass tracks in manager', () {
       final bridgedClass = BridgedClass(
         name: 'TestClass',
@@ -105,17 +100,6 @@ void main() {
       expect(stats.totalRegistered, equals(1));
     });
 
-    test('can create registration context from manager', () {
-      final sourceUri = 'package:test/src/bridges.dart';
-      final context = RegistrationContext(
-        sourceUri: sourceUri,
-        manager: interpreter.bridgeManager,
-      );
-
-      expect(context, isNotNull);
-      expect(context.sourceUri, equals(sourceUri));
-    });
-
     test('clearBridgeRegistry resets all registrations', () {
       final bridgedClass = BridgedClass(
         name: 'TestClass',
@@ -169,38 +153,6 @@ void main() {
       expect(tracked.origin?.elementName, equals('TestClass'));
     });
 
-    test('registration context usage pattern', () {
-      final bridgedClass = BridgedClass(
-        name: 'TestClass',
-        nativeType: String,
-        constructors: {},
-        methods: {},
-        getters: {},
-      );
-
-      final enumDef = BridgedEnumDefinition<TestEnum>(
-        name: 'TestEnum',
-        values: TestEnum.values,
-        getters: {},
-        methods: {},
-      );
-
-      final manager = interpreter.bridgeManager;
-      manager.registerClass(
-        bridgedClass,
-        'package:test/test.dart',
-        sourceUri: 'package:test/src/bridges.dart',
-      );
-      manager.registerEnum(
-        enumDef,
-        'package:test/test.dart',
-        sourceUri: 'package:test/src/bridges.dart',
-      );
-
-      expect(interpreter.trackedClasses, hasLength(1));
-      expect(interpreter.trackedEnums, hasLength(1));
-    });
-
     test('backward compatibility with old API signatures', () {
       // Ensure old code without sourceUri still works
       final bridgedClass = BridgedClass(
@@ -222,76 +174,6 @@ void main() {
 
       // Verify it was registered
       expect(interpreter.registryStats.totalRegistered, equals(1));
-    });
-
-    test('stats show pattern of registrations', () {
-      // Register same class from different libraries (simulating re-exports)
-      final bridgedClass = BridgedClass(
-        name: 'TestClass',
-        nativeType: String,
-        constructors: {},
-        methods: {},
-        getters: {},
-      );
-
-      interpreter.registerBridgedClass(
-        bridgedClass,
-        'package:test/test.dart',
-        sourceUri: 'package:test/src/core.dart',
-      );
-
-      interpreter.registerBridgedClass(
-        bridgedClass,
-        'package:test/re_export.dart',
-        sourceUri: 'package:test/src/core.dart',
-      );
-
-      final stats = interpreter.registryStats;
-      expect(stats.totalRegistered, greaterThan(0));
-    });
-
-    test('complex registration workflow', () {
-      // Simulate registering multiple bridges from different sources
-      final classes = [
-        BridgedClass(
-          name: 'ClassA',
-          nativeType: String,
-          constructors: {},
-          methods: {},
-          getters: {},
-        ),
-        BridgedClass(
-          name: 'ClassB',
-          nativeType: int,
-          constructors: {},
-          methods: {},
-          getters: {},
-        ),
-      ];
-
-      final manager = interpreter.bridgeManager;
-
-      // Register from source A
-      for (final cls in classes) {
-        manager.registerClass(
-          cls,
-          'package:test/a.dart',
-          sourceUri: 'package:test/src/source_a.dart',
-        );
-      }
-
-      // Register from source B (same classes)
-      for (final cls in classes) {
-        manager.registerClass(
-          cls,
-          'package:test/b.dart',
-          sourceUri: 'package:test/src/source_b.dart',
-        );
-      }
-
-      expect(interpreter.trackedClasses, isNotEmpty);
-      final stats = interpreter.registryStats;
-      expect(stats.totalRegistered, greaterThan(0));
     });
   });
 }

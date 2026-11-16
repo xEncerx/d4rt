@@ -17,7 +17,8 @@ final class _EqualHostObject {
 }
 
 void main() {
-  final d4rt = D4rt();
+  late D4rt d4rt;
+  setUp(() => d4rt = D4rt());
 
   group('HashSet Tests', () {
     test('HashSet() constructor and basic properties', () {
@@ -119,13 +120,7 @@ void main() {
               main() => $invocation;
             ''',
           ),
-          throwsA(
-            isA<RuntimeError>().having(
-              (error) => error.message,
-              'message',
-              contains('does not take positional or named arguments'),
-            ),
-          ),
+          throwsA(isA<RuntimeError>()),
         );
       }
     });

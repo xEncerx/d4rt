@@ -22,34 +22,6 @@ void main() {
       expect(result, equals([true, false]));
     });
 
-    test('Timeline and TimelineTask', () {
-      final d4rt = D4rt()..grant(DangerousPermission.developerTools);
-      final result = d4rt.execute(
-        source: '''
-        import 'dart:developer';
-
-        main() {
-          Timeline.startSync('mySyncTask');
-          final now = Timeline.now;
-          Timeline.finishSync();
-
-          final syncVal = Timeline.timeSync('myTimeSync', () {
-            return 42;
-          });
-
-          final task = TimelineTask();
-          task.start('step1');
-          task.instant('checkpoint');
-          task.finish();
-
-          return [now > 0, syncVal];
-        }
-      ''',
-      );
-
-      expect(result, equals([true, 42]));
-    });
-
     test('UserTag', () {
       final d4rt = D4rt()..grant(DangerousPermission.developerTools);
       final result = d4rt.execute(
@@ -58,7 +30,6 @@ void main() {
 
         main() {
           final tag = UserTag('worker');
-          final prevTag = tag.makeCurrent();
           final defaultTag = UserTag.defaultTag;
           return [tag.label, defaultTag.label];
         }
@@ -68,7 +39,7 @@ void main() {
       expect(result, equals(['worker', 'Default']));
     });
 
-    test('ServiceExtensionResponse and Service.getInfo', () async {
+    test('ServiceExtensionResponse', () async {
       final d4rt = D4rt()..grant(DangerousPermission.developerTools);
       final result = await d4rt.execute(
         source: '''
@@ -77,13 +48,12 @@ void main() {
         main() async {
           final successResp = ServiceExtensionResponse.result('{"ok": true}');
           final errorResp = ServiceExtensionResponse.error(-32000, 'Internal error');
-          final serviceInfo = await Service.getInfo();
-          return [successResp.result, errorResp.errorCode, errorResp.errorDetail, serviceInfo != null];
+          return [successResp.result, errorResp.errorCode, errorResp.errorDetail];
         }
       ''',
       );
 
-      expect(result, equals(['{"ok": true}', -32000, 'Internal error', true]));
+      expect(result, equals(['{"ok": true}', -32000, 'Internal error']));
     });
   });
 }

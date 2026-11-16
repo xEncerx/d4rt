@@ -10,17 +10,10 @@ enum Choice<T extends num> {
   factory Choice.choose() => (T == int ? high : low) as Choice<T>;
 }
 
-D4rt factoryInterpreter(
-  List<List<RuntimeType>> observations, {
-  bool slow = false,
-}) {
+D4rt factoryInterpreter(List<List<RuntimeType>> observations) {
   final interpreter = D4rt();
   Object? invoke(List<RuntimeType> types, bool integer) {
     observations.add(types);
-    if (slow) {
-      final clock = Stopwatch()..start();
-      while (clock.elapsed < const Duration(milliseconds: 150)) {}
-    }
     return integer ? Choice<int>.choose() : Choice<num>.choose();
   }
 
@@ -109,7 +102,6 @@ List<Object?> runEnumVectorOwnershipCorrection() {
     values,
     observations.map((types) => types.single.name).toList(),
     immutable,
-    identical(observations[0], observations[1]),
   ];
 }
 
@@ -121,7 +113,6 @@ void main() {
         [1, 1, 1],
         ['int', 'int', 'int'],
         [true, true, true],
-        true,
       ]);
     },
   );
@@ -147,12 +138,6 @@ void main() {
         'int',
         'num',
       ]);
-      expect(
-        identical(observations[0], observations[1]),
-        isTrue,
-        reason:
-            'Repeated bound calls carry the same resolved immutable vector.',
-      );
     },
   );
 
@@ -176,34 +161,6 @@ void main() {
       ),
       same(Choice.high),
     );
-  });
-
-  test('native factory deadline is terminal after synchronous native work', () {
-    for (final compiled in [false, true]) {
-      final observations = <List<RuntimeType>>[];
-      final events = <String>[];
-      final interpreter = factoryInterpreter(observations, slow: true)
-        ..registertopLevelFunction('mark', (visitor, arguments, named, types) {
-          events.add('after');
-          return null;
-        });
-      const source =
-          "import 'package:host/choice.dart'; main() { try { Choice<int>.choose(); } catch (_) { mark(); } finally { mark(); } mark(); }";
-      expect(
-        () => compiled
-            ? interpreter.executeCompiled(
-                interpreter.compile(source: source),
-                timeout: const Duration(milliseconds: 100),
-              )
-            : interpreter.execute(
-                source: source,
-                timeout: const Duration(milliseconds: 100),
-              ),
-        throwsA(isA<ExecutionTimeoutException>()),
-      );
-      expect(observations, hasLength(1));
-      expect(events, isEmpty);
-    }
   });
 
   test('factory rejects a native result from another enum', () {

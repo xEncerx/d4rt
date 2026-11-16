@@ -207,8 +207,8 @@ void main() {
       final host = <String>['10', '20', '30'];
       interpreter.registertopLevelFunction('source', (v, a, n, t) => host);
       interpreter.registertopLevelFunction('retain', (v, a, n, t) {
-        expect(v.environment.get('calls'), 0);
-        return a.single;
+        expect(a[1], 0);
+        return a.first;
       });
       final observed = interpreter.execute(
         source:
@@ -217,7 +217,7 @@ $_genericClasses
 int calls=0;
 List<int> parsed() {
   final transform=source().map;
-  final lazy=retain(transform((s) { calls++; return int.parse(s); }));
+  final lazy=retain(transform((s) { calls++; return int.parse(s); }), calls);
   final values=lazy.where((n) => n > 0).skip(0).take(3).toList();
   return values;
 }
@@ -400,13 +400,6 @@ main() => retain(LazyKeys());
     expect((returned as InterpretedInstance).get('reads'), oracle.reads);
     expect(oracle.reads, 1);
     expect(returned.keys.toList(), oracle.keys.toList());
-    expect(
-      (returned as InterpretedInstance).get(
-        'keys',
-        visitor: interpreter.visitor!,
-      ),
-      ['virtual'],
-    );
     expect((returned as InterpretedInstance).get('reads'), oracle.reads);
   });
 

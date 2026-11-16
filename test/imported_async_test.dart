@@ -31,12 +31,12 @@ class BaseFailure implements Exception {}
 final class PrefixedFailure extends BaseFailure {}
 
 Future<int> delayedSdkValue(int value) async {
-  await Future.delayed(Duration(milliseconds: 1));
+  await Future.value();
   return value;
 }
 
 Future<int> delayedSdkFailure(ExpectedFailure error) async {
-  await Future.delayed(Duration(milliseconds: 1));
+  await Future.value();
   throw error;
 }
 ''',
@@ -729,12 +729,12 @@ Stream<int> cancellableGenerator() async* {
     author.markGeneratorEvent('start');
     yield 1;
     author.markGeneratorEvent('before-await');
-    await Future.delayed(Duration(milliseconds: 80));
+    await waitGate();
     author.markGeneratorEvent('after-await');
     yield 2;
   } finally {
     author.markGeneratorEvent('finally-start');
-    await Future.delayed(Duration(milliseconds: 1));
+    await Future.value();
     author.markGeneratorEvent('finally-end');
   }
 }
@@ -744,7 +744,7 @@ Stream<int> cancellableInnerGenerator() async* {
     author.markGeneratorEvent('inner:start');
     yield 1;
     author.markGeneratorEvent('inner:before-await');
-    await Future.delayed(Duration(milliseconds: 80));
+    await waitGate();
     author.markGeneratorEvent('inner:after-await');
     yield 2;
   } finally {
@@ -760,7 +760,7 @@ Stream<int> cancellableDelegatingGenerator() async* {
     yield 3;
   } finally {
     author.markGeneratorEvent('outer:finally-start');
-    await Future.delayed(Duration(milliseconds: 1));
+    await Future.value();
     author.markGeneratorEvent('outer:finally-end');
   }
 }
@@ -994,7 +994,6 @@ void main() {
                 },
               )
               .timeout(const Duration(seconds: 2));
-          await Future<void>.delayed(const Duration(milliseconds: 10));
         }, (error, _) => sideChannelErrors.add(error));
 
         expect(errorCompletions, 1);
@@ -1563,7 +1562,14 @@ void main() {
     test(
       'cancelling an async generator stops after await and runs finally once',
       () async {
-        final d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
+        final entered = Completer<void>();
+        final gate = Completer<void>();
+        final d4rt = D4rt()
+          ..grant(DangerousPermission.codeEvaluation)
+          ..registertopLevelFunction('waitGate', (visitor, args, named, types) {
+            entered.complete();
+            return gate.future;
+          });
         final result = d4rt.execute(
           library: 'package:probe/dispatcher.dart',
           sources: _sources,
@@ -1580,19 +1586,20 @@ void main() {
         });
         await firstValue.future.timeout(const Duration(seconds: 2));
 
-        var reachedAwait = false;
-        for (var attempt = 0; attempt < 200; attempt++) {
-          final events = d4rt.eval('readGeneratorEvents()') as List<Object?>;
-          if (events.contains('before-await')) {
-            reachedAwait = true;
-            break;
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 1));
-        }
-        expect(reachedAwait, isTrue);
-        await subscription.cancel().timeout(const Duration(seconds: 2));
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await entered.future;
+        await subscription.cancel();
+        expect(gate.isCompleted, isFalse);
 
+        expect(values, [1]);
+        expect(d4rt.eval('readGeneratorEvents()'), [
+          'start',
+          'before-await',
+          'finally-start',
+          'finally-end',
+        ]);
+        gate.complete();
+        await gate.future;
+        await Future<void>.value();
         expect(values, [1]);
         expect(d4rt.eval('readGeneratorEvents()'), [
           'start',
@@ -1606,7 +1613,14 @@ void main() {
     test(
       'cancelling yield star detaches its stream and runs finalizers once',
       () async {
-        final d4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
+        final entered = Completer<void>();
+        final gate = Completer<void>();
+        final d4rt = D4rt()
+          ..grant(DangerousPermission.codeEvaluation)
+          ..registertopLevelFunction('waitGate', (visitor, args, named, types) {
+            entered.complete();
+            return gate.future;
+          });
         final result = d4rt.execute(
           library: 'package:probe/dispatcher.dart',
           sources: _sources,
@@ -1623,19 +1637,22 @@ void main() {
         });
         await firstValue.future.timeout(const Duration(seconds: 2));
 
-        var reachedAwait = false;
-        for (var attempt = 0; attempt < 200; attempt++) {
-          final events = d4rt.eval('readGeneratorEvents()') as List<Object?>;
-          if (events.contains('inner:before-await')) {
-            reachedAwait = true;
-            break;
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 1));
-        }
-        expect(reachedAwait, isTrue);
-        await subscription.cancel().timeout(const Duration(seconds: 2));
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await entered.future;
+        await subscription.cancel();
+        expect(gate.isCompleted, isFalse);
 
+        expect(values, [1]);
+        expect(d4rt.eval('readGeneratorEvents()'), [
+          'outer:start',
+          'inner:start',
+          'inner:before-await',
+          'inner:finally',
+          'outer:finally-start',
+          'outer:finally-end',
+        ]);
+        gate.complete();
+        await gate.future;
+        await Future<void>.value();
         expect(values, [1]);
         expect(d4rt.eval('readGeneratorEvents()'), [
           'outer:start',

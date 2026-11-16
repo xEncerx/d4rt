@@ -184,7 +184,7 @@ void main() {
     test('file', () {
       const source = '''
       main() {
-        Uri uri = Uri.file("/path/to/file");
+        Uri uri = Uri.file("/path/to/file", windows: false);
         return uri.toString();
       }
       ''';
@@ -194,7 +194,7 @@ void main() {
     test('directory', () {
       const source = '''
       main() {
-        Uri uri = Uri.directory("/path/to/directory");
+        Uri uri = Uri.directory("/path/to/directory", windows: false);
         return uri.toString();
       }
       ''';

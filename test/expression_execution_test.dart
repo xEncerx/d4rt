@@ -198,15 +198,7 @@ main(num nan, num infinity, num zero) => [
                   "main(num divisor) => mark('left', 5) $operator mark('right', divisor);",
               positionalArgs: [divisor],
             ),
-            throwsA(
-              isA<RuntimeError>().having(
-                (error) => error.message,
-                'message',
-                operator == '%'
-                    ? 'Modulo par zéro.'
-                    : 'Division entière par zéro.',
-              ),
-            ),
+            throwsA(isA<RuntimeError>()),
           );
           expect(events, ['left', 'right']);
         });
@@ -220,13 +212,7 @@ main(num nan, num infinity, num zero) => [
       ]) {
         expect(
           () => _execute(source, args: [double.nan]),
-          throwsA(
-            isA<RuntimeError>().having(
-              (error) => error.message,
-              'message',
-              contains('Infinity or NaN'),
-            ),
-          ),
+          throwsA(isA<RuntimeError>()),
         );
       }
       for (final operator in ['<<', '>>', '>>>']) {

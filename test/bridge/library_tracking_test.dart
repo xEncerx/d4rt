@@ -393,27 +393,6 @@ void main() {
       });
     });
   });
-
-  group('globalLibraryRegistry', () {
-    tearDown(() {
-      globalLibraryRegistry.clear();
-    });
-
-    test('is a singleton instance', () {
-      expect(globalLibraryRegistry, isA<LibraryRegistry>());
-    });
-
-    test('can be used for application-wide tracking', () {
-      final bridged = BridgedClass(nativeType: String, name: 'Global');
-      final origin = SourceOrigin.fromUri('pkg:global/g.dart', 'Global');
-
-      globalLibraryRegistry.addClass(bridged, 'pkg:a', origin: origin);
-      globalLibraryRegistry.addClass(bridged, 'pkg:b', origin: origin);
-
-      expect(globalLibraryRegistry.classes, hasLength(1));
-      expect(globalLibraryRegistry.stats.duplicatesSkipped, equals(1));
-    });
-  });
 }
 
 /// Test enum for BridgedEnumDefinition tests.

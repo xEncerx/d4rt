@@ -13,21 +13,10 @@ void main() {
       expect(await execute(source), equals(42));
     });
 
-    test('await Future.delayed', () async {
-      const source = '''
-        Future<String> main() async {
-          await Future.delayed(Duration(milliseconds: 10));
-          return "Done";
-        }
-      ''';
-      // Check timing roughly? Hard in tests. Just check result.
-      expect(await execute(source), equals("Done"));
-    });
-
     test('Assign await result to variable', () async {
       const source = '''
         Future<int> fetchValue() async {
-           await Future.delayed(Duration(milliseconds: 5));
+           await Future.value();
            return 100;
         }
 
@@ -42,7 +31,7 @@ void main() {
     test('Return await result directly', () async {
       const source = '''
         Future<String> fetchMessage() async {
-           await Future.delayed(Duration(milliseconds: 5));
+           await Future.value();
            return "Returned Message";
         }
 
@@ -56,11 +45,11 @@ void main() {
     test('Multiple awaits in sequence', () async {
       const source = '''
         Future<int> step1() async {
-           await Future.delayed(Duration(milliseconds: 5));
+           await Future.value();
            return 10;
         }
         Future<int> step2(int prev) async {
-           await Future.delayed(Duration(milliseconds: 5));
+           await Future.value();
            return prev + 20;
         }
 
@@ -77,12 +66,12 @@ void main() {
     test('Nested async function calls', () async {
       const source = '''
          Future<int> inner() async {
-           await Future.delayed(Duration(milliseconds: 1));
+           await Future.value();
            return 50;
          }
          Future<int> middle() async {
             int val = await inner();
-            await Future.delayed(Duration(milliseconds: 1));
+            await Future.value();
             return val + 50;
          }
         Future<int> main() async {
@@ -126,7 +115,7 @@ void main() {
     test('Interpreted Async/Await Tests await in if condition', () async {
       final code = '''
         Future<bool> checkCondition() async {
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           return true;
         }
         Future<String> main() async {
@@ -144,7 +133,7 @@ void main() {
     test('Interpreted Async/Await Tests await in for loop', () async {
       final code = '''
         Future<int> processItem(int i) async {
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           return i * 10;
         }
         Future<int> main() async {
@@ -164,7 +153,7 @@ void main() {
       () async {
         final code = '''
         Future<String> successfulFuture() async {
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           return "Success";
         }
         Future<String> main() async {
@@ -187,7 +176,7 @@ void main() {
       () async {
         final code = '''
         Future<String> failingFuture() async {
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           throw 'Future Failed';
         }
         Future<String> main() async {
@@ -211,7 +200,7 @@ void main() {
       () async {
         final code = '''
         Future<void> failingFuture() async {
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           throw 'Deliberate Error';
         }
         Future<void> main() async {
@@ -360,7 +349,7 @@ void main() {
     test('async for loop with await in initializer', () async {
       final result = await execute('''
         Future<int> getStart() async {
-          await Future.delayed(Duration(milliseconds: 1)); // Simulate async work
+          await Future.value();
           return 1;
         }
 
@@ -387,7 +376,7 @@ void main() {
     test('async for loop with await assignment in body', () async {
       final result = await execute(r'''
         Future<int> getValue(int iteration) async {
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           return iteration * 10;
         }
 
@@ -416,7 +405,7 @@ void main() {
     test('async for loop with await in assignment operator', () async {
       final result = await execute(r'''
         Future<int> getValue(int iteration) async {
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           return iteration * 10;
         }
 
@@ -443,7 +432,7 @@ void main() {
     test('async for-in loop with await in body', () async {
       final result = await execute('''
         Future<int> getValue(int iteration) async {
-          await Future.delayed(Duration(milliseconds: 1)); // Simulate async work
+          await Future.value();
           final result = iteration * 10;
           return result;
         }
@@ -454,7 +443,7 @@ void main() {
           for (var item in syncList) {
             var awaitedValue = await getValue(item);
             total += awaitedValue;
-            await Future.delayed(Duration(milliseconds: 1)); // Another await
+            await Future.value();
           }
           return total;
         }
@@ -470,7 +459,7 @@ void main() {
     test('async try-catch-finally with await throwing error', () async {
       final result = await execute('''
         Future<String> operationThatThrows() async {
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           throw Exception('Something went wrong asynchronously');
           // Unreachable
           // return "Success";
@@ -502,7 +491,7 @@ void main() {
     test('async if statement with await in condition', () async {
       final result = await execute(r'''
         Future<bool> checkCondition(bool value) async {
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           return value;
         }
 
@@ -529,7 +518,7 @@ void main() {
     test('async try-catch with rethrow and await error', () async {
       final sourceCode = '''
         Future<String> operationThatThrows() async {
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           throw Exception('Something went wrong asynchronously');
           // Unreachable
           // return "Success";

@@ -14,12 +14,14 @@ void main() {
           final events = <String>[];
           events.add('start');
 
+          final done = Completer<void>();
           scheduleMicrotask(() {
             events.add('microtask');
+            done.complete();
           });
 
           events.add('end');
-          await Future.delayed(Duration(milliseconds: 50));
+          await done.future;
           return events;
         }
       ''',

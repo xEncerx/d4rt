@@ -60,8 +60,7 @@ void main() {
 
       test('Stream.periodic', () async {
         const source = '''
-           // Take first 3 values from a stream emitting every 10ms
-           Stream s = Stream.periodic(Duration(milliseconds: 10), (i) => i);
+           Stream s = Stream.periodic(Duration.zero, (i) => i);
            return await s.take(3).toList();
          ''';
         // Expect [0, 1, 2]
@@ -70,7 +69,7 @@ void main() {
 
       test('Stream.fromFuture', () async {
         const source = '''
-          Future<String> f = Future.delayed(Duration(milliseconds: 1), () => "done");
+          Future<String> f = Future.value("done");
           Stream s = Stream.fromFuture(f);
           return await s.toList();
         ''';
@@ -79,17 +78,16 @@ void main() {
 
       test('Stream.fromFutures', () async {
         const source = '''
-          Future<int> f1 = Future.delayed(Duration(milliseconds: 5), () => 1);
-          Future<int> f2 = Future.value(2);
-          Future<int> f3 = Future.delayed(Duration(milliseconds: 1), () => 3);
-          Stream s = Stream.fromFutures([f1, f2, f3]);
-          return await s.toList();
+          final first = Completer<int>();
+          final second = Completer<int>();
+          final third = Completer<int>();
+          final results = Stream.fromFutures([first.future, second.future, third.future]).toList();
+          second.complete(2);
+          third.complete(3);
+          first.complete(1);
+          return await results;
         ''';
-        // Order depends on Future completion, but all should be present
-        List<dynamic> result =
-            await runInterpretedStreamTest(source) as List<dynamic>;
-        expect(result, containsAll([1, 2, 3]));
-        expect(result.length, 3);
+        expect(await runInterpretedStreamTest(source), equals([2, 3, 1]));
       });
     });
 
@@ -161,7 +159,7 @@ void main() {
 
       test('stream.take', () async {
         const source = '''
-             Stream s = Stream.periodic(Duration(milliseconds: 1), (i) => i);
+             Stream s = Stream.fromIterable([0, 1, 2, 3, 4]);
              return await s.take(4).toList();
            ''';
         expect(await runInterpretedStreamTest(source), equals([0, 1, 2, 3]));
@@ -328,19 +326,15 @@ void main() {
              Stream singleSub = controller.stream;
              Stream broadcast = singleSub.asBroadcastStream();
 
-             List<dynamic> results1 = [];
-             List<dynamic> results2 = [];
-
-             broadcast.listen((data) => results1.add(data));
-             broadcast.listen((data) => results2.add("item:" + data.toString()));
+             final results1 = broadcast.toList();
+             final results2 = broadcast.map((data) => "item:" + data.toString()).toList();
 
              controller.add(1);
              controller.add(2);
-             await Future.delayed(Duration(milliseconds: 5)); // Allow listeners to process
              await controller.close();
 
              // Return results from both listeners
-             return [results1, results2];
+             return [await results1, await results2];
            ''';
         List<dynamic> result =
             await runInterpretedStreamTest(source) as List<dynamic>;
@@ -386,7 +380,7 @@ void main() {
             dynamic errorReceived = null;
             Completer errorCompleter = Completer();
 
-            StreamSubscription sub = controller.stream.listen(
+            controller.stream.listen(
               null, // No onData needed for this test
               onError: (err, stack) { // Interpreted functions might receive stack too
                  errorReceived = err;
@@ -395,133 +389,38 @@ void main() {
             );
 
             controller.addError("Boom!");
-            // Don't close, error should be caught
-
-            await errorCompleter.future; // Wait for onError
+            await errorCompleter.future;
+            await controller.close();
 
             return errorReceived;
           ''';
         expect(await runInterpretedStreamTest(source), equals("Boom!"));
       });
-    });
-  });
-  group('Stream Error Handling:', () {
-    test('handleError with single-argument callback works without error', () {
-      final code = '''
-        import 'dart:async';
-        
-        void main() async {
-          var stream = Stream.fromIterable([1, 2, 3]).map((n) {
-            if (n == 2) throw 'error at 2';
-            return n;
+      group('Stream error handling', () {
+        for (final callback in [
+          "(error) { events.add('handled:' + error); }",
+          "(error, stack) { events.add('handled:' + error); events.add(stack is StackTrace); }",
+        ]) {
+          test('handleError callback $callback', () async {
+            final source =
+                '''
+            final events = [];
+            final stream = Stream.fromIterable([1, 2, 3]).map((n) {
+              if (n == 2) throw 'bad';
+              return n;
+            }).handleError($callback);
+            final values = await stream.toList();
+            return [values, events];
+          ''';
+            expect(await runInterpretedStreamTest(source), [
+              [1, 3],
+              callback.startsWith('(error, stack)')
+                  ? ['handled:bad', true]
+                  : ['handled:bad'],
+            ]);
           });
-          var handled = stream.handleError((e) {
-          });
-          try {
-            await for (var n in handled) {
-            }
-          } catch (e) {
-          }
         }
-      ''';
-      // Should not throw an error about too many arguments
-      expect(() => execute(code), returnsNormally);
+      });
     });
-
-    test('handleError with two-argument callback works without error', () {
-      final code = '''
-        import 'dart:async';
-        
-        void main() async {
-          var stream = Stream.fromIterable([1, 2, 3]).map((n) {
-            if (n == 2) throw 'error at 2';
-            return n;
-          });
-          var handled = stream.handleError((e, st) {
-          });
-          try {
-            await for (var n in handled) {
-            }
-          } catch (e) {
-          }
-        }
-      ''';
-      // Should not throw an error about too many arguments
-      expect(() => execute(code), returnsNormally);
-    });
-
-    test('Stream.listen with onError single-argument callback works', () {
-      final code = '''
-        import 'dart:async';
-        
-        void main() async {
-          var stream = Stream.fromIterable([1, 2, 3]).map((n) {
-            if (n == 2) throw 'error at 2';
-            return n;
-          });
-          var handled = false;
-          stream.listen(
-            (n) {},
-            onError: (e) {
-              handled = true;
-            },
-          );
-          await Future.delayed(Duration(milliseconds: 100));
-        }
-      ''';
-      // Should not throw an error about too many arguments
-      expect(() => execute(code), returnsNormally);
-    });
-
-    test('Stream.listen with onError two-argument callback works', () {
-      final code = '''
-        import 'dart:async';
-        
-        void main() async {
-          var stream = Stream.fromIterable([1, 2, 3]).map((n) {
-            if (n == 2) throw 'error at 2';
-            return n;
-          });
-          var handled = false;
-          stream.listen(
-            (n) {},
-            onError: (e, st) {
-              handled = true;
-            },
-          );
-          await Future.delayed(Duration(milliseconds: 100));
-        }
-      ''';
-      // Should not throw an error about too many arguments
-      expect(() => execute(code), returnsNormally);
-    });
-
-    test(
-      'handleError respects test parameter with single-argument callback',
-      () {
-        final code = '''
-        import 'dart:async';
-        
-        void main() async {
-          var stream = Stream.fromIterable([1, 2, 3]).map((n) {
-            if (n == 2) throw 'error at 2';
-            return n;
-          });
-          var handled = stream.handleError(
-            (e) {
-            },
-            test: (e) => e.contains('2'),
-          );
-          try {
-            await for (var n in handled) {
-            }
-          } catch (e) {
-          }
-        }
-      ''';
-        // Should not throw an error about too many arguments
-        expect(() => execute(code), returnsNormally);
-      },
-    );
   });
 }

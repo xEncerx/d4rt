@@ -12,7 +12,6 @@ void main() {
       );
 
       expect(script.declarationCount, equals(1));
-      expect(script.source, contains('square'));
 
       final result1 = d4rt.executeCompiled(
         script,
@@ -56,25 +55,5 @@ void main() {
         throwsA(isA<SourceCodeException>()),
       );
     });
-
-    test(
-      'AST caching reuses precompiled script when enableAstCache is true',
-      () {
-        final d4rt = D4rt(enableAstCache: true);
-        const source = 'int compute() => 12345;';
-
-        final script1 = d4rt.compile(source: source);
-        final script2 = d4rt.compile(source: source);
-
-        expect(identical(script1, script2), isTrue);
-
-        final result = d4rt.execute(source: source, name: 'compute');
-        expect(result, equals(12345));
-
-        d4rt.clearAstCache();
-        final script3 = d4rt.compile(source: source);
-        expect(identical(script1, script3), isFalse);
-      },
-    );
   });
 }

@@ -284,16 +284,6 @@ void main() {
       );
     });
   });
-
-  group('bridgeOverrideRegistry global', () {
-    tearDown(() {
-      // Note: We can't actually clear the global registry, so tests should be careful
-    });
-
-    test('is a BridgeOverrideConfig instance', () {
-      expect(bridgeOverrideRegistry, isA<BridgeOverrideConfig>());
-    });
-  });
 }
 
 // Test bridge classes for annotation tests

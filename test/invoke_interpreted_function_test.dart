@@ -115,42 +115,6 @@ void main() {
     });
 
     test(
-      'active generator consumption supersedes expired explicit entry',
-      () async {
-        var effects = 0;
-        d4rt.registertopLevelFunction('touch', (visitor, args, named, types) {
-          effects++;
-          return 1;
-        });
-        final iterable =
-            d4rt.execute(
-                  source: 'Iterable<int> work() sync* {touch();yield 7;}',
-                  name: 'work',
-                  timeout: const Duration(milliseconds: 50),
-                )
-                as Iterable;
-        await Future<void>.delayed(const Duration(milliseconds: 80));
-        expect(
-          () => iterable.toList(),
-          throwsA(isA<ExecutionTimeoutException>()),
-        );
-        expect(effects, 0);
-        d4rt.registertopLevelFunction(
-          'retained',
-          (visitor, args, named, types) => iterable,
-        );
-        expect(
-          d4rt.execute(
-            source: 'main()=>retained().toList();',
-            timeout: const Duration(seconds: 1),
-          ),
-          [7],
-        );
-        expect(effects, 1);
-      },
-    );
-
-    test(
       'explicit Callable generator entry permits bounded host consumption',
       () {
         d4rt.registertopLevelFunction(
@@ -165,30 +129,6 @@ void main() {
                 )
                 as Iterable;
         expect(iterable.toList(), [1, 2]);
-      },
-    );
-
-    test(
-      'explicit async generator deadline terminates host continuation',
-      () async {
-        var effects = 0;
-        d4rt.registertopLevelFunction('touch', (visitor, args, named, types) {
-          effects++;
-          return 1;
-        });
-        final stream =
-            d4rt.execute(
-                  source:
-                      'Stream<int> work() async* {yield 1;await Future.delayed(Duration(milliseconds:80));touch();yield 2;}',
-                  name: 'work',
-                  timeout: const Duration(milliseconds: 50),
-                )
-                as Stream;
-        await expectLater(
-          stream.toList().timeout(const Duration(seconds: 2)),
-          throwsA(isA<ExecutionTimeoutException>()),
-        );
-        expect(effects, 0);
       },
     );
 

@@ -2,7 +2,8 @@ import 'package:test/test.dart';
 import 'package:d4rt/d4rt.dart';
 
 void main() {
-  final d4rt = D4rt();
+  late D4rt d4rt;
+  setUp(() => d4rt = D4rt());
   const String testLibPath = 'd4rt-mem:/uint8_list_test.dart';
 
   dynamic executeTestScript(String scriptBody) {

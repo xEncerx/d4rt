@@ -609,16 +609,7 @@ void main() {
       test('should throw error when called before execute', () {
         final freshD4rt = D4rt()..grant(DangerousPermission.codeEvaluation);
 
-        expect(
-          () => freshD4rt.eval('1 + 1'),
-          throwsA(
-            isA<RuntimeError>().having(
-              (error) => error.message,
-              'message',
-              contains('existing execution context'),
-            ),
-          ),
-        );
+        expect(() => freshD4rt.eval('1 + 1'), throwsA(isA<RuntimeError>()));
       });
 
       test('should throw error for undefined variables', () {

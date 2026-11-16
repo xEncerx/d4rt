@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:test/test.dart';
 import 'package:d4rt/d4rt.dart';
 
@@ -14,9 +16,8 @@ dynamic execute(String source, {List<Object?>? args}) {
 void main() {
   test('Async nested loops: while containing for inside for', () async {
     final source = '''
-      Future<void> delay(int milliseconds) async {
-        // Simulate async delay
-        return Future.delayed(Duration(milliseconds: milliseconds));
+      Future<void> delay() async {
+        return Future.value();
       }
       
       Future<List<String>> processData() async {
@@ -33,7 +34,7 @@ void main() {
             for (int j = 0; j < 2; j++) {
               
               // Async operation in the innermost loop
-              await delay(10);
+              await delay();
               
               String result = 'outer:\${outerCounter}_i:\${i}_j:\${j}';
               results.add(result);
@@ -60,7 +61,7 @@ void main() {
   test('Async nested loops with conditions and breaks', () async {
     final source = '''
       Future<void> asyncPrint(String message) async {
-        return Future.delayed(Duration(milliseconds: 5));
+        return Future.value();
       }
       
       Future<Map<String, dynamic>> complexAsyncLoops() async {
@@ -115,22 +116,30 @@ void main() {
         };
       }
 
-      Future<String> main() async {
-        
-        await complexAsyncLoops();
-        
-        return 'Complex test completed';
-      }
+      Future<Map<String, dynamic>> main() async => await complexAsyncLoops();
     ''';
 
     final result = await execute(source);
-    expect(result, equals('Complex test completed'));
+    expect(result, {
+      'evenNumbers': [
+        for (var w = 0; w < 4; w++)
+          for (var x = 0; x < 3; x++)
+            for (var y = 0; y < 4; y += 2) w * 100 + x * 10 + y,
+      ],
+      'oddNumbers': [
+        for (var w = 0; w < 4; w++)
+          for (var x = 0; x < 3; x++)
+            for (var y = 1; y < 4; y += 2) w * 100 + x * 10 + y,
+      ],
+      'totalIterations': 48,
+      'whileCount': 4,
+    });
   });
 
   test('Async nested loops with exception handling', () async {
     final source = '''
       Future<int> riskyAsyncOperation(int value) async {
-        await Future.delayed(Duration(milliseconds: 1));
+        await Future.value();
         
         if (value == 13) {
           throw Exception('Unlucky number 13!');
@@ -175,26 +184,38 @@ void main() {
         };
       }
 
-      Future<String> main() async {
-        
-        try {
-          await loopsWithExceptionHandling();
-          
-          return 'Exception handling test completed successfully';
-        } catch (e) {
-          return 'Test failed with error: \$e';
-        }
-      }
+      Future<Map<String, dynamic>> main() async => await loopsWithExceptionHandling();
     ''';
 
     final result = await execute(source);
-    expect(result, equals('Exception handling test completed successfully'));
+    final expectedSuccesses = <int>[];
+    final expectedErrors = <String>[];
+    for (var loop = 0; loop < 2; loop++) {
+      for (var a = 0; a < 3; a++) {
+        for (var b = 0; b < 5; b++) {
+          final value = loop * 10 + a + b;
+          if (value == 13) {
+            expectedErrors.add(
+              'Error at [$loop,$a,$b]: Exception: Unlucky number 13!',
+            );
+          } else {
+            expectedSuccesses.add(value * 2);
+          }
+        }
+      }
+    }
+    expect(result, {
+      'successful': expectedSuccesses,
+      'errors': expectedErrors,
+      'totalSuccessful': expectedSuccesses.length,
+      'totalErrors': expectedErrors.length,
+    });
   });
 
   test('Async nested loops with Future.wait', () async {
     final source = '''
-      Future<String> asyncTask(String taskName, int delay) async {
-        await Future.delayed(Duration(milliseconds: delay));
+      Future<String> asyncTask(String taskName) async {
+        await gate(taskName);
         return 'Task \$taskName completed';
       }
       
@@ -211,9 +232,7 @@ void main() {
             // Inner for loop to create parallel tasks
             for (int j = 0; j < 2; j++) {
               String taskName = 'R\${round}_I\${i}_J\${j}';
-              int delay = (i + j + 1) * 10;
-              
-              futures.add(asyncTask(taskName, delay));
+              futures.add(asyncTask(taskName));
             }
           }
           
@@ -227,21 +246,40 @@ void main() {
         return allResults;
       }
 
-      Future<int> main() async {
-        List<String> results = await parallelAsyncLoops();
-        
-        return results.length;
+      Future<List<String>> main() async {
+        return await parallelAsyncLoops();
       }
     ''';
 
-    final result = await execute(source);
-    expect(result, equals(8));
+    final pending = <Completer<void>>[];
+    final arrivals = <String>[];
+    final d4rt = D4rt()
+      ..registertopLevelFunction('gate', (visitor, args, named, types) {
+        arrivals.add(args.single as String);
+        final completer = Completer<void>();
+        pending.add(completer);
+        if (pending.length == 4) {
+          for (final gate in pending.reversed) {
+            gate.complete();
+          }
+          pending.clear();
+        }
+        return completer.future;
+      });
+    final result = await d4rt.execute(source: source);
+    final expected = [
+      for (var round = 0; round < 2; round++)
+        for (var i = 0; i < 2; i++)
+          for (var j = 0; j < 2; j++) 'R${round}_I${i}_J$j',
+    ];
+    expect(arrivals, expected);
+    expect(result, expected.map((name) => 'Task $name completed').toList());
   });
 
   test('Async nested for-in loops with lists', () async {
     final source = '''
       Future<String> processItem(String category, String item) async {
-        await Future.delayed(Duration(milliseconds: 5));
+        await Future.value();
         return '\$category:\$item';
       }
       
@@ -282,7 +320,7 @@ void main() {
   test('Async nested for-in loops with maps and complex data', () async {
     final source = '''
       Future<Map<String, dynamic>> analyzeData(String department, Map<String, dynamic> employee) async {
-        await Future.delayed(Duration(milliseconds: 3));
+        await Future.value();
         
         int salary = employee['salary'] as int;
         String role = employee['role'] as String;
@@ -349,13 +387,13 @@ void main() {
   test('Async nested for-in loops with break and continue', () async {
     final source = '''
       Future<bool> shouldSkipItem(String category, String item) async {
-        await Future.delayed(Duration(milliseconds: 2));
+        await Future.value();
         // Skip items containing 'skip'
         return item.contains('skip');
       }
       
       Future<bool> shouldStopCategory(String category) async {
-        await Future.delayed(Duration(milliseconds: 1));
+        await Future.value();
         // Stop processing when we hit 'stop' category
         return category == 'stop';
       }
@@ -408,7 +446,7 @@ void main() {
   test('Async nested for-in loops with exception handling', () async {
     final source = '''
       Future<String> riskyProcessing(String category, String item) async {
-        await Future.delayed(Duration(milliseconds: 2));
+        await Future.value();
         
         if (item == 'dangerous') {
           throw Exception('Processing failed for dangerous item');
@@ -477,7 +515,7 @@ void main() {
   test('Async nested for-in loops with await for streams', () async {
     final source = '''
       Future<Stream<String>> createAsyncStream(List<String> items) async {
-        await Future.delayed(Duration(milliseconds: 5));
+        await Future.value();
         
         Stream<String> stream = Stream.fromIterable(items);
         return stream;
@@ -503,7 +541,7 @@ void main() {
             allResults.add(processed);
             
             // Simulate async processing for each stream item
-            await Future.delayed(Duration(milliseconds: 1));
+            await Future.value();
           }
         }
         
@@ -533,7 +571,7 @@ void main() {
         // Simple nested for-in
         for (List<String> sublist in data) {
           for (String item in sublist) {
-            await Future.delayed(Duration(milliseconds: 1));
+            await Future.value();
             count++;
           }
         }
@@ -552,8 +590,8 @@ void main() {
 
   test('Triple nested for-in loops with async operations', () async {
     final source = '''
-      Future<void> delay(int ms) async {
-        return Future.delayed(Duration(milliseconds: ms));
+      Future<void> delay() async {
+        return Future.value();
       }
 
       Future<List<String>> tripleNested() async {
@@ -563,11 +601,11 @@ void main() {
         List<String> items = ['x', 'y'];
 
         for (String category in categories) {
-          await delay(5);
+          await delay();
           for (int level in levels) {
-            await delay(5);
+            await delay();
             for (String item in items) {
-              await delay(5);
+              await delay();
               results.add('\${category}-\${level}-\${item}');
             }
           }
@@ -588,22 +626,22 @@ void main() {
 
   test('Nested loops with conditional break and continue', () async {
     final source = '''
-      Future<void> delay(int ms) async {
-        return Future.delayed(Duration(milliseconds: ms));
+      Future<void> delay() async {
+        return Future.value();
       }
 
       Future<List<String>> complexControl() async {
         List<String> results = [];
 
         for (int outer = 0; outer < 5; outer++) {
-          await delay(5);
+          await delay();
           
           if (outer == 2) {
             continue; // Skip outer = 2
           }
           
           for (int inner = 0; inner < 4; inner++) {
-            await delay(5);
+            await delay();
             
             if (inner == 1) {
               continue; // Skip inner = 1
@@ -638,12 +676,12 @@ void main() {
 
   test('Nested for-in with maps and async transformations', () async {
     final source = '''
-      Future<void> delay(int ms) async {
-        return Future.delayed(Duration(milliseconds: ms));
+      Future<void> delay() async {
+        return Future.value();
       }
 
       Future<String> transform(String key, dynamic value) async {
-        await delay(10);
+        await delay();
         return '\${key}=\${value}';
       }
 
@@ -656,7 +694,7 @@ void main() {
         };
 
         for (String userId in data.keys) {
-          await delay(5);
+          await delay();
           Map<String, int> userMap = data[userId] ?? {};
           
           for (String key in userMap.keys) {
@@ -681,13 +719,13 @@ void main() {
 
   test('Await for loop inside regular for-in loop', () async {
     final source = '''
-      Future<void> delay(int ms) async {
-        return Future.delayed(Duration(milliseconds: ms));
+      Future<void> delay() async {
+        return Future.value();
       }
 
       Stream<String> createStream(List<String> items) async* {
         for (String item in items) {
-          await delay(10);
+          await delay();
           yield item;
         }
       }
@@ -698,12 +736,12 @@ void main() {
 
         // Regular for-in for outer loop
         for (String group in groups) {
-          await delay(5);
+          await delay();
           List<String> items = group == 'G1' ? ['a', 'b', 'c'] : ['x', 'y'];
           
           // Await for inside
           await for (String item in createStream(items)) {
-            await delay(5);
+            await delay();
             results.add('\${group}:\${item}');
           }
         }
@@ -723,23 +761,23 @@ void main() {
 
   test('Mixed loop types with async: for-in inside while inside for', () async {
     final source = '''
-      Future<void> delay(int ms) async {
-        return Future.delayed(Duration(milliseconds: ms));
+      Future<void> delay() async {
+        return Future.value();
       }
 
       Future<List<String>> mixedLoops() async {
         List<String> results = [];
 
         for (int batch = 0; batch < 2; batch++) {
-          await delay(5);
+          await delay();
           int counter = 0;
           
           while (counter < 2) {
-            await delay(5);
+            await delay();
             List<String> items = ['item1', 'item2'];
             
             for (String item in items) {
-              await delay(5);
+              await delay();
               results.add('b\${batch}:c\${counter}:\${item}');
             }
             
@@ -763,12 +801,12 @@ void main() {
   test('Nested loops with async/await in various positions', () async {
     final source = '''
       Future<int> asyncAdd(int a, int b) async {
-        await Future.delayed(Duration(milliseconds: 5));
+        await Future.value();
         return a + b;
       }
 
       Future<bool> asyncCheck(int value) async {
-        await Future.delayed(Duration(milliseconds: 5));
+        await Future.value();
         return value > 5;
       }
 
@@ -803,12 +841,12 @@ void main() {
 
   test('Nested for-in with list modifications and async operations', () async {
     final source = '''
-      Future<void> delay(int ms) async {
-        return Future.delayed(Duration(milliseconds: ms));
+      Future<void> delay() async {
+        return Future.value();
       }
 
       Future<int> process(String item) async {
-        await delay(5);
+        await delay();
         return item.length;
       }
 
@@ -818,7 +856,7 @@ void main() {
         int totalProcessed = 0;
 
         for (String group in groups) {
-          await delay(5);
+          await delay();
           List<int> groupResults = [];
           List<String> items = ['a', 'bb', 'ccc'];
           
@@ -849,24 +887,24 @@ void main() {
 
   test('Deep nesting with 4 levels and mixed async operations', () async {
     final source = '''
-      Future<void> delay(int ms) async {
-        return Future.delayed(Duration(milliseconds: ms));
+      Future<void> delay() async {
+        return Future.value();
       }
 
       Future<List<String>> deepNesting() async {
         List<String> results = [];
         
         for (int a = 0; a < 2; a++) {
-          await delay(2);
+          await delay();
           
           for (int b = 0; b < 2; b++) {
-            await delay(2);
+            await delay();
             
             for (int c = 0; c < 2; c++) {
-              await delay(2);
+              await delay();
               
               for (int d = 0; d < 2; d++) {
-                await delay(2);
+                await delay();
                 results.add('\${a}\${b}\${c}\${d}');
               }
             }
@@ -888,8 +926,8 @@ void main() {
 
   test('Nested loops with early returns and exception handling', () async {
     final source = '''
-      Future<void> delay(int ms) async {
-        return Future.delayed(Duration(milliseconds: ms));
+      Future<void> delay() async {
+        return Future.value();
       }
 
       Future<Map<String, dynamic>> nestedWithExceptions() async {
@@ -897,10 +935,10 @@ void main() {
         List<String> errors = [];
 
         for (int outer = 0; outer < 3; outer++) {
-          await delay(5);
+          await delay();
           
           for (int inner = 0; inner < 3; inner++) {
-            await delay(5);
+            await delay();
             
             try {
               if (outer == 1 && inner == 1) {
@@ -933,12 +971,12 @@ void main() {
 
   test('Nested for-in with dynamic list generation', () async {
     final source = '''
-      Future<void> delay(int ms) async {
-        return Future.delayed(Duration(milliseconds: ms));
+      Future<void> delay() async {
+        return Future.value();
       }
 
       Future<List<int>> generateNumbers(int count) async {
-        await delay(5);
+        await delay();
         List<int> numbers = [];
         for (int i = 0; i < count; i++) {
           numbers.add(i);
@@ -951,11 +989,11 @@ void main() {
         List<int> outerCounts = [2, 3, 1];
 
         for (int count in outerCounts) {
-          await delay(5);
+          await delay();
           List<int> innerNumbers = await generateNumbers(count);
           
           for (int number in innerNumbers) {
-            await delay(5);
+            await delay();
             total += number;
           }
         }

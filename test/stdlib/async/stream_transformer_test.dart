@@ -19,20 +19,15 @@ main() async {
   
   final transformedStream = controller.stream.transform(transformer);
   
-  final results = <int>[];
-  transformedStream.listen((value) {
-    results.add(value);
-  });
+  final results = transformedStream.toList();
   
   controller.add(1);
   controller.add(2);
   controller.add(3);
   await controller.close();
   
-  // Small delay to ensure all events are processed
-  await Future.delayed(Duration(milliseconds: 10));
   
-  return results;
+  return await results;
 }
 ''';
       final result = await executeAsync(code);
@@ -61,23 +56,22 @@ main() async {
   
   final transformedStream = controller.stream.transform(transformer);
   
-  final results = <String>[];
-  transformedStream.listen((value) {
-    results.add(value);
-  });
+  final results = transformedStream.toList();
   
   controller.add(1);
   controller.addError(Exception('Test error'));
   controller.add(2);
   await controller.close();
   
-  await Future.delayed(Duration(milliseconds: 10));
   
-  return results.length >= 2; // At least data and error
+  return await results;
 }
 ''';
       final result = await executeAsync(code);
-      expect(result, equals(true));
+      expect(
+        result,
+        equals(['Value: 1', 'Error caught: Exception: Test error', 'Value: 2']),
+      );
     });
 
     test('StreamTransformer.fromHandlers with handleDone', () async {
@@ -101,12 +95,12 @@ main() async {
   
   final transformedStream = controller.stream.transform(transformer);
   
-  transformedStream.listen((value) {});
+  final done = transformedStream.toList();
   
   controller.add(1);
   await controller.close();
   
-  await Future.delayed(Duration(milliseconds: 10));
+  await done;
   
   return doneCalled;
 }
@@ -133,10 +127,7 @@ main() async {
   
   final transformedStream = controller.stream.transform(transformer);
   
-  final results = <int>[];
-  transformedStream.listen((value) {
-    results.add(value);
-  });
+  final results = transformedStream.toList();
   
   controller.add(1);
   controller.add(2);
@@ -145,9 +136,8 @@ main() async {
   controller.add(5);
   await controller.close();
   
-  await Future.delayed(Duration(milliseconds: 10));
   
-  return results;
+  return await results;
 }
 ''';
       final result = await executeAsync(code);
@@ -172,18 +162,14 @@ main() async {
   
   final transformedStream = controller.stream.transform(transformer);
   
-  final results = <String>[];
-  transformedStream.listen((value) {
-    results.add(value);
-  });
+  final results = transformedStream.toList();
   
   controller.add(1);
   controller.add(2);
   await controller.close();
   
-  await Future.delayed(Duration(milliseconds: 10));
   
-  return results;
+  return await results;
 }
 ''';
         final result = await executeAsync(code);
@@ -204,19 +190,15 @@ main() async {
   final controller = StreamController<int>();
   final transformedStream = controller.stream.transform(transformer);
   
-  final results = <int>[];
-  transformedStream.listen((value) {
-    results.add(value);
-  });
+  final results = transformedStream.toList();
   
   controller.add(1);
   controller.add(2);
   controller.add(3);
   await controller.close();
   
-  await Future.delayed(Duration(milliseconds: 10));
   
-  return results;
+  return await results;
 }
 ''';
       final result = await executeAsync(code);
@@ -231,7 +213,7 @@ main() async {
   // Create a transformer that delays each value
   final transformer = StreamTransformer<int, int>.fromBind((stream) {
     return stream.asyncMap((value) async {
-      await Future.delayed(Duration(milliseconds: 1));
+      await Future.value();
       return value + 10;
     });
   });
@@ -239,18 +221,14 @@ main() async {
   final controller = StreamController<int>();
   final transformedStream = controller.stream.transform(transformer);
   
-  final results = <int>[];
-  transformedStream.listen((value) {
-    results.add(value);
-  });
+  final results = transformedStream.toList();
   
   controller.add(1);
   controller.add(2);
   await controller.close();
   
-  await Future.delayed(Duration(milliseconds: 50));
   
-  return results;
+  return await results;
 }
 ''';
       final result = await executeAsync(code);
@@ -283,18 +261,14 @@ main() async {
       .transform(doubler)
       .transform(adder);
   
-  final results = <int>[];
-  transformedStream.listen((value) {
-    results.add(value);
-  });
+  final results = transformedStream.toList();
   
   controller.add(1);  // 1 * 2 + 10 = 12
   controller.add(5);  // 5 * 2 + 10 = 20
   await controller.close();
   
-  await Future.delayed(Duration(milliseconds: 10));
   
-  return results;
+  return await results;
 }
 ''';
       final result = await executeAsync(code);
@@ -319,18 +293,14 @@ main() async {
   
   final transformedStream = controller.stream.transform(transformer);
   
-  final results = <int>[];
-  transformedStream.listen((value) {
-    results.add(value);
-  });
+  final results = transformedStream.toList();
   
   controller.add(2);
   controller.add(3);
   await controller.close();
   
-  await Future.delayed(Duration(milliseconds: 10));
   
-  return results;
+  return await results;
 }
 ''';
       final result = await executeAsync(code);
@@ -356,18 +326,14 @@ main() async {
   final intController = StreamController<int>();
   final transformedStream = intController.stream.transform(castedTransformer);
   
-  final results = <int>[];
-  transformedStream.listen((value) {
-    results.add(value);
-  });
+  final results = transformedStream.toList();
   
   intController.add(1);
   intController.add(2);
   await intController.close();
   
-  await Future.delayed(Duration(milliseconds: 10));
   
-  return results;
+  return await results;
 }
 ''';
       final result = await executeAsync(code);

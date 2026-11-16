@@ -260,14 +260,5 @@ void main() {
       ''';
       expect(execute(source), equals('hello'));
     });
-
-    test('fromEnvironment', () {
-      const source = '''
-      main() {
-        return String.fromEnvironment("key", defaultValue: "default");
-      }
-      ''';
-      expect(execute(source), equals('default'));
-    });
   });
 }

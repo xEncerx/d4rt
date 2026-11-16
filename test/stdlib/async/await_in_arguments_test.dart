@@ -8,7 +8,7 @@ void main() {
     test('await in positional arguments', () async {
       const source = '''
         Future<int> getValue() async {
-          await Future.delayed(Duration(milliseconds: 5));
+          await Future.value();
           return 42;
         }
         
@@ -27,7 +27,7 @@ void main() {
     test('await in named arguments', () async {
       const source = '''
         Future<String> getName() async {
-          await Future.delayed(Duration(milliseconds: 5));
+          await Future.value();
           return "World";
         }
         
@@ -57,7 +57,7 @@ void main() {
         }
         
         Future<int> getCoordinate() async {
-          await Future.delayed(Duration(milliseconds: 5));
+          await Future.value();
           return 15;
         }
 
@@ -73,14 +73,14 @@ void main() {
       final nativeEvents = <String>[];
       Future<String> readName() async {
         nativeEvents.add('read:start');
-        await Future<void>.delayed(const Duration(milliseconds: 1));
+        await Future<void>.value();
         nativeEvents.add('read:end');
         return 'Ada';
       }
 
       Future<String> writeValue(Map<String, String> value) async {
         nativeEvents.add('write:${value['name']}');
-        await Future<void>.delayed(const Duration(milliseconds: 1));
+        await Future<void>.value();
         nativeEvents.add('write:end');
         return value['name']!;
       }
@@ -93,14 +93,14 @@ void main() {
 
         Future<String> readName() async {
           events.add('read:start');
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           events.add('read:end');
           return 'Ada';
         }
 
         Future<String> writeValue(Map<String, String> value) async {
           events.add('write:\${value['name']}');
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           events.add('write:end');
           return value['name']!;
         }
@@ -123,7 +123,7 @@ void main() {
         final nativeEvents = <String>[];
         Future<String> read(String label, String value) async {
           nativeEvents.add('$label:start');
-          await Future<void>.delayed(const Duration(milliseconds: 1));
+          await Future<void>.value();
           nativeEvents.add('$label:end');
           return value;
         }
@@ -133,7 +133,7 @@ void main() {
           required String suffix,
         }) async {
           nativeEvents.add('write:${data['key']}:$suffix');
-          await Future<void>.delayed(const Duration(milliseconds: 1));
+          await Future<void>.value();
           nativeEvents.add('write:end');
           return null;
         }
@@ -148,7 +148,7 @@ void main() {
 
         Future<String> read(String label, String value) async {
           events.add('\$label:start');
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           events.add('\$label:end');
           return value;
         }
@@ -156,7 +156,7 @@ void main() {
         Future<String?> writeValue(Map<String, String> data,
             {required String suffix}) async {
           events.add('write:\${data['key']}:\$suffix');
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           events.add('write:end');
           return null;
         }
@@ -183,14 +183,14 @@ void main() {
         final nativeEvents = <String>[];
         Future<String?> readName() async {
           nativeEvents.add('read:start');
-          await Future<void>.delayed(const Duration(milliseconds: 1));
+          await Future<void>.value();
           nativeEvents.add('read:end');
           return null;
         }
 
         Future<String> writeValue(Map<String, String?> data) async {
           nativeEvents.add('write:${data.length}:${data['name'] == null}');
-          await Future<void>.delayed(const Duration(milliseconds: 1));
+          await Future<void>.value();
           nativeEvents.add('write:end');
           return data['name'] ?? 'fallback';
         }
@@ -203,14 +203,14 @@ void main() {
 
         Future<String?> readName() async {
           events.add('read:start');
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           events.add('read:end');
           return null;
         }
 
         Future<String> writeValue(Map<String, String?> data) async {
           events.add('write:\${data.length}:\${data['name'] == null}');
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           events.add('write:end');
           return data['name'] ?? 'fallback';
         }
@@ -236,7 +236,7 @@ void main() {
 
         Future<String> readName(bool failInner) async {
           events.add('inner:start');
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           if (failInner) {
             events.add('inner:fail');
             throw 'inner';
@@ -247,7 +247,7 @@ void main() {
 
         Future<String> writeValue(Map<String, String> data) async {
           events.add('outer:start:\${data['name']}');
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           events.add('outer:fail');
           throw 'outer';
         }
@@ -271,7 +271,7 @@ void main() {
           final nativeEvents = <String>[];
           Future<String> readName() async {
             nativeEvents.add('inner:start');
-            await Future<void>.delayed(const Duration(milliseconds: 1));
+            await Future<void>.value();
             if (failInner) {
               nativeEvents.add('inner:fail');
               throw 'inner';
@@ -282,7 +282,7 @@ void main() {
 
           Future<String> writeValue(Map<String, String> data) async {
             nativeEvents.add('outer:start:${data['name']}');
-            await Future<void>.delayed(const Duration(milliseconds: 1));
+            await Future<void>.value();
             nativeEvents.add('outer:fail');
             throw 'outer';
           }
@@ -406,12 +406,12 @@ void main() {
     test('await with exception handling in arguments', () async {
       const source = '''
         Future<int> riskyFunction() async {
-          await Future.delayed(Duration(milliseconds: 5));
+          await Future.value();
           throw Exception("Something went wrong");
         }
         
         Future<int> safeFunction() async {
-          await Future.delayed(Duration(milliseconds: 5));
+          await Future.value();
           return 100;
         }
         

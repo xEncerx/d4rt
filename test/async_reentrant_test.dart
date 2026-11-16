@@ -71,7 +71,7 @@ class Counter {
 Future<Object> main() async {
   final counter = Counter();
   final before = [sum(4), counter.implicit(4), counter.explicit(4)];
-  await Future.delayed(Duration(milliseconds: 1));
+  await Future.value();
   return [before, [sum(4), counter.implicit(4), counter.explicit(4)]];
 }
 ''';
@@ -100,14 +100,14 @@ class Box {
 Future<Box> receiver() async {
   events.add('receiver:start');
   final offset = sum(2);
-  await Future.delayed(Duration(milliseconds: 1));
+  await Future.value();
   events.add('receiver:end');
   return Box(offset);
 }
 
 Future<int> delayed(String label, int value) async {
   events.add(label + ':start');
-  await Future.delayed(Duration(milliseconds: 1));
+  await Future.value();
   events.add(label + ':end');
   return value;
 }
@@ -151,7 +151,7 @@ int combine(int first, int second, {required int last}) => first + second + last
 
 Future<int> delayed(bool fail) async {
   events.add('await:start');
-  await Future.delayed(Duration(milliseconds: 1));
+  await Future.value();
   events.add('await:end');
   if (fail) throw 'async';
   return 4;
@@ -266,7 +266,7 @@ int sum(int n) {
   return n == 0 ? 0 : n + sum(n - 1);
 }
 Future<int> delayed(int n) async {
-  await Future.delayed(Duration(milliseconds: 1));
+  await Future.value();
   return n;
 }
 Future<Object> main() async {
@@ -295,7 +295,7 @@ Iterable<Object?> values(int n) sync* {
 }
 Future<Object> main() async {
   final before = values(2).toList();
-  await Future.delayed(Duration(milliseconds: 1));
+  await Future.value();
   final after = values(1).toList();
   return {'before': before, 'after': after, 'events': events};
 }
@@ -378,7 +378,7 @@ Future<Object> asyncScenario() async {
 import 'package:example/nodes.dart';
 Future<int> main() async {
   final first = syncScenario();
-  await Future.delayed(Duration(milliseconds: 1));
+  await Future.value();
   return first + syncScenario();
 }
 ''',

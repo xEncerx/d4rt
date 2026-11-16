@@ -31,7 +31,7 @@ void main() {
       const code = '''
         Stream<int> delayedCount() async* {
           for (int i = 1; i <= 3; i++) {
-            await Future.delayed(Duration(milliseconds: 1));
+            await Future.value();
             yield i;
           }
         }
@@ -172,7 +172,7 @@ void main() {
             }
             
             if (i == 3) {
-              await Future.delayed(Duration(milliseconds: 1));
+              await Future.value();
             }
           }
         }
@@ -192,43 +192,63 @@ void main() {
 
     test('Multiple async* generators running concurrently', () async {
       const code = '''
-        Stream<String> generator1() async* {
-          for (int i = 1; i <= 3; i++) {
-            await Future.delayed(Duration(milliseconds: 1));
-            yield 'A\$i';
+        import 'dart:async';
+
+        Stream<String> generator1(List starts, List gates) async* {
+          for (int i = 0; i < 3; i++) {
+            starts[i].complete();
+            await gates[i].future;
+            yield 'A\${i + 1}';
           }
         }
-        
-        Stream<String> generator2() async* {
-          for (int i = 1; i <= 3; i++) {
-            await Future.delayed(Duration(milliseconds: 1));
-            yield 'B\$i';
+
+        Stream<String> generator2(List starts, List gates) async* {
+          for (int i = 0; i < 3; i++) {
+            starts[i].complete();
+            await gates[i].future;
+            yield 'B\${i + 1}';
           }
         }
-        
-        Future<List<String>> main() async {
-          List<String> results1 = [];
-          List<String> results2 = [];
-          
-          // Run generators concurrently
+
+        Future<List> main(List startsA, List startsB, List gatesA, List gatesB) async {
+          final resultsA = <String>[];
+          final resultsB = <String>[];
           await Future.wait([
             () async {
-              await for (var value in generator1()) {
-                results1.add(value);
+              await for (final value in generator1(startsA, gatesA)) {
+                resultsA.add(value);
               }
             }(),
             () async {
-              await for (var value in generator2()) {
-                results2.add(value);
+              await for (final value in generator2(startsB, gatesB)) {
+                resultsB.add(value);
               }
-            }()
+            }(),
           ]);
-          
-          return [results1, results2];
+          return [resultsA, resultsB];
         }
       ''';
 
-      final result = await execute(code);
+      final startsA = List.generate(3, (_) => Completer<void>());
+      final startsB = List.generate(3, (_) => Completer<void>());
+      final gatesA = List.generate(3, (_) => Completer<void>());
+      final gatesB = List.generate(3, (_) => Completer<void>());
+      final pending =
+          execute(code, args: [startsA, startsB, gatesA, gatesB]) as Future;
+      Future<void> release() async {
+        for (var i = 0; i < 3; i++) {
+          await startsA[i].future;
+          await startsB[i].future;
+          gatesB[i].complete();
+          gatesA[i].complete();
+        }
+      }
+
+      final results = await Future.wait<dynamic>([
+        pending,
+        release(),
+      ], eagerError: true);
+      final result = results.first;
       expect(
         result,
         equals([
@@ -595,7 +615,7 @@ void main() {
       const code = '''
         Stream<Map<String, dynamic>> dataGenerator() async* {
           yield {'id': 1, 'name': 'First'};
-          await Future.delayed(Duration(milliseconds: 1));
+          await Future.value();
           yield {'id': 2, 'name': 'Second'};
           yield {'id': 3, 'name': 'Third'};
         }

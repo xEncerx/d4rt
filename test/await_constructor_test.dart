@@ -79,14 +79,14 @@ void main() {
           DatabaseConnection._(this.connectionString, this.isConnected);
           
           static Future<DatabaseConnection> connect(String host, int port) async {
-            await Future.delayed(Duration(milliseconds: 1)); // Simulate connection
+            await Future.value();
             final connStr = host + ":" + port.toString();
             return DatabaseConnection._(connStr, true);
           }
           
           static Future<DatabaseConnection> connectWithRetry(String host) async {
             // Simulate multiple async operations
-            await Future.delayed(Duration(milliseconds: 1));
+            await Future.value();
             final validated = await validateHost(host);
             final connStr = "validated-" + validated;
             return DatabaseConnection._(connStr, true);
@@ -131,18 +131,18 @@ void main() {
           }
           
           static Future<Map<String, String>> loadBaseConfig() async {
-            await Future.delayed(Duration(milliseconds: 1));
+            await Future.value();
             return {"env": "prod", "version": "1.0"};
           }
           
           static Future<List<String>> loadModules(Map<String, String> config) async {
-            await Future.delayed(Duration(milliseconds: 1));
+            await Future.value();
             return ["auth", "database", "cache"];
           }
           
           static Future<Map<String, String>> processConfig(
               Map<String, String> base, List<String> modules) async {
-            await Future.delayed(Duration(milliseconds: 1));
+            await Future.value();
             final processed = <String, String>{};
             processed["env"] = base["env"];
             processed["version"] = base["version"];
@@ -371,25 +371,18 @@ void main() {
           
           static Future<StreamControllerManager> createWithInitialData() async {
             final controller = StreamController<String>();
-            final List<String> received = [];
-            
-            // Set up listener
-            controller.stream.listen((data) {
-              received.add(data);
-            });
+            final received = controller.stream.toList();
             
             // Add initial data
             controller.add("initial1");
             controller.add("initial2");
             
-            // Wait for processing
-            await Future.delayed(Duration(milliseconds: 10));
             
             // Add more data and close
             controller.add("added1");
             await controller.close();
             
-            return StreamControllerManager._(received);
+            return StreamControllerManager._(await received);
           }
         }
         
@@ -417,14 +410,16 @@ void main() {
             final controller = StreamController<String>();
             final List<String> collected = [];
             bool wasPaused = false;
+            final firstReceived = Completer<void>();
             
             final subscription = controller.stream.listen((data) {
               collected.add(data);
+              if (data == "data1") firstReceived.complete();
             });
             
             // Add some data
             controller.add("data1");
-            await Future.delayed(Duration(milliseconds: 5));
+            await firstReceived.future;
             
             // Pause subscription
             subscription.pause();
@@ -435,11 +430,8 @@ void main() {
             
             // Resume and add more data  
             subscription.resume();
-            await Future.delayed(Duration(milliseconds: 5));
             controller.add("data3");
             
-            await Future.delayed(Duration(milliseconds: 10));
-            await subscription.cancel();
             await controller.close();
             
             return SubscriptionManager._(collected, wasPaused);
@@ -475,7 +467,7 @@ void main() {
           static Future<PeriodicDataCollector> createFromPeriodicStream() async {
             // Create a periodic stream that emits counter values
             final periodicStream = Stream.periodic(
-              Duration(milliseconds: 10), 
+              Duration.zero,
               (count) => count * 2
             );
             
@@ -517,21 +509,16 @@ void main() {
             final controller = StreamController<String>();
             final broadcast = controller.stream.asBroadcastStream();
             
-            final List<String> listener1 = [];
-            final List<String> listener2 = [];
-            
-            // Multiple listeners on broadcast stream
-            broadcast.listen((data) => listener1.add("L1:" + data));
-            broadcast.listen((data) => listener2.add("L2:" + data));
+            final listener1 = broadcast.map((data) => "L1:" + data).toList();
+            final listener2 = broadcast.map((data) => "L2:" + data).toList();
             
             // Add data
             controller.add("broadcast1");
             controller.add("broadcast2");
             
-            await Future.delayed(Duration(milliseconds: 10));
             await controller.close();
             
-            return BroadcastStreamManager._(listener1, listener2, broadcast.isBroadcast);
+            return BroadcastStreamManager._(await listener1, await listener2, broadcast.isBroadcast);
           }
         }
         
@@ -563,14 +550,15 @@ void main() {
           FutureStreamProcessor._(this.results, this.summary);
           
           static Future<FutureStreamProcessor> createFromFutures() async {
-            // Create futures that complete at different times
-            final future1 = Future.delayed(Duration(milliseconds: 10), () => "result1");
-            final future2 = Future.value("result2");
-            final future3 = Future.delayed(Duration(milliseconds: 5), () => "result3");
-            
-            // Create stream from futures
-            final stream = Stream.fromFutures([future1, future2, future3]);
-            final results = await stream.toList();
+            final first = Completer<String>();
+            final second = Completer<String>();
+            final third = Completer<String>();
+            final stream = Stream.fromFutures([first.future, second.future, third.future]);
+            final pending = stream.toList();
+            second.complete("result2");
+            third.complete("result3");
+            first.complete("result1");
+            final results = await pending;
             
             final summary = "Collected " + results.length.toString() + " results";
             return FutureStreamProcessor._(results, summary);
@@ -579,12 +567,18 @@ void main() {
         
         main() async {
           final processor = await FutureStreamProcessor.createFromFutures();
-          return [processor.results.length, processor.summary];
+          return [processor.results, processor.summary];
         }
       ''';
 
       final result = await execute(code);
-      expect(result, equals([3, "Collected 3 results"]));
+      expect(
+        result,
+        equals([
+          ["result2", "result3", "result1"],
+          "Collected 3 results",
+        ]),
+      );
     });
 
     test('Async generator (async*) constructor pattern', () async {
@@ -605,7 +599,7 @@ void main() {
           
           static Stream<String> generateAsyncStream() async* {
             yield "async1";
-            await Future.delayed(Duration(milliseconds: 1));
+            await Future.value();
             yield "async2";
             yield "async3";
           }

@@ -174,7 +174,7 @@ void main() {
           late String processedData = computeData();
           
           String computeData() {
-            return "Processed: \${DateTime.now().millisecondsSinceEpoch}";
+            return "Processed: synthetic";
           }
           
           String getData() {
