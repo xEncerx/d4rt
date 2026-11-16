@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:d4rt/d4rt.dart';
 import 'package:test/test.dart';
 import '../../interpreter_test.dart';
 
@@ -234,6 +237,359 @@ void main() {
         ]),
       );
     });
+
+    test('await-for scopes shadow and reuse existing variables', () async {
+      const code = '''
+        import 'dart:async';
+        Future<List> main() async {
+          var value = 90;
+          final seen = <int>[];
+          await for (var value in Stream<int>.fromIterable([1, 2])) {
+            await Future.value();
+            seen.add(value);
+          }
+          seen.add(value);
+          await for (value in Stream<int>.empty()) { seen.add(value); }
+          await for (value in Stream<int>.fromIterable([3, 4])) {
+            seen.add(value);
+          }
+          seen.add(value);
+          return seen;
+        }
+      ''';
+      expect(await execute(code), [1, 2, 90, 3, 4, 4]);
+    });
+
+    test('nested await-for loops retain their owning lexical scopes', () async {
+      const code = '''
+        import 'dart:async';
+        Future<List> main() async {
+          final seen = <String>[];
+          for (var value in [1, 2]) {
+            await for (var value in Stream<int>.fromIterable([3, 4])) {
+              await Future.value();
+              seen.add('inner:\$value');
+            }
+            seen.add('outer:\$value');
+          }
+          return seen;
+        }
+      ''';
+      expect(await execute(code), [
+        'inner:3',
+        'inner:4',
+        'outer:1',
+        'inner:3',
+        'inner:4',
+        'outer:2',
+      ]);
+    });
+
+    test('nested await-for loops restore each outer variable', () async {
+      const code = '''
+        import 'dart:async';
+        Future<List> main() async {
+          final seen = <int>[];
+          await for (var outer in Stream<int>.fromIterable([1, 2])) {
+            await for (var inner in Stream<int>.fromIterable([3, 4])) {
+              await Future.value();
+              seen.add(outer * 10 + inner);
+            }
+            seen.add(outer);
+          }
+          return seen;
+        }
+      ''';
+      expect(await execute(code), [13, 14, 1, 23, 24, 2]);
+    });
+
+    test('await-for break and continue leave reusable loop state', () async {
+      const code = '''
+        import 'dart:async';
+        Future<List> main() async {
+          final seen = <int>[];
+          for (var round in [1, 2]) {
+            await for (var value in Stream<int>.fromIterable([1, 2, 3])) {
+              await Future.value();
+              if (value == 1) continue;
+              seen.add(round * 10 + value);
+              break;
+            }
+          }
+          return seen;
+        }
+      ''';
+      expect(await execute(code), [12, 22]);
+    });
+
+    test('await-for body error unwinds only the exited loop', () async {
+      const code = '''
+        import 'dart:async';
+        Future<List> main() async {
+          var value = 9;
+          final seen = <int>[];
+          try {
+            await for (var value in Stream<int>.fromIterable([1, 2])) {
+              seen.add(value);
+              if (value == 2) throw 'failure';
+            }
+          } catch (_) {
+            seen.add(value);
+          }
+          await for (var value in Stream<int>.fromIterable([3])) {
+            seen.add(value);
+          }
+          return seen;
+        }
+      ''';
+      expect(await execute(code), [1, 2, 9, 3]);
+    });
+
+    test(
+      'awaited body error preserves only scopes containing the catch',
+      () async {
+        const code = '''
+        import 'dart:async';
+        Future<List> main() async {
+          var value = 9;
+          final seen = <int>[];
+          await for (var value in Stream<int>.fromIterable([1])) {
+            try {
+              await Future.error('inner');
+            } catch (_) {
+              seen.add(value);
+            }
+          }
+          try {
+            await for (var value in Stream<int>.fromIterable([2])) {
+              await Future.error('outer');
+            }
+          } catch (_) {
+            seen.add(value);
+          }
+          return seen;
+        }
+      ''';
+        expect(await execute(code), [1, 9]);
+      },
+    );
+
+    test('awaited error unwinds nested ordinary and await-for loops', () async {
+      const code = '''
+        import 'dart:async';
+        Future<List> main() async {
+          var value = 9;
+          final seen = <int>[];
+          try {
+            await for (var value in Stream<int>.fromIterable([1])) {
+              for (var value = 2; value < 4; value++) {
+                await Future.error('failure');
+              }
+            }
+          } catch (_) {
+            seen.add(value);
+          }
+          for (var value = 4; value < 6; value++) {
+            seen.add(value);
+          }
+          await for (var value in Stream<int>.fromIterable([6])) {
+            seen.add(value);
+          }
+          seen.add(value);
+          return seen;
+        }
+      ''';
+      expect(await execute(code), [9, 4, 5, 6, 9]);
+    });
+
+    test(
+      'return unwinds nested ordinary and await-for loops before finally',
+      () async {
+        const code = '''
+        import 'dart:async';
+        Future<int> work(List<int> seen) async {
+          var value = 9;
+          try {
+            await for (var value in Stream<int>.fromIterable([1])) {
+              for (var value in [2]) {
+                await Future.value();
+                return value;
+              }
+            }
+          } finally {
+            seen.add(value);
+          }
+          return 0;
+        }
+        Future<List> main() async {
+          final seen = <int>[];
+          final result = await work(seen);
+          for (var value in [3, 4]) { seen.add(value); }
+          return [result, seen];
+        }
+      ''';
+        expect(await execute(code), [
+          2,
+          [9, 3, 4],
+        ]);
+      },
+    );
+
+    test('return from await-for restores outer scope in finally', () async {
+      const code = '''
+        import 'dart:async';
+        Future<int> work(List<int> seen) async {
+          var value = 9;
+          try {
+            await for (var value in Stream<int>.fromIterable([1, 2])) {
+              return value;
+            }
+          } finally {
+            seen.add(value);
+          }
+          return 0;
+        }
+        Future<List> main() async {
+          final seen = <int>[];
+          final result = await work(seen);
+          return [result, seen];
+        }
+      ''';
+      expect(await execute(code), [
+        1,
+        [9],
+      ]);
+    });
+
+    test('return unwinds scopes between nested finalizers', () async {
+      const code = '''
+        import 'dart:async';
+        Future<int> work(List<int> seen) async {
+          var value = 9;
+          try {
+            await for (var value in Stream<int>.fromIterable([1])) {
+              try {
+                return value;
+              } finally {
+                seen.add(value);
+              }
+            }
+          } finally {
+            seen.add(value);
+          }
+          return 0;
+        }
+        Future<List> main() async {
+          final seen = <int>[];
+          final result = await work(seen);
+          return [result, seen];
+        }
+      ''';
+      expect(await execute(code), [
+        1,
+        [1, 9],
+      ]);
+    });
+
+    test('awaited errors unwind scopes between nested finalizers', () async {
+      const code = '''
+        import 'dart:async';
+        Future<List> main() async {
+          var value = 9;
+          final seen = <int>[];
+          try {
+            try {
+              await for (var value in Stream<int>.fromIterable([1])) {
+                try {
+                  await Future.error('failure');
+                } finally {
+                  seen.add(value);
+                }
+              }
+            } finally {
+              seen.add(value);
+            }
+          } catch (_) {
+            seen.add(value);
+          }
+          return seen;
+        }
+      ''';
+      expect(await execute(code), [1, 9, 9]);
+    });
+
+    test('cancellation unwinds scopes between nested finalizers', () async {
+      final entered = Completer<void>();
+      final gate = Completer<void>();
+      final seen = <int>[];
+      final interpreter = D4rt()
+        ..registertopLevelFunction('waitGate', (visitor, args, named, types) {
+          entered.complete();
+          return gate.future;
+        })
+        ..registertopLevelFunction('mark', (visitor, args, named, types) {
+          seen.add(args.single as int);
+          return null;
+        });
+      final stream =
+          interpreter.execute(
+                source: '''
+        import 'dart:async';
+        Stream<int> main() async* {
+          var value = 9;
+          try {
+            await for (var value in Stream<int>.fromIterable([1])) {
+              try {
+                await waitGate();
+                yield value;
+              } finally {
+                mark(value);
+              }
+            }
+          } finally {
+            mark(value);
+          }
+        }
+      ''',
+              )
+              as Stream;
+      final subscription = stream.listen((_) {});
+      await entered.future;
+      await subscription.cancel();
+      expect(seen, [1, 9]);
+      gate.complete();
+      await gate.future;
+      await Future<void>.value();
+      expect(seen, [1, 9]);
+    });
+
+    test(
+      'failed await-for conversion releases scope before catch and reuse',
+      () async {
+        const code = '''
+        import 'dart:async';
+        Future<List> main() async {
+          var value = 7;
+          final seen = <int>[];
+          try {
+            await for (var value in Stream<int>.error('failure')) {
+              seen.add(value);
+            }
+          } catch (_) {
+            seen.add(value);
+          } finally {
+            seen.add(value + 1);
+          }
+          await for (var value in Stream<int>.fromIterable([2])) {
+            seen.add(value);
+          }
+          seen.add(value);
+          return seen;
+        }
+      ''';
+        expect(await execute(code), [7, 8, 2, 7]);
+      },
+    );
 
     test('Async* generator yielding complex objects', () async {
       const code = '''

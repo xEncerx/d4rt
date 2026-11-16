@@ -1876,6 +1876,23 @@ class InterpretedFunction implements Callable {
     }
   }
 
+  static Environment _asyncLexicalEnvironment(AsyncExecutionState state) {
+    final catchEnvironment = state.activeCatchEnvironment;
+    if (state.loopEnvironmentStack.isEmpty) {
+      return catchEnvironment ?? state.environment;
+    }
+    final loopEnvironment = state.loopEnvironmentStack.last;
+    if (catchEnvironment == null) return loopEnvironment;
+    for (
+      Environment? scope = loopEnvironment;
+      scope != null;
+      scope = scope.enclosing
+    ) {
+      if (identical(scope, catchEnvironment)) return loopEnvironment;
+    }
+    return catchEnvironment;
+  }
+
   // Main engine of the async state machine
   // Scheduled via Future.microtask to start execution
   static Future<void> _runStateMachine(
@@ -1895,15 +1912,8 @@ class InterpretedFunction implements Callable {
       final previousAsyncState = visitor.currentAsyncState;
       final previousFunction = visitor.currentFunction;
 
-      // Configure the visitor for the current state
-      // Use the top of the loop environment stack if it exists, otherwise the state environment
-      if (currentState.activeCatchEnvironment != null) {
-        visitor.environment = currentState.activeCatchEnvironment!;
-      } else if (currentState.loopEnvironmentStack.isNotEmpty) {
-        visitor.environment = currentState.loopEnvironmentStack.last;
-      } else {
-        visitor.environment = currentState.environment;
-      }
+      // The innermost active catch or loop belongs to this activation.
+      visitor.environment = _asyncLexicalEnvironment(currentState);
       visitor.currentAsyncState = currentState;
       visitor.currentFunction = currentState.function;
 
@@ -2150,27 +2160,17 @@ class InterpretedFunction implements Callable {
                 );
               }
 
-              // Set up the loop variable environment - create a dedicated environment
+              // Every active await-for owns a loop stack entry. An existing
+              // variable uses the enclosing scope; a declaration shadows it.
+              final loopEnvironment = parts is ForEachPartsWithDeclaration
+                  ? Environment(enclosing: visitor.environment)
+                  : visitor.environment;
               if (parts is ForEachPartsWithDeclaration) {
-                final loopVariable = parts.loopVariable;
-                // Create an environment for this await-for loop
-                final parentEnv = currentState.loopEnvironmentStack.isNotEmpty
-                    ? currentState.loopEnvironmentStack.last
-                    : currentState.environment;
-                final awaitForEnv = Environment(enclosing: parentEnv);
-                awaitForEnv.define(loopVariable.name.lexeme, null);
-
-                // Add to the loop environment stack
-                currentState.loopEnvironmentStack.add(awaitForEnv);
-                currentState.loopNodeStack.add(forNode);
-                visitor.environment = awaitForEnv;
-
-                if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-                  Logger.debug(
-                    "[StateMachine] AwaitForIn: Created environment ${identityHashCode(awaitForEnv)} with parent ${identityHashCode(parentEnv)}",
-                  );
-                }
+                loopEnvironment.define(parts.loopVariable.name.lexeme, null);
               }
+              currentState.loopEnvironmentStack.add(loopEnvironment);
+              currentState.loopNodeStack.add(forNode);
+              visitor.environment = loopEnvironment;
 
               // Continue to process the first item
             }
@@ -2190,29 +2190,11 @@ class InterpretedFunction implements Callable {
                   );
                 }
 
-                // Restore the environment for this await-for loop
-                // Find the stack index for this await-for loop
-                final awaitForLoopIndex = currentState.awaitForNodeStack
-                    .indexOf(forNode);
-                if (awaitForLoopIndex >= 0 &&
-                    awaitForLoopIndex <
-                        currentState.loopEnvironmentStack.length) {
-                  visitor.environment =
-                      currentState.loopEnvironmentStack[awaitForLoopIndex];
-                  if (Logger.debugEnabled &&
-                      Logger.minLevel == LogLevel.debug) {
-                    Logger.debug(
-                      "[StateMachine] AwaitForIn: Restored visitor environment to ${identityHashCode(visitor.environment)} (await-for loop index $awaitForLoopIndex)",
-                    );
-                  }
-                } else {
-                  if (Logger.debugEnabled &&
-                      Logger.minLevel == LogLevel.debug) {
-                    Logger.debug(
-                      "[StateMachine] AwaitForIn: Could NOT find environment for await-for loop at index $awaitForLoopIndex!",
-                    );
-                  }
-                }
+                final loopEnvIndex = currentState.loopNodeStack.indexOf(
+                  forNode,
+                );
+                visitor.environment =
+                    currentState.loopEnvironmentStack[loopEnvIndex];
 
                 if (parts is ForEachPartsWithDeclaration) {
                   visitor.environment.assign(
@@ -2265,49 +2247,7 @@ class InterpretedFunction implements Callable {
                   );
                 }
 
-                final stackIdx = currentState.awaitForNodeStack.indexOf(
-                  forNode,
-                );
-                if (stackIdx >= 0) {
-                  currentState.awaitForNodeStack.removeAt(stackIdx);
-                  currentState.awaitForListStack.removeAt(stackIdx);
-                  currentState.awaitForIndexStack.removeAt(stackIdx);
-                  if (Logger.debugEnabled &&
-                      Logger.minLevel == LogLevel.debug) {
-                    Logger.debug(
-                      "[StateMachine] AwaitForIn: Removed loop from stack. Remaining depth: ${currentState.awaitForNodeStack.length}",
-                    );
-                  }
-                }
-
-                // Clean up the loop environment
-                final loopEnvIndex = currentState.loopNodeStack.indexOf(
-                  forNode,
-                );
-                if (loopEnvIndex >= 0 &&
-                    loopEnvIndex < currentState.loopEnvironmentStack.length) {
-                  // Restore the parent environment
-                  final loopEnv =
-                      currentState.loopEnvironmentStack[loopEnvIndex];
-                  visitor.environment =
-                      loopEnv.enclosing ?? currentState.environment;
-
-                  // Remove from stacks
-                  currentState.loopEnvironmentStack.removeAt(loopEnvIndex);
-                  currentState.loopNodeStack.removeAt(loopEnvIndex);
-                  if (Logger.debugEnabled &&
-                      Logger.minLevel == LogLevel.debug) {
-                    Logger.debug(
-                      "[StateMachine] AwaitForIn: Restored parent environment ${identityHashCode(visitor.environment)}",
-                    );
-                  }
-                }
-
-                // Clean up legacy fields if this was the last await-for loop
-                if (currentState.awaitForNodeStack.isEmpty) {
-                  currentState.currentAwaitForList = null;
-                  currentState.currentAwaitForIndex = null;
-                }
+                _removeLoopScope(currentState, forNode);
 
                 currentNode = _findNextSequentialNode(visitor, forNode);
                 currentState.nextStateIdentifier = currentNode;
@@ -2375,6 +2315,9 @@ class InterpretedFunction implements Callable {
                 // Add node and iterator to map/stack immediately
                 currentState.loopNodeStack.add(forNode);
                 currentState.forInIteratorMap[forNode] = iterator;
+                if (parts is ForEachPartsWithIdentifier) {
+                  currentState.loopEnvironmentStack.add(visitor.environment);
+                }
                 if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
                   Logger.debug(
                     "[StateMachine] ForIn: Iterator created and added to stacks at index ${currentState.loopNodeStack.length - 1}",
@@ -2449,14 +2392,12 @@ class InterpretedFunction implements Callable {
                     }
                   }
                 } else if (parts is ForEachPartsWithIdentifier) {
-                  // No declaration, assign in the current environment
-                  currentState.environment.assign(
+                  currentState.loopEnvironmentStack[loopIndex].assign(
                     parts.identifier.name,
                     currentItem,
                   );
-                  // Ensure we don't use a residual loop environment
-                  currentState.forLoopEnvironment = null;
-                  visitor.environment = currentState.environment;
+                  visitor.environment =
+                      currentState.loopEnvironmentStack[loopIndex];
                 } else {
                   throw StateError(
                     "Unknown ForEachParts type: \\${parts.runtimeType}",
@@ -3176,6 +3117,7 @@ class InterpretedFunction implements Callable {
               "[StateMachine] Return caught inside try with finally. Executing finally first.",
             );
           }
+          _unwindLoopScopes(currentState, currentTry);
           currentState.returnAfterFinally = e.value; // Use currentState
           currentState.hasReturnAfterFinally = true;
           currentState.resumeReturnAfterFinallyFrom = currentTry.parent;
@@ -3205,14 +3147,8 @@ class InterpretedFunction implements Callable {
           );
         }
         if (currentState.loopNodeStack.isNotEmpty) {
-          final loopNode = currentState.loopNodeStack.removeLast();
-          // Also remove the corresponding environment and initialized flag
-          if (currentState.loopEnvironmentStack.isNotEmpty) {
-            currentState.loopEnvironmentStack.removeLast();
-          }
-          if (currentState.loopInitializedStack.isNotEmpty) {
-            currentState.loopInitializedStack.removeLast();
-          }
+          final loopNode = currentState.loopNodeStack.last;
+          _removeLoopScope(currentState, loopNode);
           currentNode = _findNextSequentialNode(visitor, loopNode);
           currentState.nextStateIdentifier = currentNode;
           continue; // Continue execution after the loop
@@ -3302,6 +3238,7 @@ class InterpretedFunction implements Callable {
       );
       while (enclosingTry != null) {
         if (enclosingTry.finallyBlock != null) {
+          _unwindLoopScopes(currentState, enclosingTry);
           currentState.resumeReturnAfterFinallyFrom = enclosingTry.parent;
           currentState.nextStateIdentifier =
               enclosingTry.finallyBlock!.statements.firstOrNull;
@@ -3466,6 +3403,7 @@ class InterpretedFunction implements Callable {
       while (enclosingTry != null && enclosingTry.finallyBlock == null) {
         enclosingTry = _findEnclosingTryStatement(enclosingTry.parent);
       }
+      _unwindLoopScopes(state, enclosingTry);
       if (enclosingTry != null) {
         state.generatorCancellationCleanup = true;
         state.returnAfterFinally = null;
@@ -3509,6 +3447,85 @@ class InterpretedFunction implements Callable {
     state.awaitForNodeStack.clear();
   }
 
+  static void _removeLoopScope(AsyncExecutionState state, ForStatement loop) {
+    if (loop.awaitKeyword != null) {
+      final awaitIndex = state.awaitForNodeStack.indexOf(loop);
+      if (awaitIndex >= 0) {
+        state.awaitForNodeStack.removeAt(awaitIndex);
+        state.awaitForListStack.removeAt(awaitIndex);
+        state.awaitForIndexStack.removeAt(awaitIndex);
+      }
+      if (state.awaitForNodeStack.isEmpty) {
+        state.currentAwaitForList = null;
+        state.currentAwaitForIndex = null;
+      }
+    } else if (loop.forLoopParts is ForEachParts) {
+      final iterator = state.forInIteratorMap.remove(loop);
+      if (identical(state.currentForInIterator, iterator)) {
+        state.currentForInIterator = null;
+      }
+    } else if (state.loopInitializedStack.isNotEmpty) {
+      state.loopInitializedStack.removeLast();
+      state.forLoopInitialized = state.loopInitializedStack.isNotEmpty
+          ? state.loopInitializedStack.last
+          : false;
+    }
+    final loopIndex = state.loopNodeStack.indexOf(loop);
+    if (loopIndex >= 0) {
+      final environment = state.loopEnvironmentStack.removeAt(loopIndex);
+      state.loopNodeStack.removeAt(loopIndex);
+      if (identical(state.forLoopEnvironment, environment)) {
+        state.forLoopEnvironment = state.loopEnvironmentStack.isEmpty
+            ? null
+            : state.loopEnvironmentStack.last;
+      }
+    } else if (loop.awaitKeyword != null) {
+      // Conversion failed before the loop environment was established.
+      state.awaitingStreamConversion = false;
+    }
+  }
+
+  static Environment? _unwindLoopScopes(
+    AsyncExecutionState state,
+    AstNode? destination, [
+    Environment? capturedEnvironment,
+  ]) {
+    for (var i = state.loopNodeStack.length - 1; i >= 0; i--) {
+      final loop = state.loopNodeStack[i];
+      AstNode? ancestor = destination;
+      while (ancestor != null && ancestor != loop) {
+        ancestor = ancestor.parent;
+      }
+      if (ancestor != null) continue;
+
+      final loopEnvironment = state.loopEnvironmentStack[i];
+      final parts = loop.forLoopParts;
+      if (parts is! ForEachPartsWithIdentifier) {
+        for (
+          var scope = capturedEnvironment;
+          scope != null;
+          scope = scope.enclosing
+        ) {
+          if (identical(scope, loopEnvironment)) {
+            capturedEnvironment = loopEnvironment.enclosing;
+            break;
+          }
+        }
+      }
+      _removeLoopScope(state, loop);
+    }
+    // A stream conversion may fail before its loop scope is pushed.
+    for (var i = state.awaitForNodeStack.length - 1; i >= 0; i--) {
+      final loop = state.awaitForNodeStack[i];
+      AstNode? ancestor = destination;
+      while (ancestor != null && ancestor != loop) {
+        ancestor = ancestor.parent;
+      }
+      if (ancestor == null) _removeLoopScope(state, loop);
+    }
+    return capturedEnvironment;
+  }
+
   static void _handleAsyncError(
     InterpreterVisitor visitor,
     AsyncExecutionState state,
@@ -3519,7 +3536,7 @@ class InterpretedFunction implements Callable {
     state.hasReturnAfterFinally = false;
     state.resumeReturnAfterFinallyFrom = null;
     Object? error = state.currentError;
-    final errorEnvironment = state.awaitingEnvironment;
+    var errorEnvironment = state.awaitingEnvironment;
     state.awaitingEnvironment = null;
     if (error is InternalInterpreterException) {
       error = error.originalThrownValue;
@@ -3544,6 +3561,7 @@ class InterpretedFunction implements Callable {
       enclosingTry = _findEnclosingTryStatement(enclosingTry?.parent);
       skipCatchClauses = false;
     }
+    errorEnvironment = _unwindLoopScopes(state, enclosingTry, errorEnvironment);
     state.isCurrentlyRethrowing = false;
     if (enclosingTry != null) {
       _clearContinuationsWithin(state, enclosingTry);
@@ -4671,65 +4689,10 @@ class InterpretedFunction implements Callable {
         );
       }
 
-      // If we just finished converting stream to list, set up the list and start iteration
-      if (state.awaitingStreamConversion == true) {
-        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-          Logger.debug(
-            "[_determineNextNodeAfterAwait] Setting up await for list iteration.",
-          );
-        }
-        state.awaitingStreamConversion = false;
-        final List<Object?> items = futureResult as List<Object?>;
-
-        // Update the stack for this await-for loop
-        final stackIndex = state.awaitForNodeStack.indexOf(awaitContextNode);
-        if (stackIndex >= 0) {
-          state.awaitForListStack[stackIndex] = items;
-          state.awaitForIndexStack[stackIndex] = 0;
-          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-            Logger.debug(
-              "[_determineNextNodeAfterAwait] Updated stack index $stackIndex with ${items.length} items",
-            );
-          }
-        }
-
-        // Also update legacy fields for backward compatibility
-        state.currentAwaitForList = items;
-        state.currentAwaitForIndex = 0;
-
-        final parts = awaitContextNode.forLoopParts as ForEachParts;
-        if (parts is ForEachPartsWithDeclaration) {
-          final loopVariable = parts.loopVariable;
-          visitor.environment.define(loopVariable.name.lexeme, null);
-        }
-
-        // Return the ForStatement itself to continue processing
-        return awaitContextNode;
-      } else {
-        // If we're in the middle of await for iteration but got suspended (e.g., body had async operation)
-        // Increment the index in the stack for this specific await-for loop
-        final stackIndex = state.awaitForNodeStack.indexOf(awaitContextNode);
-        if (stackIndex >= 0) {
-          final currentIndex = state.awaitForIndexStack[stackIndex];
-          state.awaitForIndexStack[stackIndex] = currentIndex + 1;
-          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-            Logger.debug(
-              "[_determineNextNodeAfterAwait] Continuing await for iteration at stack level $stackIndex. Moving to index ${describeDebugValue(state.awaitForIndexStack[stackIndex])}",
-            );
-          }
-        } else {
-          // Fallback to legacy approach
-          final currentIndex = state.currentAwaitForIndex ?? 0;
-          state.currentAwaitForIndex = currentIndex + 1;
-          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-            Logger.debug(
-              "[_determineNextNodeAfterAwait] Continuing await for iteration (legacy). Moving to index ${describeDebugValue(state.currentAwaitForIndex)}",
-            );
-          }
-        }
-        // Continue back to the ForStatement to process next item
-        return awaitContextNode;
-      }
+      // Stream conversion is completed by the owning state machine, where
+      // its lexical environment is active. The iteration index was advanced
+      // before entering the body, including when the body later suspends.
+      return awaitContextNode;
     }
 
     Logger.warn(
