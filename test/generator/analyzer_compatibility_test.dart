@@ -4,6 +4,41 @@ import 'package:d4rt/src/generator/transform_pipeline.dart';
 import 'package:test/test.dart';
 
 void main() {
+  for (final modifier in ['sealed', 'abstract']) {
+    test('$modifier classes expose only factory constructors', () {
+      final source =
+          '''
+$modifier class Value {
+  const Value();
+  const Value.named();
+  factory Value.create(int number) => ConcreteValue(number);
+  int get number;
+}
+final class ConcreteValue extends Value {
+  const ConcreteValue(this.number);
+  @override
+  final int number;
+}
+''';
+      const config = GeneratorConfig(
+        inputPaths: [],
+        outputPath: '',
+        includeAbstractClasses: true,
+      );
+      final metadata = MetadataCollector(
+        config: config,
+      ).collectFromSource(source);
+      final result = TransformPipeline(config: config).transform(metadata);
+      final base = result.classes.singleWhere((item) => item.name == 'Value');
+      expect(base.constructors.map((item) => item.name), ['create']);
+      expect(base.getters.map((item) => item.name), ['number']);
+      final concrete = result.classes.singleWhere(
+        (item) => item.name == 'ConcreteValue',
+      );
+      expect(concrete.constructors.map((item) => item.name), ['']);
+    });
+  }
+
   test('collects generic class and enum metadata from source', () {
     const source = '''
 class Marker { const Marker({required this.tag}); final String tag; }

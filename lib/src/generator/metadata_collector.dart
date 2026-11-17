@@ -884,7 +884,7 @@ class _CollectorVisitor extends RecursiveAstVisitor<void> {
     return ClassMetadata(
       name: node.namePart.typeName.lexeme,
       documentation: _extractDocumentation(node.documentationComment),
-      isAbstract: node.abstractKeyword != null,
+      isAbstract: node.abstractKeyword != null || node.sealedKeyword != null,
       typeParameters: _extractTypeParameters(node.namePart.typeParameters),
       superclass: _getTypeName(node.extendsClause?.superclass),
       interfaces:
