@@ -1,5 +1,6 @@
 import 'package:analyzer/dart/ast/ast.dart' show Expression;
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/exceptions.dart' show isProtectedRuntimeError;
 import 'package:d4rt/src/utils/debug_description.dart';
 import 'package:d4rt/src/utils/extensions/string.dart';
 
@@ -787,7 +788,9 @@ class Environment {
     try {
       final bridgedClass = toBridgedClass(value);
       return bridgedClass;
-    } catch (_) {}
+    } catch (error) {
+      if (error is! RuntimeError || isProtectedRuntimeError(error)) rethrow;
+    }
 
     return null; // Type couldn't be determined
   }

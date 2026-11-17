@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:d4rt/d4rt.dart';
 
 /// Package release reported by the command-line interface.
-const String version = '0.5.0';
+const String version = '0.5.1';
 
 enum _Mode { file, eval, repl, introspection, jsonIntrospection, help, version }
 

@@ -1,3 +1,8 @@
+## 0.5.1
+
+### Fixed
+- Preserve native exception types, values, and stack traces through interpreted catches and rethrows.
+
 ## 0.5.0
 
 ### Added

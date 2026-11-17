@@ -745,7 +745,10 @@ class D4rt {
               declaration.accept<Object?>(visitor);
             } catch (e) {
               if (deadline?.expired ?? false) throw deadline!.exception;
-              if (e is ExecutionLimitException) rethrow;
+              if (isProtectedRuntimeError(e) ||
+                  e is InterpreterUnsupportedError) {
+                rethrow;
+              }
               Logger.warn(
                 " [execute] Warning while processing extension '${declaration.name}': $e",
               );
@@ -770,6 +773,9 @@ class D4rt {
       }
     } on InternalInterpreterException catch (e) {
       if (deadline?.expired ?? false) throw deadline!.exception;
+      if (e.origin != ExceptionOrigin.interpreted) {
+        throw RuntimeError('Unexpected error: ${e.originalThrownValue}');
+      }
       if (e.originalThrownValue is RuntimeError) {
         throw e.originalThrownValue as RuntimeError;
       } else {
@@ -852,6 +858,9 @@ class D4rt {
       }
     } on InternalInterpreterException catch (e) {
       if (deadline?.expired ?? false) throw deadline!.exception;
+      if (e.origin != ExceptionOrigin.interpreted) {
+        throw RuntimeError('Unexpected error: ${e.originalThrownValue}');
+      }
       if (e.originalThrownValue is RuntimeError) {
         throw e.originalThrownValue as RuntimeError;
       } else {
@@ -1016,7 +1025,9 @@ class D4rt {
       'type': 'dangerous',
       'operation': 'code evaluation',
     })) {
-      throw RuntimeError('eval() requires DangerousPermission.codeEvaluation.');
+      throw InterpreterPolicyError(
+        'eval() requires DangerousPermission.codeEvaluation.',
+      );
     }
 
     if (_visitor == null || !_hasExecutedOnce) {
@@ -1109,6 +1120,9 @@ class D4rt {
         try {
           result = evalFunc.call(_visitor!, [], {});
         } on InternalInterpreterException catch (e) {
+          if (e.origin == ExceptionOrigin.bridged) {
+            throw RuntimeError('Unexpected error: ${e.originalThrownValue}');
+          }
           if (e.originalThrownValue is RuntimeError) {
             throw e.originalThrownValue as RuntimeError;
           }
@@ -1164,6 +1178,9 @@ class D4rt {
         try {
           evalFunc.call(_visitor!, [], {});
         } on InternalInterpreterException catch (e) {
+          if (e.origin == ExceptionOrigin.bridged) {
+            throw RuntimeError('Unexpected error: ${e.originalThrownValue}');
+          }
           if (e.originalThrownValue is RuntimeError) {
             throw e.originalThrownValue as RuntimeError;
           }
@@ -1461,6 +1478,10 @@ class D4rt {
     } catch (e) {
       if (e is ReturnException) {
         return _bridgeInterpreterValueToNative(e.value);
+      }
+      if (e is InternalInterpreterException &&
+          e.origin != ExceptionOrigin.interpreted) {
+        throw "$error : ${e.originalThrownValue}";
       }
       if (e is InternalInterpreterException && e.originalThrownValue != null) {
         throw e.originalThrownValue!;

@@ -1942,9 +1942,8 @@ void main() {
           try {
             throw "Failure";
           } catch (e, s) {
-            // Simplified check: just ensure s is a String
-            if (s is String) {
-               return e; // Return original error if stack trace is a String
+            if (s is StackTrace) {
+               return e;
             } else {
                return "Invalid stack trace type";
             }

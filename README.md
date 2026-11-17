@@ -36,7 +36,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  d4rt: ^0.5.0
+  d4rt: ^0.5.1
 ```
 
 Then run:
@@ -289,7 +289,7 @@ operations, and custom bridges can expose host authority.
 Inside the REPL:
 ```text
 ==============================================
-  d4rt v0.5.0 - Interactive Dart REPL
+  d4rt v0.5.1 - Interactive Dart REPL
   Type :help for help, :exit or Ctrl+C to quit
 ==============================================
 

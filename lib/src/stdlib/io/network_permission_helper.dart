@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/exceptions.dart' show InterpreterPolicyError;
 
 final _proxyEndpoint = RegExp(
   r'^PROXY\s+(\[[^\]]+\]|[^\s:/;@\[\]?#\\]+):([0-9]+)$',
@@ -29,7 +30,7 @@ void checkNetworkPermission(
       false) {
     return;
   }
-  throw RuntimeError(
+  throw InterpreterPolicyError(
     'Network permission denied for $operation '
     '${address ?? "network information"}${port == null ? "" : ":$port"}. '
     'Grant an appropriate NetworkPermission.',

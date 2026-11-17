@@ -1,5 +1,6 @@
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:d4rt/src/environment.dart';
+import 'package:d4rt/src/bridge/bridged_types.dart';
 import 'package:d4rt/src/exceptions.dart';
 import 'package:d4rt/src/runtime_types.dart';
 import 'package:d4rt/src/utils/logger/logger.dart';
@@ -67,6 +68,7 @@ bool catchClauseMatches(
     }
   }
 
+  late final Object? targetType;
   try {
     late final Environment lookupEnvironment;
     if (importPrefix == null) {
@@ -78,11 +80,9 @@ bool catchClauseMatches(
       }
       lookupEnvironment = prefixedEnvironment;
     }
-    final targetType = lookupEnvironment.get(typeName);
-    return targetType is InterpretedClass &&
-        thrownValue is InterpretedInstance &&
-        thrownValue.klass.isSubtypeOf(targetType);
+    targetType = lookupEnvironment.get(typeName);
   } on RuntimeError catch (error) {
+    if (isProtectedRuntimeError(error)) rethrow;
     Logger.warn(
       "[CatchClauseMatcher] Error resolving catch clause type "
       "'${importPrefix == null ? typeName : '$importPrefix.$typeName'}': "
@@ -90,4 +90,13 @@ bool catchClauseMatches(
     );
     return false;
   }
+  if (targetType is BridgedClass && thrownValue != null) {
+    final value = thrownValue is BridgedInstance
+        ? thrownValue.nativeObject
+        : thrownValue;
+    return targetType.isSubtypeOf(null, value: value);
+  }
+  return targetType is InterpretedClass &&
+      thrownValue is InterpretedInstance &&
+      thrownValue.klass.isSubtypeOf(targetType);
 }

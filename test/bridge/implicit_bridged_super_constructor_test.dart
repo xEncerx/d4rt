@@ -249,7 +249,9 @@ main() {
       for (final observed in errors) {
         expect(observed, same(error));
       }
-      expect(stacks, List.filled(3, stack.toString()));
+      for (final observed in stacks) {
+        expect(observed, same(stack));
+      }
     });
 
     test(
@@ -800,10 +802,37 @@ main() => Child.redirect().values;
     testImplicitFailure(
       'native adapter exception becomes a descriptive RuntimeError boundary',
       constructorOutcome: () => throw StateError('adapter native failure'),
-      expectedMessage:
-          "Native error during bridged super constructor '': Bad state: adapter native failure",
+      expectedMessage: 'adapter native failure',
       expectedConstructorCalls: 1,
     );
+
+    test('explicit and implicit super retain terminal failure identity', () {
+      for (final terminal in [
+        ExecutionLimitException('limit', maxSteps: 17),
+        ExecutionTimeoutException(
+          'deadline',
+          timeout: const Duration(seconds: 1),
+        ),
+      ]) {
+        for (final constructor in ['Child();', 'Child() : super();']) {
+          final interpreter = D4rt();
+          _BridgeHarness(
+            constructorOutcome: () => throw terminal,
+          ).register(interpreter);
+          expect(
+            () => interpreter.execute(
+              source:
+                  '''
+              import 'package:test/implicit_bridged_super.dart';
+              class Child extends BridgedBase { $constructor }
+              main() { try { Child(); } catch (_) { return false; } }
+            ''',
+            ),
+            throwsA(same(terminal)),
+          );
+        }
+      }
+    });
 
     test(
       'explicit super rejects null adapter output before constructor body',

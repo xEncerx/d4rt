@@ -14,6 +14,16 @@ class RuntimeError implements Exception {
   String toString() => 'Runtime Error: $message';
 }
 
+/// A denied interpreter capability must not be handled by guest code.
+class InterpreterPolicyError extends RuntimeError {
+  InterpreterPolicyError(super.message);
+}
+
+bool isProtectedRuntimeError(Object error) =>
+    error is InterpreterPolicyError ||
+    error is ExecutionLimitException ||
+    error is ExecutionTimeoutException;
+
 /// Internal exception used to unwind the stack during a 'return' statement.
 ///
 /// This exception is used internally by the interpreter to implement
@@ -72,6 +82,13 @@ class SourceCodeException implements Exception {
   String toString() => 'SourceCodeException: $message';
 }
 
+/// Interpreter implementation limitation, not a user-thrown native failure.
+class InterpreterUnsupportedError extends UnimplementedError {
+  InterpreterUnsupportedError(super.message);
+}
+
+enum ExceptionOrigin { interpreted, bridged, raw }
+
 /// Internal exception wrapper for user-thrown exceptions.
 ///
 /// This helps distinguish between user 'throw x' exceptions and internal
@@ -80,11 +97,17 @@ class SourceCodeException implements Exception {
 class InternalInterpreterException implements Exception {
   /// The original value that was thrown by user code.
   final Object? originalThrownValue;
-  // StackTrace could be stored here if needed directly,
-  // but catch in visitTryStatement already gets it.
 
-  /// Creates a new internal interpreter exception wrapping the original thrown value.
-  InternalInterpreterException(this.originalThrownValue);
+  /// Originating stack retained while the exception crosses interpreter frames.
+  StackTrace? stackTrace;
+
+  final ExceptionOrigin origin;
+
+  InternalInterpreterException(
+    this.originalThrownValue, [
+    this.stackTrace,
+    this.origin = ExceptionOrigin.interpreted,
+  ]);
 
   @override
   String toString() {

@@ -5,7 +5,16 @@ import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/callable.dart'
+    show
+        invokeBridgedMethod,
+        invokeBridgedAdapter,
+        invokeBridgedFunction,
+        invokeBridgedGetter,
+        invokeBridgedSetter;
 import 'package:d4rt/src/catch_clause_matcher.dart';
+import 'package:d4rt/src/exceptions.dart'
+    show ExceptionOrigin, InterpreterUnsupportedError, isProtectedRuntimeError;
 import 'package:d4rt/src/invocation_deadline.dart';
 import 'package:d4rt/src/invocation_steps.dart';
 import 'package:d4rt/src/module_loader.dart';
@@ -213,6 +222,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   static bool isInterpretedCollection(Object value) =>
       (value is List || value is Map || value is Set) &&
       isInterpreterOwnedCollection(value);
+  static bool _mustPropagateInvocationFailure(Object error) =>
+      error is! RuntimeError || isProtectedRuntimeError(error);
   Environment environment;
   final Environment globalEnvironment;
   final ModuleLoader moduleLoader; // Field for ModuleLoader
@@ -480,7 +491,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       } else {
         try {
           bridge = globalEnvironment.toBridgedClass(value);
-        } on RuntimeError {
+        } on RuntimeError catch (error) {
+          if (isProtectedRuntimeError(error)) rethrow;
           // Unregistered native values retain ordinary Object fallback.
         }
       }
@@ -491,21 +503,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     if (propertyName == 'hashCode') {
       // For InterpretedInstance, check if there's a custom hashCode getter
       if (value is InterpretedInstance) {
-        try {
-          final getter = value.klass.getters[propertyName];
-          if (getter != null) {
-            // Call the custom getter
-            try {
-              return getter.bind(value).call(this, [], {});
-            } on ReturnException catch (e) {
-              return e.value;
-            }
-          }
-        } catch (e) {
-          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-            Logger.debug(
-              '[_tryGetUniversalObjectProperty] Error checking custom hashCode getter: ${describeDebugValue(e)}',
-            );
+        final getter = value.klass.getters[propertyName];
+        if (getter != null) {
+          // Call the custom getter
+          try {
+            return getter.bind(value).call(this, [], {});
+          } on ReturnException catch (e) {
+            return e.value;
           }
         }
       }
@@ -519,21 +523,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     } else if (propertyName == 'runtimeType') {
       // For InterpretedInstance, check if there's a custom runtimeType getter
       if (value is InterpretedInstance) {
-        try {
-          final getter = value.klass.getters[propertyName];
-          if (getter != null) {
-            // Call the custom getter
-            try {
-              return getter.bind(value).call(this, [], {});
-            } on ReturnException catch (e) {
-              return e.value;
-            }
-          }
-        } catch (e) {
-          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-            Logger.debug(
-              '[_tryGetUniversalObjectProperty] Error checking custom runtimeType getter: ${describeDebugValue(e)}',
-            );
+        final getter = value.klass.getters[propertyName];
+        if (getter != null) {
+          // Call the custom getter
+          try {
+            return getter.bind(value).call(this, [], {});
+          } on ReturnException catch (e) {
+            return e.value;
           }
         }
 
@@ -568,31 +564,18 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     // For InterpretedInstance, try to call its toString() method
     if (value is InterpretedInstance) {
+      Object? toStringMethod;
       try {
-        final toStringMethod = value.get('toString');
-        if (toStringMethod is InterpretedFunction) {
-          try {
-            final result = toStringMethod.bind(value).call(this, [], {});
-            if (result is String) {
-              return result;
-            }
-          } on ReturnException catch (e) {
-            if (e.value is String) {
-              return e.value as String;
-            }
-          } catch (e) {
-            if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-              Logger.debug(
-                '[valueToString] Error calling toString(): ${describeDebugValue(e)}',
-              );
-            }
-          }
-        }
-      } catch (e) {
-        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-          Logger.debug(
-            '[valueToString] Error getting toString() method: ${describeDebugValue(e)}',
-          );
+        toStringMethod = value.get('toString');
+      } on RuntimeError catch (error) {
+        if (_mustPropagateInvocationFailure(error)) rethrow;
+      }
+      if (toStringMethod is InterpretedFunction) {
+        try {
+          final result = toStringMethod.bind(value).call(this, [], {});
+          if (result is String) return result;
+        } on ReturnException catch (error) {
+          if (error.value is String) return error.value as String;
         }
       }
     }
@@ -726,6 +709,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       // Convert pattern match failures to standard RuntimeError for now
       throw RuntimeError("Pattern match failed: ${e.message}");
     } catch (e, s) {
+      if (_mustPropagateInvocationFailure(e)) rethrow;
       // Add stack trace capture
       Logger.error(
         "during pattern binding: $e\nStack trace:\n$s",
@@ -863,7 +847,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
       return buffer.toString();
     }
-    throw UnimplementedError(
+    throw InterpreterUnsupportedError(
       'Type de StringLiteral non géré: ${node.runtimeType}',
     );
   }
@@ -925,6 +909,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             return e.value;
           } catch (e) {
+            if (_mustPropagateInvocationFailure(e)) rethrow;
             throw RuntimeError("Error executing getter '$name': $e");
           }
         } else {
@@ -947,6 +932,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         } on ReturnException catch (e) {
           return e.value;
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           throw RuntimeError("Error executing getter '$name': $e");
         }
       }
@@ -960,6 +946,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
       return value;
     } on RuntimeError catch (getErr) {
+      if (_mustPropagateInvocationFailure(getErr)) rethrow;
       // Ignore get() error for now, try 'this' then
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
         Logger.debug(
@@ -1008,16 +995,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
 
         // Check static fields
-        try {
-          final staticField = ownerClass.getStaticField(name);
-          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-            Logger.debug(
-              "[visitSimpleIdentifier] Found static field '$name' in current class '${describeDebugValue(ownerClass)}'.",
-            );
-          }
-          return staticField;
-        } on RuntimeError {
-          // Static field not found, continue to final error
+        if (ownerClass.staticFields.containsKey(name)) {
+          return ownerClass.getStaticField(name);
         }
       }
 
@@ -1140,6 +1119,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             }
           }
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
             Logger.debug(
               "[visitSimpleIdentifier] Extension lookup failed: ${describeDebugValue(e)}",
@@ -1189,6 +1169,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         "Undefined variable: $name (this exists as native type ${thisInstance?.runtimeType}",
       );
     } on RuntimeError catch (thisErr) {
+      if (_mustPropagateInvocationFailure(thisErr)) rethrow;
       // 'this' not found OR instance.get() failed
       // If get() failed with a specific error, propagate it if it is NOT "Undefined property".
       if (thisErr.message.contains("Undefined property '$name'")) {
@@ -1224,6 +1205,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 } on ReturnException catch (e) {
                   return e.value;
                 } catch (e) {
+                  if (_mustPropagateInvocationFailure(e)) rethrow;
                   throw RuntimeError(
                     "Error executing extension getter '$name' via implicit 'this': $e",
                   );
@@ -1251,6 +1233,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               );
             }
           } on RuntimeError catch (findError) {
+            if (_mustPropagateInvocationFailure(findError)) rethrow;
             // Error during extension lookup itself
             if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
               Logger.debug(
@@ -1267,33 +1250,34 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 "[SimpleIdentifier] No extension found for '$name'. Trying noSuchMethod...",
               );
             }
+            Object? noSuchMethodCallable;
             try {
-              final noSuchMethodCallable = thisInstance.get('noSuchMethod');
-              if (noSuchMethodCallable is InterpretedFunction) {
-                // Create an Invocation object for noSuchMethod as a getter
-                final invocation = _createInvocationInstance(
-                  Symbol(name),
-                  [],
-                  {},
-                  isMethod: false,
-                  isGetter: true,
-                );
+              noSuchMethodCallable = thisInstance.get('noSuchMethod');
+            } on RuntimeError catch (error) {
+              if (_mustPropagateInvocationFailure(error)) rethrow;
+            }
+            if (noSuchMethodCallable is InterpretedFunction) {
+              // Create an Invocation object for noSuchMethod as a getter
+              final invocation = _createInvocationInstance(
+                Symbol(name),
+                [],
+                {},
+                isMethod: false,
+                isGetter: true,
+              );
 
-                if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-                  Logger.debug(
-                    "[SimpleIdentifier] Calling noSuchMethod for '$name'",
-                  );
-                }
-                try {
-                  return noSuchMethodCallable.bind(thisInstance).call(this, [
-                    invocation,
-                  ], {});
-                } on ReturnException catch (returnExc) {
-                  return returnExc.value;
-                }
+              if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+                Logger.debug(
+                  "[SimpleIdentifier] Calling noSuchMethod for '$name'",
+                );
               }
-            } on RuntimeError {
-              // noSuchMethod not found, continue to throw the original error
+              try {
+                return noSuchMethodCallable.bind(thisInstance).call(this, [
+                  invocation,
+                ], {});
+              } on ReturnException catch (returnExc) {
+                return returnExc.value;
+              }
             }
           }
         }
@@ -1338,16 +1322,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
 
         // Check static fields
-        try {
-          final staticField = enclosingClass.getStaticField(name);
-          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-            Logger.debug(
-              "[visitSimpleIdentifier] Found static field '$name' in enclosing class '${describeDebugValue(enclosingClass)}' (final attempt).",
-            );
-          }
-          return staticField;
-        } on RuntimeError {
-          // Static field not found, continue to final error
+        if (enclosingClass.staticFields.containsKey(name)) {
+          return enclosingClass.getStaticField(name);
         }
       }
 
@@ -1464,6 +1440,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
         return member; // Return the value/function directly
       } on RuntimeError catch (e) {
+        if (_mustPropagateInvocationFailure(e)) rethrow;
         throw RuntimeError(
           "Erreur lors de la récupération du membre '$memberName' de l'import préfixé '${node.prefix.toSource()}': ${e.message}",
         );
@@ -1486,9 +1463,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         return _ClassConstructorReference(prefixValue, memberName);
       }
       // Static access
-      try {
+      if (prefixValue.staticFields.containsKey(memberName)) {
         return prefixValue.getStaticField(memberName);
-      } on RuntimeError catch (_) {
+      } else {
         InterpretedFunction? staticMember = prefixValue.findStaticGetter(
           memberName,
         );
@@ -1578,6 +1555,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return member;
         }
       } on RuntimeError catch (e) {
+        if (_mustPropagateInvocationFailure(e)) rethrow;
         if (e.message.contains("Undefined property '$memberName'")) {
           final extensionMember = environment.findExtensionMember(
             prefixValue,
@@ -1594,31 +1572,32 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
 
           // Try noSuchMethod as a fallback before giving up
+          Object? noSuchMethodCallable;
           try {
-            final noSuchMethodCallable = prefixValue.get('noSuchMethod');
-            if (noSuchMethodCallable is InterpretedFunction) {
-              final invocation = _createInvocationInstance(
-                Symbol(memberName),
-                [],
-                {},
-                isMethod: false,
-                isGetter: true,
+            noSuchMethodCallable = prefixValue.get('noSuchMethod');
+          } on RuntimeError catch (error) {
+            if (_mustPropagateInvocationFailure(error)) rethrow;
+          }
+          if (noSuchMethodCallable is InterpretedFunction) {
+            final invocation = _createInvocationInstance(
+              Symbol(memberName),
+              [],
+              {},
+              isMethod: false,
+              isGetter: true,
+            );
+            if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+              Logger.debug(
+                "[PrefixedIdentifier] Calling noSuchMethod for '$memberName' on ${describeDebugValue(prefixValue)}",
               );
-              if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-                Logger.debug(
-                  "[PrefixedIdentifier] Calling noSuchMethod for '$memberName' on ${describeDebugValue(prefixValue)}",
-                );
-              }
-              try {
-                return noSuchMethodCallable.bind(prefixValue).call(this, [
-                  invocation,
-                ], {});
-              } on ReturnException catch (returnExc) {
-                return returnExc.value;
-              }
             }
-          } on RuntimeError {
-            // noSuchMethod not found, continue to throw the original error
+            try {
+              return noSuchMethodCallable.bind(prefixValue).call(this, [
+                invocation,
+              ], {});
+            } on ReturnException catch (returnExc) {
+              return returnExc.value;
+            }
           }
         }
         throw RuntimeError(
@@ -1695,6 +1674,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
         }
       } on RuntimeError catch (findError) {
+        if (_mustPropagateInvocationFailure(findError)) rethrow;
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
             "[PrefixedIdentifier] Error finding extension '$memberName' for ${describeDebugValue(bridgedInstance)}: ${findError.message}",
@@ -1749,23 +1729,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           "[PrefixedIdentifier] Accessing property '$memberName' on BridgedEnumValue (within InterpretedEnumValue block): ${describeDebugValue(bridgedEnumValue)}",
         );
       }
-      try {
-        // Use the get() method of BridgedEnumValue
-        return bridgedEnumValue.get(memberName, this);
-      } on ReturnException catch (e) {
-        return e.value;
-      } on RuntimeError {
-        // Relaunch the RuntimeErrors directly
-        rethrow;
-      } catch (e, s) {
-        // Catch other potential errors (ex: from the adapter)
-        Logger.error(
-          "[PrefixedIdentifier] Native exception during bridged enum property get '$bridgedEnumValue.$memberName': $e\n$s",
-        );
-        throw RuntimeError(
-          "Native error during bridged enum property get '$memberName' on $bridgedEnumValue: $e",
-        );
-      }
+      return bridgedEnumValue.get(memberName, this);
     } else if (prefixValue is InterpretedExtensionTypeInstance) {
       // Accessing member on extension type instance
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
@@ -1822,6 +1786,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           );
         }
       } on RuntimeError catch (findError) {
+        if (_mustPropagateInvocationFailure(findError)) rethrow;
         // If findExtensionMember itself threw (e.g., type not found), proceed to Stdlib
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
@@ -2004,6 +1969,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         } on ReturnException catch (e) {
           return e.value;
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           throw RuntimeError(
             "Error executing class operator '$operatorName': $e",
           );
@@ -2028,6 +1994,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         } on ReturnException catch (e) {
           return e.value;
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           throw RuntimeError(
             "Error executing extension type operator '$operatorName': $e",
           );
@@ -2051,18 +2018,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             "[BinaryExpression] Found bridged class operator '$operatorName' on ${describeDebugValue(bridgedInstance)}. Calling...",
           );
         }
-        try {
-          final actualRight = rightOperandValue is BridgedInstance
-              ? rightOperandValue.nativeObject
-              : rightOperandValue;
-          return method(this, bridgedInstance.nativeObject, [actualRight], {});
-        } on ReturnException catch (e) {
-          return e.value;
-        } catch (e) {
-          throw RuntimeError(
-            "Error executing bridged operator '$operatorName': $e",
-          );
-        }
+        final actualRight = rightOperandValue is BridgedInstance
+            ? rightOperandValue.nativeObject
+            : rightOperandValue;
+        return invokeBridgedAdapter(
+          this,
+          bridgedInstance.nativeObject,
+          method,
+          [actualRight],
+          {},
+        );
       }
     }
 
@@ -2102,6 +2067,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             return e.value;
           } catch (e) {
+            if (_mustPropagateInvocationFailure(e)) rethrow;
             throw RuntimeError(
               "Error executing extension operator '$operatorName': $e",
             );
@@ -2114,6 +2080,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           );
         }
       } on RuntimeError catch (findError) {
+        if (_mustPropagateInvocationFailure(findError)) rethrow;
         // findExtensionMember throws if no member is found at all.
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
@@ -2234,6 +2201,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             return e.value; // Should not happen for operators, but handle
           } catch (e) {
+            if (_mustPropagateInvocationFailure(e)) rethrow;
             throw RuntimeError(
               "Error executing extension operator '$operatorName': $e",
             );
@@ -2245,6 +2213,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           );
         }
       } on RuntimeError catch (findError) {
+        if (_mustPropagateInvocationFailure(findError)) rethrow;
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
             "[BinaryExpression] No extension member '$operatorName' found (late check) for type ${describeDebugValueType(leftOperandValue)}. Error: ${findError.message}",
@@ -2353,6 +2322,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         } on ReturnException catch (e) {
           return e.value;
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           throw RuntimeError(
             "Error executing extension type operator '[]': $e",
           );
@@ -2372,6 +2342,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         } on ReturnException catch (e) {
           return e.value;
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           throw RuntimeError("Error executing class operator '[]': $e");
         }
       }
@@ -2392,18 +2363,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             "[visitIndexExpression] Found bridged operator '$operatorName' for ${describeDebugValue(bridgedClass)}. Calling adapter...",
           );
         }
-        try {
-          return methodAdapter(this, bridgedInstance.nativeObject, [
-            indexValue,
-          ], {});
-        } catch (e, s) {
-          Logger.error(
-            "[visitIndexExpression] Native exception during bridged operator '$operatorName' on ${bridgedClass.name}: $e\\n$s",
-          );
-          throw RuntimeError(
-            "Native error during bridged operator '$operatorName' on ${bridgedClass.name}: $e",
-          );
-        }
+        return invokeBridgedAdapter(
+          this,
+          bridgedInstance.nativeObject,
+          methodAdapter,
+          [indexValue],
+          {},
+        );
       }
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
         Logger.debug(
@@ -2433,6 +2399,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         } on ReturnException catch (e) {
           return e.value;
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           throw RuntimeError("Error executing extension operator '[]': $e");
         }
       }
@@ -2442,6 +2409,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         );
       }
     } on RuntimeError catch (findError) {
+      if (_mustPropagateInvocationFailure(findError)) rethrow;
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
         Logger.debug(
           "[IndexExpression] No extension member '[]' found for type ${describeDebugValueType(targetValue)}. Error: ${findError.message}",
@@ -2605,6 +2573,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               } on ReturnException catch (e) {
                 return e.value;
               } catch (e) {
+                if (_mustPropagateInvocationFailure(e)) rethrow;
                 throw RuntimeError(
                   "Error executing setter '$variableName': $e",
                 );
@@ -2623,6 +2592,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 } on ReturnException catch (e) {
                   return e.value;
                 } catch (e) {
+                  if (_mustPropagateInvocationFailure(e)) rethrow;
                   throw RuntimeError(
                     "Error in compound assignment to '$variableName': $e",
                   );
@@ -2653,6 +2623,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError("Error executing setter '$variableName': $e");
             }
           } else {
@@ -2736,6 +2707,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                     }
                     return rhsValue; // Simple assignment returns RHS
                   } catch (e) {
+                    if (_mustPropagateInvocationFailure(e)) rethrow;
                     throw RuntimeError(
                       "Error executing extension setter '$variableName' via implicit 'this': $e",
                     );
@@ -2761,6 +2733,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                     }
                     return rhsValue; // Assignment expression returns RHS value
                   } on RuntimeError catch (fieldSetError) {
+                    if (_mustPropagateInvocationFailure(fieldSetError)) rethrow;
                     if (Logger.debugEnabled &&
                         Logger.minLevel == LogLevel.debug) {
                       Logger.debug(
@@ -2844,6 +2817,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             );
           }
         } on RuntimeError catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           // If 'this' doesn't exist or getting/setting on 'this' failed
           // Use the original error if it came from get/set, otherwise standard undefined.
           if (e.message.contains("Undefined property '$variableName'") ||
@@ -2925,6 +2899,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on NoSuchMethodError {
               rethrow;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Setter for '$propertyName' not found in superclass chain of '${instance.klass.name}' for 'super' assignment: $e",
               );
@@ -2957,6 +2932,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on NoSuchMethodError {
               rethrow;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Cannot set '$propertyName' in superclass chain of '${instance.klass.name}' for compound 'super' assignment: $e",
               );
@@ -3000,6 +2976,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               extensionSetter.call(this, extensionPositionalArgs, {});
               return rhsValue;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Error executing extension setter '$propertyName': $e",
               );
@@ -3125,18 +3102,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         if (operatorType == TokenType.EQ) {
           // Simple assignment
           if (setterAdapter != null) {
-            try {
-              // Call the setter adapter with the native object and the new value
-              setterAdapter(this, nativeSuperObject, rhsValue);
-              return rhsValue; // Assignment returns the right value
-            } catch (e, s) {
-              Logger.error(
-                "Native exception during super assignment to bridged setter '${bridgedSuper.name}.$propertyName': $e\\n$s",
-              );
-              throw RuntimeError(
-                "Native error during super assignment to bridged setter '$propertyName': $e",
-              );
-            }
+            invokeBridgedSetter(
+              this,
+              nativeSuperObject,
+              setterAdapter,
+              rhsValue,
+            );
+            return rhsValue;
           } else {
             // No setter found
             throw RuntimeError(
@@ -3152,26 +3124,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             );
           }
 
-          try {
-            // Compute new value
-            final newValue = computeCompoundValue(
-              preparedCurrentValue,
-              rhsValue,
-              operatorType,
-            );
-
-            // Set new value
-            setterAdapter(this, nativeSuperObject, newValue);
-
-            return newValue;
-          } catch (e, s) {
-            Logger.error(
-              "Native exception during compound super assignment to bridged property '${bridgedSuper.name}.$propertyName': $e\\n$s",
-            );
-            throw RuntimeError(
-              "Native error during compound super assignment to bridged property '$propertyName': $e",
-            );
-          }
+          final newValue = computeCompoundValue(
+            preparedCurrentValue,
+            rhsValue,
+            operatorType,
+          );
+          invokeBridgedSetter(this, nativeSuperObject, setterAdapter, newValue);
+          return newValue;
         }
       } else if (targetValue is BridgedClass) {
         // Static assignment on bridged class via PropertyAccess
@@ -3266,6 +3225,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               extensionSetter.call(this, extensionPositionalArgs, {});
               return rhsValue;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Error executing extension setter '$propertyName': $e",
               );
@@ -3516,6 +3476,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (_) {
               return finalValueToAssign; // []= should not return a value, but assignment expression returns assigned value
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError("Error executing class operator '[]=': $e");
             }
           } else {
@@ -3545,6 +3506,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                   // '[]=' operator should not return a meaningful value, but the assignment expression returns the assigned value
                   return finalValueToAssign;
                 } catch (e) {
+                  if (_mustPropagateInvocationFailure(e)) rethrow;
                   throw RuntimeError(
                     "Error executing extension operator '[]=': $e",
                   );
@@ -3555,6 +3517,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 );
               }
             } on RuntimeError catch (findError) {
+              if (_mustPropagateInvocationFailure(findError)) rethrow;
               throw RuntimeError(
                 'Cannot assign to index on ${targetValue.klass.name}: ${findError.message}',
               );
@@ -3580,6 +3543,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (_) {
               return finalValueToAssign; // []= should not return a value, but assignment expression returns assigned value
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Error executing extension type operator '[]=': $e",
               );
@@ -3605,20 +3569,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 "[visitAssignmentExpression-Index] Found bridged operator '$operatorName' for ${describeDebugValue(bridgedClass)}. Calling adapter...",
               );
             }
-            try {
-              methodAdapter(this, bridgedInstance.nativeObject, [
-                indexValue,
-                finalValueToAssign,
-              ], {});
-              return finalValueToAssign;
-            } catch (e, s) {
-              Logger.error(
-                "[visitAssignmentExpression-Index] Native exception during bridged operator '$operatorName' on ${bridgedClass.name}: $e\\n$s",
-              );
-              throw RuntimeError(
-                "Native error during bridged operator '$operatorName' on ${bridgedClass.name}: $e",
-              );
-            }
+            invokeBridgedAdapter(
+              this,
+              bridgedInstance.nativeObject,
+              methodAdapter,
+              [indexValue, finalValueToAssign],
+              {},
+            );
+            return finalValueToAssign;
           }
           throw RuntimeError(
             "[Bridged operator '$operatorName' not found directly for ${bridgedClass.name}. Trying extensions.",
@@ -3649,6 +3607,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 // '[]=' operator should not return a meaningful value, but the assignment expression returns the assigned value
                 return finalValueToAssign;
               } catch (e) {
+                if (_mustPropagateInvocationFailure(e)) rethrow;
                 throw RuntimeError(
                   "Error executing extension operator '[]=': $e",
                 );
@@ -3660,6 +3619,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               );
             }
           } on RuntimeError catch (findError) {
+            if (_mustPropagateInvocationFailure(findError)) rethrow;
             if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
               Logger.debug(
                 "[Assignment] No extension member '[]=' found for type ${describeDebugValueType(targetValue)}. Error: ${findError.message}",
@@ -3674,7 +3634,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           );
         }
       } else {
-        throw UnimplementedError(
+        throw InterpreterUnsupportedError(
           'Assignation à une cible non gérée: ${lhs.runtimeType}',
         );
       }
@@ -3736,6 +3696,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           // but a function retrieved from this environment.
           // Functions obtained in this way are already "autonomous" or correctly bound if they come from classes.
         } on RuntimeError catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           throw RuntimeError(
             "Method '$methodName' not found in imported module '${node.target!.toSource()}'. Error: ${e.message}",
           );
@@ -3753,6 +3714,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             );
           }
         } on RuntimeError catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           if (e.message.contains("Undefined property '$methodName'")) {
             if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
               Logger.debug(
@@ -3813,6 +3775,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 } on ReturnException catch (returnExc) {
                   return returnExc.value;
                 } catch (execError) {
+                  if (_mustPropagateInvocationFailure(execError)) rethrow;
                   throw RuntimeError(
                     "Error executing extension method '$methodName': $execError",
                   );
@@ -3869,6 +3832,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                     }
                   }
                 } on RuntimeError catch (e) {
+                  if (_mustPropagateInvocationFailure(e)) rethrow;
                   if (!e.message.contains(
                     "Undefined property 'noSuchMethod'",
                   )) {
@@ -3889,6 +3853,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 );
               }
             } on RuntimeError catch (findError) {
+              if (_mustPropagateInvocationFailure(findError)) rethrow;
               // Error during the findExtensionMember call itself
               if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
                 Logger.debug(
@@ -3916,6 +3881,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             );
           }
         } on RuntimeError catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           // Try Extension Method if Direct Fails (similar to InterpretedInstance)
           if (e.message.contains("Undefined property '$methodName'")) {
             if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
@@ -3963,6 +3929,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 } on ReturnException catch (returnExc) {
                   return returnExc.value;
                 } catch (execError) {
+                  if (_mustPropagateInvocationFailure(execError)) rethrow;
                   throw RuntimeError(
                     "Error executing extension method '$methodName' on enum value: $execError",
                   );
@@ -3983,6 +3950,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
                 );
               }
             } on RuntimeError catch (findError) {
+              if (_mustPropagateInvocationFailure(findError)) rethrow;
               if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
                 Logger.debug(
                   "[MethodInvocation] Error during extension lookup for '$methodName' on enum value: ${findError.message}. Rethrowing original error.",
@@ -4007,6 +3975,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             );
           }
         } on RuntimeError catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           if (e.message.contains("Undefined property '$methodName'")) {
             if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
               Logger.debug(
@@ -4026,13 +3995,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         true,
       )) {
         final bridgedClass = bridgedInstance.bridgedClass;
-        switch (methodName) {
-          case 'toString':
-            return targetValue.toString();
-          default:
-        }
         // Use directly methods because we need the BridgedMethodCallable
         final adapter = bridgedClass.methods[methodName];
+        if (adapter == null && methodName == 'toString') {
+          return bridgedInstance.nativeObject.toString();
+        }
 
         if (adapter != null) {
           final evaluationResult = _evaluateArgumentsAsync(node.argumentList);
@@ -4042,35 +4009,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           final (positionalArgs, namedArgs) =
               evaluationResult as (List<Object?>, Map<String, Object?>);
 
-          try {
-            // Call the adapter with the native object
-            return retainCollectionOperationResult(
-              adapter(
-                this,
-                bridgedInstance.nativeObject,
-                positionalArgs,
-                namedArgs,
-              ),
-              bridgedInstance.nativeObject,
-              methodName,
-              environment,
-              positionalArgs,
-            );
-          } on ReturnException catch (e) {
-            // Native calls shouldn't throw ReturnException directly, but handle defensively
-            return e.value;
-          } on UnsupportedError {
-            rethrow;
-          } on ExecutionLimitException {
-            rethrow;
-          } on ExecutionTimeoutException {
-            rethrow;
-          } catch (e, s) {
-            Logger.log("Native Error Stack Trace: $s");
-            throw RuntimeError(
-              "Native error during bridged method call '$methodName' on ${bridgedClass.name}: $e",
-            );
-          }
+          return invokeBridgedMethod(
+            this,
+            bridgedInstance,
+            adapter,
+            methodName,
+            positionalArgs,
+            namedArgs,
+          );
         } else {
           // No adapter found for this method name, try extension methods
           if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
@@ -4108,6 +4054,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               );
             }
           } on RuntimeError catch (findError) {
+            if (_mustPropagateInvocationFailure(findError)) rethrow;
             throw RuntimeError(
               "Bridged class '${bridgedClass.name}' has no instance method named '$methodName'. Error during extension lookup: ${findError.message}",
             );
@@ -4145,8 +4092,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             return e.value;
           } on RuntimeError catch (e) {
-            if (e is ExecutionLimitException ||
-                e is ExecutionTimeoutException) {
+            if (isProtectedRuntimeError(e)) {
               rethrow;
             }
             throw RuntimeError(
@@ -4198,25 +4144,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         }
         final (positionalArgs, namedArgs) =
             evaluationResult as (List<Object?>, Map<String, Object?>);
-        try {
-          return targetValue.invoke(
-            this,
-            methodName,
-            positionalArgs,
-            namedArgs,
-          );
-        } on RuntimeError {
-          // Relaunch the RuntimeErrors directly
-          rethrow;
-        } catch (e, s) {
-          // Catch other potential errors (ex: from the adapter)
-          Logger.error(
-            "[visitMethodInvocation] Native exception during bridged enum method call '$targetValue.$methodName': $e\n$s",
-          );
-          throw RuntimeError(
-            "Native error during bridged enum method call '$methodName' on $targetValue: $e",
-          );
-        }
+        return targetValue.invoke(this, methodName, positionalArgs, namedArgs);
       } else if (targetValue is BridgedEnum) {
         calleeValue = targetValue.getStaticMember(methodName, this);
       } else if (targetValue is BridgedClass) {
@@ -4256,38 +4184,19 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           final (positionalArgs, namedArgs) =
               evaluationResult as (List<Object?>, Map<String, Object?>);
 
-          try {
-            final nativeObject = constructorAdapter(
-              this,
-              positionalArgs,
-              namedArgs,
-            );
+          final nativeObject = constructBridged(
+            bridgedClass,
+            methodName,
+            positionalArgs,
+            namedArgs,
+          );
 
-            if (nativeObject == null) {
-              throw RuntimeError(
-                "Bridged constructor adapter for '${bridgedClass.name}.$methodName' returned null unexpectedly.",
-              );
-            }
-            return _bridgeConstructorResult(bridgedClass, nativeObject);
-          } on RuntimeError catch (e) {
-            if (e is ExecutionLimitException ||
-                e is ExecutionTimeoutException) {
-              rethrow;
-            }
-            // Relaunch the adapter error
+          if (nativeObject == null) {
             throw RuntimeError(
-              "Error during bridged constructor '$methodName' for class '${bridgedClass.name}': ${e.message}",
-            );
-          } on UnsupportedError {
-            rethrow;
-          } catch (e, s) {
-            Logger.error(
-              "[visitMethodInvocation] Native exception during bridged constructor '${bridgedClass.name}.$methodName': $e\n$s",
-            );
-            throw RuntimeError(
-              "Native error during bridged constructor '$methodName' for class '${bridgedClass.name}': $e",
+              "Bridged constructor adapter for '${bridgedClass.name}.$methodName' returned null unexpectedly.",
             );
           }
+          return _bridgeConstructorResult(bridgedClass, nativeObject);
         } else {
           final staticMethodAdapter = bridgedClass.findStaticMethodAdapter(
             methodName,
@@ -4306,32 +4215,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             final (positionalArgs, namedArgs) =
                 evaluationResult as (List<Object?>, Map<String, Object?>);
 
-            try {
-              final result = staticMethodAdapter(
-                this,
-                positionalArgs,
-                namedArgs,
-              );
-
-              return result;
-            } on RuntimeError catch (e) {
-              if (e is ExecutionLimitException ||
-                  e is ExecutionTimeoutException) {
-                rethrow;
-              }
-              throw RuntimeError(
-                "Error during static bridged method call '$methodName' on ${bridgedClass.name}: ${e.message}",
-              );
-            } on UnsupportedError {
-              rethrow;
-            } catch (e, s) {
-              Logger.warn(
-                "[visitMethodInvocation] Native exception during static bridged method call '${bridgedClass.name}.$methodName': $e\n$s",
-              );
-              throw RuntimeError(
-                "Native error during static bridged method call '$methodName' on ${bridgedClass.name}: $e",
-              );
-            }
+            return invokeBridgedFunction(
+              this,
+              staticMethodAdapter,
+              positionalArgs,
+              namedArgs,
+            );
           } else {
             throw RuntimeError(
               "Bridged class '${bridgedClass.name}' has no constructor or static method named '$methodName'.",
@@ -4390,22 +4279,19 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               evaluationResult as (List<Object?>, Map<String, Object?>);
 
           // Call the adapter with the native object as target
-          try {
-            return retainCollectionOperationResult(
-              methodAdapter(this, nativeSuperObject, positionalArgs, namedArgs),
+          return retainCollectionOperationResult(
+            invokeBridgedAdapter(
+              this,
               nativeSuperObject,
-              methodName,
-              environment,
+              methodAdapter,
               positionalArgs,
-            );
-          } catch (e, s) {
-            Logger.error(
-              "Native exception during super call to bridged method '${bridgedSuper.name}.$methodName': $e\n$s",
-            );
-            throw RuntimeError(
-              "Native error during super call to bridged method '$methodName': $e",
-            );
-          }
+              namedArgs,
+            ),
+            nativeSuperObject,
+            methodName,
+            environment,
+            positionalArgs,
+          );
         } else {
           throw RuntimeError(
             "Method '$methodName' not found in bridged superclass '${bridgedSuper.name}'.",
@@ -4454,6 +4340,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             return e.value;
           } catch (e) {
+            if (_mustPropagateInvocationFailure(e)) rethrow;
             throw RuntimeError(
               "Error executing extension method '$methodName': $e",
             );
@@ -4566,37 +4453,21 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         final (positionalArgs, namedArgs) =
             evaluationResult as (List<Object?>, Map<String, Object?>);
 
-        try {
-          final nativeObject = constructBridged(
-            bridgedClass,
-            '',
-            positionalArgs,
-            namedArgs,
-            node.typeArguments?.arguments
-                .map((type) => resolveNativeCollectionType(type, environment))
-                .toList(),
-          );
-          if (nativeObject == null) {
-            throw RuntimeError(
-              "Default bridged constructor adapter for '${bridgedClass.name}' returned null.",
-            );
-          }
-          return _bridgeConstructorResult(bridgedClass, nativeObject);
-        } on RuntimeError catch (e) {
-          if (e is ExecutionLimitException || e is ExecutionTimeoutException) {
-            rethrow;
-          }
+        final nativeObject = constructBridged(
+          bridgedClass,
+          '',
+          positionalArgs,
+          namedArgs,
+          node.typeArguments?.arguments
+              .map((type) => resolveNativeCollectionType(type, environment))
+              .toList(),
+        );
+        if (nativeObject == null) {
           throw RuntimeError(
-            "Error during default bridged constructor for '${bridgedClass.name}': ${e.message}",
-          );
-        } catch (e, s) {
-          Logger.error(
-            "[visitMethodInvocation] Native exception during default bridged constructor '${bridgedClass.name}': $e\n$s",
-          );
-          throw RuntimeError(
-            "Native error during default bridged constructor for '${bridgedClass.name}': $e",
+            "Default bridged constructor adapter for '${bridgedClass.name}' returned null.",
           );
         }
+        return _bridgeConstructorResult(bridgedClass, nativeObject);
       } else {
         // If we have a BridgedClass but no default constructor ''
         throw RuntimeError(
@@ -4641,10 +4512,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError("Error invoking 'call' method: $e");
             }
           }
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
             Logger.debug(
               "[MethodInvoke] Error checking for 'call' method on InterpretedInstance: ${describeDebugValue(e)}",
@@ -4655,40 +4528,28 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
       // Try instance method 'call' (callable pattern) on BridgedInstance
       if (calleeValue is BridgedInstance) {
-        try {
-          const methodName = 'call';
-          final bridgedClass = calleeValue.bridgedClass;
-          final methodAdapter = bridgedClass.methods[methodName];
-          if (methodAdapter != null) {
-            if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-              Logger.debug(
-                "[MethodInvoke] Found 'call' method on BridgedInstance ${describeDebugValue(bridgedClass)}. Invoking...",
-              );
-            }
-
-            final (positionalArgs, namedArgs) = _evaluateArguments(
-              node.argumentList,
-            );
-
-            try {
-              return methodAdapter(
-                this,
-                calleeValue.nativeObject,
-                positionalArgs,
-                namedArgs,
-              );
-            } on ReturnException catch (e) {
-              return e.value;
-            } catch (e) {
-              throw RuntimeError("Error invoking 'call' method: $e");
-            }
-          }
-        } catch (e) {
+        const methodName = 'call';
+        final bridgedClass = calleeValue.bridgedClass;
+        final methodAdapter = bridgedClass.methods[methodName];
+        if (methodAdapter != null) {
           if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
             Logger.debug(
-              "[MethodInvoke] Error checking for 'call' method on BridgedInstance: ${describeDebugValue(e)}",
+              "[MethodInvoke] Found 'call' method on BridgedInstance ${describeDebugValue(bridgedClass)}. Invoking...",
             );
           }
+
+          final (positionalArgs, namedArgs) = _evaluateArguments(
+            node.argumentList,
+          );
+
+          return invokeBridgedMethod(
+            this,
+            calleeValue,
+            methodAdapter,
+            methodName,
+            positionalArgs,
+            namedArgs,
+          );
         }
       }
 
@@ -4727,12 +4588,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Error invoking 'call' method on extension type: $e",
               );
             }
           }
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
             Logger.debug(
               "[MethodInvoke] Error checking for 'call' method on InterpretedExtensionTypeInstance: ${describeDebugValue(e)}",
@@ -4789,6 +4652,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             return e.value;
           } catch (e) {
+            if (_mustPropagateInvocationFailure(e)) rethrow;
             throw RuntimeError("Error executing extension method 'call': $e");
           }
         }
@@ -4798,6 +4662,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           );
         }
       } on RuntimeError catch (findError) {
+        if (_mustPropagateInvocationFailure(findError)) rethrow;
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
             "[MethodInvoke] No extension member 'call' found for non-callable type ${describeDebugValueType(calleeValue)}. Error: ${findError.message}",
@@ -4886,6 +4751,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return member; // field value or bound method
         }
       } on RuntimeError catch (e) {
+        if (_mustPropagateInvocationFailure(e)) rethrow;
         // Try Extension Lookup Before Error
         if (e.message.contains("Undefined property '$propertyName'")) {
           if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
@@ -4928,6 +4794,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               );
             }
           } on RuntimeError catch (findError) {
+            if (_mustPropagateInvocationFailure(findError)) rethrow;
             // Error during extension lookup itself
             if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
               Logger.debug(
@@ -4972,6 +4839,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return member;
         }
       } on RuntimeError catch (e) {
+        if (_mustPropagateInvocationFailure(e)) rethrow;
         // Try Extension Getter if Direct Fails (similar to InterpretedInstance)
         if (e.message.contains("Undefined property '$propertyName'")) {
           if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
@@ -5010,6 +4878,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               );
             }
           } on RuntimeError catch (findError) {
+            if (_mustPropagateInvocationFailure(findError)) rethrow;
             if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
               Logger.debug(
                 "[PropertyAccess] Error during extension lookup for '${describeDebugValue(propertyName)}' on enum: ${findError.message}",
@@ -5042,10 +4911,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         return _ClassConstructorReference(target, propertyName);
       }
       // Static Access (no change)
-      try {
-        // Check static fields first (no inheritance for static fields in Dart)
+      if (target.staticFields.containsKey(propertyName)) {
         return target.getStaticField(propertyName);
-      } on RuntimeError catch (_) {
+      } else {
         // If not a field, check static methods/getters
         InterpretedFunction? staticMember = target.findStaticGetter(
           propertyName,
@@ -5110,20 +4978,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           "[PropertyAccess] Accessing property '${describeDebugValue(propertyName)}' on BridgedEnumValue: ${describeDebugValue(target)}",
         );
       }
-      try {
-        return target.get(propertyName, this);
-      } on ReturnException catch (e) {
-        return e.value;
-      } on RuntimeError {
-        rethrow;
-      } catch (e, s) {
-        Logger.error(
-          "Native error during bridged enum property get '$target.$propertyName': $e\n$s",
-        );
-        throw RuntimeError(
-          "Native error during bridged enum property get '$propertyName' on $target: $e",
-        );
-      }
+      return target.get(propertyName, this);
     } else if (target is BridgedClass) {
       final bridgedClass = target;
       final constructor = propertyName == 'new' ? '' : propertyName;
@@ -5218,6 +5073,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           return member; // field value or bound method
         }
       } on RuntimeError catch (e) {
+        if (_mustPropagateInvocationFailure(e)) rethrow;
         throw RuntimeError(
           "${e.message} (accessing property via PropertyAccess '$propertyName' on extension type '${target.extensionType.name}')",
         );
@@ -5290,21 +5146,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         propertyName,
       );
       if (getterAdapter != null) {
-        try {
-          return retainCollectionOperationResult(
-            getterAdapter(this, nativeSuperObject),
-            nativeSuperObject,
-            propertyName,
-            environment,
-          );
-        } catch (e, s) {
-          Logger.error(
-            "Native exception during super access to bridged getter '${bridgedSuper.name}.$propertyName': $e\n$s",
-          );
-          throw RuntimeError(
-            "Native error during super access to bridged getter '$propertyName': $e",
-          );
-        }
+        return retainCollectionOperationResult(
+          invokeBridgedGetter(this, nativeSuperObject, getterAdapter),
+          nativeSuperObject,
+          propertyName,
+          environment,
+        );
       }
 
       // Try the bridged method (for tear-off)
@@ -5337,6 +5184,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         try {
           return bridgedEnumValue.get(propertyName);
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           throw RuntimeError(
             "Undefined property '$propertyName' on bridged enum value '${bridgedEnumValue.name}'.",
           );
@@ -5371,6 +5219,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         } on ReturnException catch (e) {
           return e.value;
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           throw RuntimeError(
             "Error executing extension getter '$propertyName': $e",
           );
@@ -6566,7 +6415,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         _executeCascadeIndexAccess(targetValue, section);
       } else {
         // Should not happen with valid cascade sections
-        throw UnimplementedError(
+        throw InterpreterUnsupportedError(
           'Cascade section type not handled: ${section.runtimeType}',
         );
       }
@@ -7011,7 +6860,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         );
       }
     } else {
-      throw UnimplementedError(
+      throw InterpreterUnsupportedError(
         'Unsupported assignment LHS in cascade: ${lhs.runtimeType}',
       );
     }
@@ -7144,7 +6993,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
       // If value is null, do nothing.
     } else {
-      throw UnimplementedError(
+      throw InterpreterUnsupportedError(
         'Collection element type not yet supported: ${element.runtimeType}',
       );
     }
@@ -7364,7 +7213,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         condition = loopParts.condition;
         updaters = loopParts.updaters;
       } else {
-        throw UnimplementedError(
+        throw InterpreterUnsupportedError(
           'Unsupported for-loop type in collection literal: ${loopParts.runtimeType}',
         );
       }
@@ -7861,6 +7710,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError("Error executing class operator '-': $e");
             }
           }
@@ -7880,6 +7730,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Error executing extension type operator '-': $e",
               );
@@ -7907,10 +7758,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError("Error executing extension operator '-': $e");
             }
           }
         } on RuntimeError catch (findError) {
+          if (_mustPropagateInvocationFailure(findError)) rethrow;
           if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
             Logger.debug(
               "[PrefixExpr] Extension operator '-' not found for type ${describeDebugValueType(operandValue)}. Error: ${findError.message}",
@@ -7943,6 +7796,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError("Error executing class operator '~': $e");
             }
           }
@@ -7962,6 +7816,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Error executing extension type operator '~': $e",
               );
@@ -7990,10 +7845,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError("Error executing extension operator '~': $e");
             }
           }
         } on RuntimeError catch (findError) {
+          if (_mustPropagateInvocationFailure(findError)) rethrow;
           if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
             Logger.debug(
               "[PrefixExpr] Extension operator '~' not found for type ${describeDebugValueType(operandValue)}. Error: ${findError.message}",
@@ -8022,6 +7879,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Error executing class operator '$operatorLexeme': $e",
               );
@@ -8048,15 +7906,17 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             } on ReturnException catch (e) {
               return e.value;
             } catch (e) {
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Error executing extension operator '$operatorLexeme': $e",
               );
             }
           }
-        } on RuntimeError {
+        } on RuntimeError catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           // Fall through if no generic extension op found
         }
-        throw UnimplementedError(
+        throw InterpreterUnsupportedError(
           'Unary prefix operator not handled: ${node.operator.lexeme} ($operatorType)',
         );
     }
@@ -9299,6 +9159,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             return e.value;
           } catch (e) {
+            if (_mustPropagateInvocationFailure(e)) rethrow;
             throw RuntimeError(
               "Error executing extension type operator '$operatorName' for compound assignment: $e",
             );
@@ -9448,6 +9309,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             return e.value; // Should not happen for operators, but handle
           } catch (e) {
+            if (_mustPropagateInvocationFailure(e)) rethrow;
             throw RuntimeError(
               "Error executing extension operator '$operatorName' for compound assignment: $e",
             );
@@ -9459,6 +9321,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           );
         }
       } on RuntimeError catch (findError) {
+        if (_mustPropagateInvocationFailure(findError)) rethrow;
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
             "[CompoundAssign] No extension member '$operatorName' found for type ${describeDebugValueType(currentValue)}. Error: ${findError.message}",
@@ -9468,7 +9331,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
     }
 
-    throw UnimplementedError(
+    throw InterpreterUnsupportedError(
       'Compound assignment operator $operatorType not handled for types ${currentValue?.runtimeType} and ${rhsValue?.runtimeType}',
     );
   }
@@ -9611,7 +9474,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           if (runtimeType != null) {
             return runtimeType.isSubtypeOf(targetType, value: value);
           }
-        } catch (_) {
+        } on RuntimeError catch (error) {
+          if (_mustPropagateInvocationFailure(error)) rethrow;
           // If type not found, assume it matches (lenient approach)
           return true;
         }
@@ -9725,6 +9589,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     // Store the internal exception if caught
     InternalInterpreterException? caughtInternalException;
     StackTrace? caughtStackTrace;
+    Object? pendingControl;
+    StackTrace? pendingControlStack;
 
     Object? tryResult;
     Object? returnValue; // Store either the try result or the catch result
@@ -9741,30 +9607,15 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
         Logger.debug("[TryStatement] Try block completed normally");
       }
-    } on ReturnException {
-      // If the try returns, the finally must execute, but we propagate the return
-      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-        Logger.debug(
-          "[TryStatement] Propagating ReturnException from try block.",
-        );
-      }
-      rethrow;
-    } on BreakException {
-      // Propagate for outer loops/switch
-      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-        Logger.debug(
-          "[TryStatement] Propagating BreakException from try block",
-        );
-      }
-      rethrow;
-    } on ContinueException {
-      // Propagate for outer loops
-      if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-        Logger.debug(
-          "[TryStatement] Propagating ContinueException from try block",
-        );
-      }
-      rethrow;
+    } on ReturnException catch (e, s) {
+      pendingControl = e;
+      pendingControlStack = s;
+    } on BreakException catch (e, s) {
+      pendingControl = e;
+      pendingControlStack = s;
+    } on ContinueException catch (e, s) {
+      pendingControl = e;
+      pendingControlStack = s;
     } on InternalInterpreterException catch (e, s) {
       // Catch ONLY the exceptions already encapsulated (coming from a 'throw')
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
@@ -9773,13 +9624,14 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         );
       }
       caughtInternalException = e; // Store the internal exception
-      caughtStackTrace = s;
+      caughtStackTrace = e.stackTrace ??= s;
       returnValue = null; // No normal try result
-    } on ExecutionTimeoutException {
-      // Invocation deadlines are not interpreted exceptions: no catch/finally
-      // clause may run once the terminal deadline has been reached.
+    } on InterpreterUnsupportedError {
+      rethrow;
+    } on SyncGeneratorYieldLimitReached {
       rethrow;
     } catch (userException, userStack) {
+      if (isProtectedRuntimeError(userException)) rethrow;
       // Catch any other exception (potentially native)
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
         Logger.debug(
@@ -9787,7 +9639,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         );
       }
       // Encapsulate the user/native exception in our internal type
-      caughtInternalException = InternalInterpreterException(userException);
+      caughtInternalException = InternalInterpreterException(
+        userException,
+        userStack,
+        ExceptionOrigin.raw,
+      );
       caughtStackTrace = userStack;
       returnValue = null;
     }
@@ -9837,11 +9693,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             }
           }
           if (stackTraceParameterName != null) {
-            // Store the textual representation of the stack trace
-            // Ensure caughtStackTrace is not null before calling toString()
-            final stackTraceString =
-                caughtStackTrace?.toString() ?? "Stack trace unavailable";
-            catchEnv.define(stackTraceParameterName, stackTraceString);
+            catchEnv.define(stackTraceParameterName, caughtStackTrace);
             if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
               Logger.debug(
                 "[TryStatement] Defined stacktrace var '$stackTraceParameterName'.",
@@ -9850,6 +9702,8 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
 
           // Execute the catch block in its environment
+          final previousCatch = _originalCaughtInternalExceptionForRethrow;
+          final previousInCatch = _isInCatchBlock;
           environment = catchEnv;
           _isInCatchBlock = true;
           _originalCaughtInternalExceptionForRethrow =
@@ -9865,49 +9719,31 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             }
             // The exception is handled, clear caughtInternalException to not rethrow it after finally
             caughtInternalException = null;
-          } on ReturnException {
-            // The catch made a return, we propagate it immediately but the finally must execute
-            if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-              Logger.debug(
-                "[TryStatement] Caught ReturnException in CATCH block",
-              );
-            }
-            // IMPORTANT: Clean the rethrow state BEFORE rethrowing
-            _isInCatchBlock = false;
-            _originalCaughtInternalExceptionForRethrow = null;
-            rethrow; // IMPORTANT: Ensure the return ends the function
+          } on ReturnException catch (e, s) {
+            caughtInternalException = null;
+            pendingControl = e;
+            pendingControlStack = s;
           } on InternalInterpreterException catch (
             catchInternalError,
             catchStack
           ) {
-            if (identical(
-              catchInternalError,
-              _originalCaughtInternalExceptionForRethrow,
-            )) {
-              // This is the exception rethrown by 'rethrow'. It must be allowed to propagate.
-              if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-                Logger.debug(
-                  "[TryStatement] Identified rethrown exception. Propagating.",
-                );
-              }
-              // IMPORTANT: Clean the rethrow state BEFORE rethrowing
-              _isInCatchBlock = false;
-              _originalCaughtInternalExceptionForRethrow = null;
-              rethrow; // Relaunch to let the outer mechanism handle it
-            } else {
-              // This is a NEW internal exception coming from the catch body.
-              if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-                Logger.debug(
-                  "[TryStatement] Caught NEW internal exception in CATCH block: ${describeDebugValue(catchInternalError.originalThrownValue)}",
-                );
-              }
-              caughtInternalException =
-                  catchInternalError; // The new internal exception replaces the old one
-              caughtStackTrace = catchStack; // Update stack trace too
-              // The new exception is NOT handled by this try/catch
-              returnValue = null;
-            }
+            caughtInternalException = catchInternalError;
+            caughtStackTrace = catchInternalError.stackTrace ??= catchStack;
+            returnValue = null;
+          } on InterpreterUnsupportedError {
+            rethrow;
+          } on BreakException catch (e, s) {
+            caughtInternalException = null;
+            pendingControl = e;
+            pendingControlStack = s;
+          } on ContinueException catch (e, s) {
+            caughtInternalException = null;
+            pendingControl = e;
+            pendingControlStack = s;
+          } on SyncGeneratorYieldLimitReached {
+            rethrow;
           } catch (nativeError, nativeStack) {
+            if (isProtectedRuntimeError(nativeError)) rethrow;
             // Catch other unexpected errors from catch block
             if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
               Logger.debug(
@@ -9915,13 +9751,17 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               );
             }
             // Wrap it as InternalInterpreterException to propagate
-            caughtInternalException = InternalInterpreterException(nativeError);
+            caughtInternalException = InternalInterpreterException(
+              nativeError,
+              nativeStack,
+              ExceptionOrigin.raw,
+            );
             caughtStackTrace = nativeStack;
             returnValue = null;
           } finally {
             // IMPORTANT: Clean the rethrow state if we exit the catch
-            _isInCatchBlock = false;
-            _originalCaughtInternalExceptionForRethrow = null;
+            _isInCatchBlock = previousInCatch;
+            _originalCaughtInternalExceptionForRethrow = previousCatch;
             environment =
                 originalEnv; // Restore the environment after the catch
           }
@@ -9961,7 +9801,17 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           );
         }
         rethrow; // The return of the finally is the final value
-      } on InternalInterpreterException catch (e) {
+      } on RuntimeError {
+        rethrow;
+      } on InterpreterUnsupportedError {
+        rethrow;
+      } on BreakException {
+        rethrow;
+      } on ContinueException {
+        rethrow;
+      } on SyncGeneratorYieldLimitReached {
+        rethrow;
+      } on InternalInterpreterException catch (e, s) {
         // Catch internal exceptions coming from finally (throw/rethrow in finally)
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
@@ -9969,9 +9819,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           );
         }
         // The internal exception of the finally prevails
-        finallyInternalException = e; // Store internal exception
-        // We might want to store the stack trace too if needed later
-      } catch (e) {
+        e.stackTrace ??= s;
+        finallyInternalException = e;
+      } catch (e, s) {
         // Catch other unexpected errors from finally block
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
@@ -9979,7 +9829,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           );
         }
         // Wrap it as InternalInterpreterException
-        finallyInternalException = InternalInterpreterException(e);
+        finallyInternalException = InternalInterpreterException(
+          e,
+          s,
+          ExceptionOrigin.raw,
+        );
       }
     }
 
@@ -9991,6 +9845,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         );
       }
       throw finallyInternalException; // The internal exception of the Finally always prevails
+    }
+    if (pendingControl != null) {
+      Error.throwWithStackTrace(pendingControl, pendingControlStack!);
     }
 
     // If there is an unhandled internal exception (either original, or from a catch) and no exception from the finally
@@ -10042,7 +9899,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   @override
   Object? visitRethrowExpression(RethrowExpression node) {
     final asyncState = currentAsyncState;
-    if (asyncState == null) {
+    if (asyncState == null || _isInCatchBlock) {
       if (!_isInCatchBlock ||
           _originalCaughtInternalExceptionForRethrow == null) {
         throw RuntimeError("'rethrow' can only be used within a catch block.");
@@ -10055,21 +9912,21 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       // Re-launch the *original internal exception* that was caught by the enclosing catch block
       throw _originalCaughtInternalExceptionForRethrow!;
     }
-    if (!asyncState.isHandlingErrorForRethrow) {
-      throw RuntimeError("'rethrow' can only be used within a catch block.");
+    AstNode? ancestor = node.parent;
+    while (ancestor != null && ancestor is! CatchClause) {
+      ancestor = ancestor.parent;
     }
-    final originalError = asyncState.originalErrorForRethrow;
+    final originalError = ancestor is CatchClause
+        ? asyncState.exceptionForCatch(ancestor)
+        : null;
     if (originalError == null) {
-      // Should not happen if isHandlingErrorForRethrow is true, but safety check
-      throw StateError("Internal error: Inconsistent state for rethrow.");
+      throw RuntimeError("'rethrow' can only be used within a catch block.");
     }
     if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
       Logger.debug(
         "[Rethrow] Rethrowing original internal exception: ${describeDebugValue(originalError.originalThrownValue)}",
       );
     }
-    // Set flag to indicate this is a rethrow, not a new exception
-    asyncState.isCurrentlyRethrowing = true;
     // Relaunch the original exception stored in the async state
     throw originalError;
   }
@@ -10161,6 +10018,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
               );
             }
           } on RuntimeError catch (e) {
+            if (_mustPropagateInvocationFailure(e)) rethrow;
             // Propagate type lookup error
             // Wrap in InternalInterpreterException to be caught correctly
             throw InternalInterpreterException(
@@ -10173,6 +10031,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         final targetType = _resolveTypeAnnotation(typeNode);
         result = _isValueCompatibleWithRuntimeType(expressionValue, targetType);
       } on RuntimeError catch (e) {
+        if (_mustPropagateInvocationFailure(e)) rethrow;
         throw InternalInterpreterException(
           RuntimeError("Type check failed: ${e.message}"),
         );
@@ -10331,6 +10190,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         continuation.nextElement++;
       } on RuntimeError catch (e) {
         asyncState?.expressionContinuations.remove(node);
+        if (_mustPropagateInvocationFailure(e)) rethrow;
         final literalType = isMap ? "Map" : "Set";
         // Check if error already contains context to avoid duplication
         if (!e.message.contains('in $literalType literal')) {
@@ -10667,6 +10527,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           evaluatedTypeArguments,
         );
       } on RuntimeError catch (e) {
+        if (_mustPropagateInvocationFailure(e)) rethrow;
         throw RuntimeError(
           "Constructor execution error for '$constructorName.': ${e.message}",
         );
@@ -10697,44 +10558,43 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             node.argumentList,
           );
 
-          try {
-            final typeArgs = constructorNameNode.typeArguments?.arguments;
-            final result =
-                constructorName == 'List' &&
-                    namedConstructorPart == 'unmodifiable' &&
-                    typeArgs != null &&
-                    typeArgs.length == 1
-                ? () {
-                    final type = _resolveTypeAnnotation(typeArgs.single);
-                    final list = unmodifiableListWithType(
-                      positionalArgs[0] as Iterable,
-                      type,
-                      typeArgs.single is NamedType &&
-                          (typeArgs.single as NamedType).question != null,
-                    );
-                    environment.annotateRuntimeType(
-                      list,
-                      AppliedRuntimeType(bridgedClass, [type]),
-                    );
-                    markInterpreterOwnedCollection(list);
-                    return list;
-                  }()
-                : staticMethodAdapter(this, positionalArgs, namedArgs);
+          final typeArgs = constructorNameNode.typeArguments?.arguments;
+          final result =
+              constructorName == 'List' &&
+                  namedConstructorPart == 'unmodifiable' &&
+                  typeArgs != null &&
+                  typeArgs.length == 1
+              ? () {
+                  final type = _resolveTypeAnnotation(typeArgs.single);
+                  final list = unmodifiableListWithType(
+                    positionalArgs[0] as Iterable,
+                    type,
+                    typeArgs.single is NamedType &&
+                        (typeArgs.single as NamedType).question != null,
+                  );
+                  environment.annotateRuntimeType(
+                    list,
+                    AppliedRuntimeType(bridgedClass, [type]),
+                  );
+                  markInterpreterOwnedCollection(list);
+                  return list;
+                }()
+              : invokeBridgedFunction(
+                  this,
+                  staticMethodAdapter,
+                  positionalArgs,
+                  namedArgs,
+                );
 
-            // Static methods return values directly (often native values like bool, String, etc.)
-            if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-              Logger.debug(
-                "[InstanceCreation] Static method returned: ${describeDebugValue(result)}",
-              );
-            }
-
-            // Return the result as-is. Static methods may return native values or BridgedInstances
-            return result;
-          } catch (e) {
-            throw RuntimeError(
-              "Error during static method '$namedConstructorPart' on class '$constructorName': $e",
+          // Static methods return values directly (often native values like bool, String, etc.)
+          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+            Logger.debug(
+              "[InstanceCreation] Static method returned: ${describeDebugValue(result)}",
             );
           }
+
+          // Return the result as-is. Static methods may return native values or BridgedInstances
+          return result;
         }
       }
 
@@ -10760,38 +10620,25 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             .toList();
       }
 
-      try {
-        final nativeObject = constructBridged(
-          bridgedClass,
-          constructorLookupName,
-          positionalArgs,
-          namedArgs,
-          evaluatedTypeArguments,
-        );
+      final nativeObject = constructBridged(
+        bridgedClass,
+        constructorLookupName,
+        positionalArgs,
+        namedArgs,
+        evaluatedTypeArguments,
+      );
 
-        if (nativeObject == null) {
-          throw RuntimeError(
-            "Bridged constructor adapter for '$constructorName.$constructorLookupName' returned null unexpectedly.",
-          );
-        }
-
-        return _bridgeConstructorResult(
-          bridgedClass,
-          nativeObject,
-          evaluatedTypeArguments,
-        );
-      } on RuntimeError catch (e) {
+      if (nativeObject == null) {
         throw RuntimeError(
-          "Error during bridged constructor '$constructorLookupName' for class '$constructorName': ${e.message}",
-        );
-      } catch (e, s) {
-        Logger.error(
-          "[InstanceCreation] Native exception during bridged constructor '$constructorName.$constructorLookupName': $e\n$s",
-        );
-        throw RuntimeError(
-          "Native error during bridged constructor '$constructorLookupName' for class '$constructorName': $e",
+          "Bridged constructor adapter for '$constructorName.$constructorLookupName' returned null unexpectedly.",
         );
       }
+
+      return _bridgeConstructorResult(
+        bridgedClass,
+        nativeObject,
+        evaluatedTypeArguments,
+      );
     } else {
       // CASE 3: The resolved type is neither InterpretedClass nor BridgedClass
       throw RuntimeError(
@@ -10822,7 +10669,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         return nativeCollectionView(klass.name, args.single!, types, this);
       }
     }
-    return klass.findConstructorAdapter(name)!(this, args, named);
+    return invokeBridgedFunction(
+      this,
+      klass.findConstructorAdapter(name)!,
+      args,
+      named,
+    );
   }
 
   Object _bridgeConstructorResult(
@@ -11032,34 +10884,22 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     // Check if it's a BridgedInstance with a 'call' method
     if (calleeValue is BridgedInstance) {
-      try {
-        final bridgedClass = calleeValue.bridgedClass;
-        final methodAdapter = bridgedClass.methods[methodName];
-        if (methodAdapter != null) {
-          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-            Logger.debug(
-              "[FuncExprInvoke] Found 'call' method on BridgedInstance ${describeDebugValue(bridgedClass)}. Invoking...",
-            );
-          }
-          try {
-            return methodAdapter(
-              this,
-              calleeValue.nativeObject,
-              positionalArgs,
-              namedArgs,
-            );
-          } on ReturnException catch (e) {
-            return e.value;
-          } catch (e) {
-            throw RuntimeError("Error invoking 'call' method: $e");
-          }
-        }
-      } catch (e) {
+      final bridgedClass = calleeValue.bridgedClass;
+      final methodAdapter = bridgedClass.methods[methodName];
+      if (methodAdapter != null) {
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
-            "[FuncExprInvoke] Error checking for 'call' method on BridgedInstance: ${describeDebugValue(e)}",
+            "[FuncExprInvoke] Found 'call' method on BridgedInstance ${describeDebugValue(bridgedClass)}. Invoking...",
           );
         }
+        return invokeBridgedMethod(
+          this,
+          calleeValue,
+          methodAdapter,
+          methodName,
+          positionalArgs,
+          namedArgs,
+        );
       }
     }
 
@@ -11085,10 +10925,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           } on ReturnException catch (e) {
             return e.value;
           } catch (e) {
+            if (_mustPropagateInvocationFailure(e)) rethrow;
             throw RuntimeError("Error invoking 'call' method: $e");
           }
         }
       } catch (e) {
+        if (_mustPropagateInvocationFailure(e)) rethrow;
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
             "[FuncExprInvoke] Error checking for 'call' method on InterpretedInstance: ${describeDebugValue(e)}",
@@ -11140,6 +10982,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
           return e.value;
         } catch (e, st) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           Logger.error("[FuncExprInvoke] Error calling bound method: $e\n$st");
           throw RuntimeError("Error invoking 'call' method: $e");
         }
@@ -11186,6 +11029,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         } on ReturnException catch (e) {
           return e.value;
         } catch (e) {
+          if (_mustPropagateInvocationFailure(e)) rethrow;
           throw RuntimeError("Error executing extension method 'call': $e");
         }
       }
@@ -11195,6 +11039,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         );
       }
     } on RuntimeError catch (findError) {
+      if (_mustPropagateInvocationFailure(findError)) rethrow;
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
         Logger.debug(
           "[FuncExprInvoke] No extension member 'call' found for type ${describeDebugValueType(calleeValue)}. Error: ${findError.message}",
@@ -11252,7 +11097,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         );
       }
 
-      throw UnimplementedError(
+      throw InterpreterUnsupportedError(
         "Tear-off for bridged constructors ('$className.$constructorLookupName') is not yet supported.",
       );
     } else {
@@ -12424,7 +12269,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       }
       _matchAndBind(pattern.pattern, value, environment);
     } else {
-      throw UnimplementedError(
+      throw InterpreterUnsupportedError(
         "Pattern type not yet supported in _matchAndBind: ${pattern.runtimeType}",
       );
     }
@@ -12507,6 +12352,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       // Convert pattern match failures into standard RuntimeErrors for assignment expressions
       throw RuntimeError("Pattern assignment failed: ${e.message}");
     } catch (e) {
+      if (_mustPropagateInvocationFailure(e)) rethrow;
       // Catch other potential errors during binding
       throw RuntimeError("Error during pattern assignment: $e");
     }
@@ -12806,10 +12652,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             try {
               value = variable.initializer!.accept<Object?>(this);
             } catch (e) {
-              if (e is ExecutionLimitException ||
-                  e is ExecutionTimeoutException) {
-                rethrow;
-              }
+              if (_mustPropagateInvocationFailure(e)) rethrow;
               throw RuntimeError(
                 "Error evaluating static initializer for extension field '$fieldName': $e",
               );
@@ -13057,25 +12900,16 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
 
     // 6. Call the constructor adapter.
     Object? nativeSuperObject;
-    try {
-      nativeSuperObject = constructBridged(
-        bridgedSuper,
-        constructorName,
-        positionalArgs,
-        namedArgs,
-        thisInstance.nativeSuperclassArguments,
-      );
-      if (nativeSuperObject == null) {
-        throw RuntimeError(
-          "Bridged super constructor adapter for '${bridgedSuper.name}.$constructorName' returned null.",
-        );
-      }
-    } catch (e, s) {
-      Logger.error(
-        "Native exception during super constructor call to '${bridgedSuper.name}.$constructorName': $e\n$s",
-      );
+    nativeSuperObject = constructBridged(
+      bridgedSuper,
+      constructorName,
+      positionalArgs,
+      namedArgs,
+      thisInstance.nativeSuperclassArguments,
+    );
+    if (nativeSuperObject == null) {
       throw RuntimeError(
-        "Native error during super constructor call '$constructorName': $e",
+        "Bridged super constructor adapter for '${bridgedSuper.name}.$constructorName' returned null.",
       );
     }
 

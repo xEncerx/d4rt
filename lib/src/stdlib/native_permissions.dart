@@ -1,5 +1,6 @@
 import 'dart:isolate';
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/exceptions.dart' show InterpreterPolicyError;
 
 // Operation guards deliberately recheck the owning interpreter, including for
 // retained native objects and method tearoffs. Absence of an owner is denial.
@@ -9,7 +10,7 @@ void requireNativePermission(
   String grant,
 ) {
   if (visitor?.moduleLoader.d4rt?.checkPermission(operation) ?? false) return;
-  throw RuntimeError('Native operation requires $grant.');
+  throw InterpreterPolicyError('Native operation requires $grant.');
 }
 
 void requireDeveloperPermission(InterpreterVisitor? visitor) =>

@@ -38,11 +38,23 @@ export 'package:d4rt/src/bridge/enum_type_metadata.dart';
 export 'package:d4rt/src/bridge/enum_type_relations.dart';
 export 'package:d4rt/src/bridge/library_tracking.dart';
 export 'package:d4rt/src/bridge/registration.dart' hide BridgedMethodCallable;
-export 'package:d4rt/src/callable.dart' hide invokeFunctionFromHost;
+export 'package:d4rt/src/callable.dart'
+    hide
+        invokeFunctionFromHost,
+        invokeBridgedMethod,
+        invokeBridgedAdapter,
+        invokeBridgedFunction,
+        invokeBridgedGetter,
+        invokeBridgedSetter;
 export 'package:d4rt/src/d4rt_base.dart';
 export 'package:d4rt/src/declaration_visitor.dart';
 export 'package:d4rt/src/environment.dart';
-export 'package:d4rt/src/exceptions.dart';
+export 'package:d4rt/src/exceptions.dart'
+    hide
+        ExceptionOrigin,
+        InterpreterUnsupportedError,
+        InterpreterPolicyError,
+        isProtectedRuntimeError;
 export 'package:d4rt/src/interpreter_visitor.dart';
 export 'package:d4rt/src/introspection.dart';
 export 'package:d4rt/src/late_variable.dart';

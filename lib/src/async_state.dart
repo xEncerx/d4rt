@@ -50,12 +50,6 @@ class AsyncExecutionState {
   /// statement and advances past it.
   final Set<TryStatement> completedTryStatements = {};
 
-  /// The error from the most recently completed Future (if it failed).
-  Object? lastAwaitError;
-
-  /// The stack trace from the most recently completed Future (if it failed).
-  StackTrace? lastAwaitStackTrace;
-
   /// Optional: Store the iterator for ongoing for-in loops.
   Iterator<Object?>? currentForInIterator;
 
@@ -101,11 +95,103 @@ class AsyncExecutionState {
   /// Lexical node where error lookup resumes after an inner finally completes.
   AstNode? resumeErrorAfterFinallyFrom;
 
+  /// Completions suspended while their lexical finally blocks execute.
+  List<
+    ({
+      TryStatement owner,
+      Object? error,
+      StackTrace? stack,
+      bool isReturn,
+      Object? value,
+      AstNode? resumeFrom,
+    })
+  >?
+  _pendingFinallyCompletions;
+
+  List<
+    ({
+      TryStatement owner,
+      Object? error,
+      StackTrace? stack,
+      bool isReturn,
+      Object? value,
+      AstNode? resumeFrom,
+    })
+  >
+  get pendingFinallyCompletions => _pendingFinallyCompletions ?? const [];
+
+  void addPendingFinallyCompletion(
+    ({
+      TryStatement owner,
+      Object? error,
+      StackTrace? stack,
+      bool isReturn,
+      Object? value,
+      AstNode? resumeFrom,
+    })
+    completion,
+  ) => (_pendingFinallyCompletions ??= []).add(completion);
+
+  void clearPendingFinallyCompletions() => _pendingFinallyCompletions = null;
+
+  void discardEscapedFinallyCompletions(AstNode? destination) {
+    while (pendingFinallyCompletions.isNotEmpty) {
+      final block = pendingFinallyCompletions.last.owner.finallyBlock;
+      AstNode? ancestor = destination;
+      while (ancestor != null && ancestor != block) {
+        ancestor = ancestor.parent;
+      }
+      if (ancestor != null) break;
+      pendingFinallyCompletions.removeLast();
+    }
+  }
+
   /// Track the TryStatement we are currently inside or handling
   TryStatement? activeTryStatement;
 
-  /// Lexical environment owned by the catch block currently being executed.
-  Environment? activeCatchEnvironment;
+  /// Active catch scopes and their original failures, from outermost to innermost.
+  List<
+    ({
+      CatchClause clause,
+      Environment environment,
+      InternalInterpreterException error,
+    })
+  >?
+  _catchFrames;
+
+  List<
+    ({
+      CatchClause clause,
+      Environment environment,
+      InternalInterpreterException error,
+    })
+  >
+  get catchFrames => _catchFrames ?? const [];
+
+  void addCatchFrame(
+    ({
+      CatchClause clause,
+      Environment environment,
+      InternalInterpreterException error,
+    })
+    frame,
+  ) => (_catchFrames ??= []).add(frame);
+
+  void clearCatchFrames() => _catchFrames = null;
+
+  Environment? get activeCatchEnvironment =>
+      catchFrames.isEmpty ? null : catchFrames.last.environment;
+
+  void retainCatchFrames(AstNode? node) {
+    while (catchFrames.isNotEmpty) {
+      AstNode? ancestor = node;
+      while (ancestor != null && ancestor != catchFrames.last.clause) {
+        ancestor = ancestor.parent;
+      }
+      if (ancestor != null) break;
+      catchFrames.removeLast();
+    }
+  }
 
   /// Store return value if a return happens inside a try with a finally.
   Object? returnAfterFinally;
@@ -116,15 +202,12 @@ class AsyncExecutionState {
   /// Lexical node where an outer finally lookup resumes after a return.
   AstNode? resumeReturnAfterFinallyFrom;
 
-  /// Flag to indicate if we are currently executing a catch block body.
-  bool isHandlingErrorForRethrow = false;
-
-  /// Store the original exception wrapped for potential rethrow.
-  InternalInterpreterException? originalErrorForRethrow;
-
-  /// Flag to indicate we are currently executing a rethrow statement
-  /// (as opposed to just being in a catch block)
-  bool isCurrentlyRethrowing = false;
+  InternalInterpreterException? exceptionForCatch(CatchClause clause) {
+    for (final frame in catchFrames.reversed) {
+      if (identical(frame.clause, clause)) return frame.error;
+    }
+    return null;
+  }
 
   /// Fields for await for loop processing
   List<Object?>? currentAwaitForList;
@@ -182,8 +265,6 @@ class AsyncExecutionState {
     required this.nextStateIdentifier,
     required this.function,
     this.lastAwaitResult,
-    this.lastAwaitError,
-    this.lastAwaitStackTrace,
     this.currentForInIterator,
     this.forLoopInitialized = false,
     this.forLoopEnvironment,
@@ -192,8 +273,6 @@ class AsyncExecutionState {
     this.currentStackTrace,
     this.activeTryStatement,
     this.returnAfterFinally,
-    this.isHandlingErrorForRethrow = false,
-    this.originalErrorForRethrow,
     this.isHandlingContinue = false,
     this.generatorStreamController,
   });

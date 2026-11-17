@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/exceptions.dart' show InterpreterPolicyError;
 import 'package:path/path.dart' as p;
 
 import '../../security/permission_path.dart';
@@ -126,14 +127,18 @@ RandomAccessFile filesystemHandleAt(RandomAccessFile handle, String path) =>
 String filesystemPathFromBytes(Uint8List bytes) {
   final nul = bytes.indexOf(0);
   if (nul != -1 && nul != bytes.length - 1) {
-    throw RuntimeError('Filesystem permission denied: invalid raw path.');
+    throw InterpreterPolicyError(
+      'Filesystem permission denied: invalid raw path.',
+    );
   }
   try {
     return utf8.decode(
       nul == -1 ? bytes : Uint8List.sublistView(bytes, 0, nul),
     );
   } on FormatException {
-    throw RuntimeError('Filesystem permission denied: raw path is not UTF-8.');
+    throw InterpreterPolicyError(
+      'Filesystem permission denied: raw path is not UTF-8.',
+    );
   }
 }
 
@@ -176,7 +181,7 @@ FileSystemEntity filesystemEntityAt(FileSystemEntity entity, String path) {
 // can turn an empty path into authority over the working directory.
 void _validateFilesystemPath(String path) {
   if (path.isEmpty || path.contains('\u0000')) {
-    throw RuntimeError(
+    throw InterpreterPolicyError(
       'Filesystem permission denied: invalid filesystem path.',
     );
   }
@@ -260,7 +265,9 @@ void _checkFilesystemPermission(
   _validateFilesystemPath(path);
   final d4rt = visitor.moduleLoader.d4rt;
   if (d4rt == null) {
-    throw RuntimeError('Filesystem permission denied: no interpreter owner.');
+    throw InterpreterPolicyError(
+      'Filesystem permission denied: no interpreter owner.',
+    );
   }
   var allowed = false;
   try {
@@ -276,7 +283,7 @@ void _checkFilesystemPermission(
     allowed = false;
   }
   if (!allowed) {
-    throw RuntimeError(
+    throw InterpreterPolicyError(
       'Filesystem permission denied for $operation on "$path". '
       'Grant an appropriate FilesystemPermission for this path.',
     );

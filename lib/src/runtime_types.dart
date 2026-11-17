@@ -4,6 +4,9 @@ import 'dart:math' show Random;
 import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
 import 'package:d4rt/d4rt.dart';
 import 'package:d4rt/src/bridge/bridged_types.dart' as bridge;
+import 'package:d4rt/src/callable.dart'
+    show invokeBridgedAdapter, invokeBridgedGetter;
+import 'package:d4rt/src/exceptions.dart' show isProtectedRuntimeError;
 import 'package:d4rt/src/native_collection_types.dart';
 import 'package:d4rt/src/type_annotation_utils.dart';
 import 'package:d4rt/src/utils/debug_description.dart';
@@ -488,6 +491,9 @@ class InterpretedClass implements Callable, RuntimeType {
     try {
       return typeArg.isSubtypeOf(bound);
     } catch (e) {
+      if (e is! RuntimeError || isProtectedRuntimeError(e)) {
+        rethrow;
+      }
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
         Logger.debug(
           "[InterpretedClass._checkTypeSatisfiesBound] Error checking subtype relationship: ${describeDebugValue(e)}",
@@ -836,7 +842,7 @@ class InterpretedClass implements Callable, RuntimeType {
         typeArguments,
       );
     } on RuntimeError catch (e) {
-      if (e is ExecutionLimitException || e is ExecutionTimeoutException) {
+      if (isProtectedRuntimeError(e)) {
         rethrow;
       }
       throw RuntimeError(
@@ -1313,12 +1319,10 @@ class InterpretedInstance implements RuntimeValue {
         }
       }
 
-      try {
+      if (currentClass.staticFields.containsKey(name)) {
         final staticField = currentClass.getStaticField(name);
-        if (staticField != null) {
-          return staticField;
-        }
-      } catch (_) {}
+        if (staticField != null) return staticField;
+      }
 
       final staticGetter = currentClass.findStaticGetter(name);
       if (staticGetter != null) {
@@ -1431,17 +1435,7 @@ class InterpretedInstance implements RuntimeValue {
             "[Instance.get] Found getter '$name' in bridged mixin '${describeDebugValue(bridgedMixin)}'. Calling adapter directly.",
           );
         }
-        try {
-          // For bridged mixins, call the getter directly and return the value
-          return getterAdapter(visitor, this);
-        } catch (e, s) {
-          Logger.error(
-            "Native exception during bridged mixin getter '$name': $e\n$s",
-          );
-          throw RuntimeError(
-            "Native error in bridged mixin getter '$name': $e",
-          );
-        }
+        return invokeBridgedGetter(visitor, this, getterAdapter);
       }
 
       // Try method next
@@ -1859,26 +1853,20 @@ class BridgedMixinMethodCallable implements Callable {
     Map<String, Object?> namedArguments = const {},
     List<RuntimeType>? typeArguments,
   ]) {
-    try {
-      // For bridged mixins, we need to create a temporary native-like object
-      // or handle the call differently since the adapter expects a native object
-      // but we have an interpreted instance. For now, we'll pass the instance directly
-      // and let the adapter handle the conversion.
-      return retainCollectionOperationResult(
-        adapter(visitor, instance, positionalArguments, namedArguments),
+    // The adapter receives the interpreted instance for the mixin.
+    return retainCollectionOperationResult(
+      invokeBridgedAdapter(
+        visitor,
         instance,
-        methodName,
-        visitor.environment,
+        adapter,
         positionalArguments,
-      );
-    } catch (e, s) {
-      Logger.error(
-        "[BridgedMixinMethodCallable] Native exception during call to '$bridgedMixinName.$methodName': $e\n$s",
-      );
-      throw RuntimeError(
-        "Native error in bridged mixin method '$bridgedMixinName.$methodName': $e",
-      );
-    }
+        namedArguments,
+      ),
+      instance,
+      methodName,
+      visitor.environment,
+      positionalArguments,
+    );
   }
 
   @override
@@ -1914,17 +1902,13 @@ class BridgedEnumMixinMethodCallable implements Callable {
     Map<String, Object?> namedArguments = const {},
     List<RuntimeType>? typeArguments,
   ]) {
-    try {
-      // Pass the enum value as the target for the adapter
-      return adapter(visitor, enumValue, positionalArguments, namedArguments);
-    } catch (e, s) {
-      Logger.error(
-        "[BridgedEnumMixinMethodCallable] Native exception during call to '$bridgedMixinName.$methodName': $e\n$s",
-      );
-      throw RuntimeError(
-        "Native error in bridged mixin method '$bridgedMixinName.$methodName': $e",
-      );
-    }
+    return invokeBridgedAdapter(
+      visitor,
+      enumValue,
+      adapter,
+      positionalArguments,
+      namedArguments,
+    );
   }
 
   @override

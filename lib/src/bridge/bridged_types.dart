@@ -225,7 +225,7 @@ class BridgedInstance<T extends Object> implements RuntimeValue {
   @override
   void set(String name, Object? value, [InterpreterVisitor? visitor]) {
     // Visitor is optional
-    throw UnimplementedError(
+    throw InterpreterUnsupportedError(
       "set('$name', ...) not implemented for BridgedInstance of '${bridgedClass.name}'",
     );
   }

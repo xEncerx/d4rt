@@ -52,8 +52,11 @@ mixin _CollectionDispatch on InterpretedInstance {
           );
     } on ReturnException catch (error) {
       return error.value;
-    } on InternalInterpreterException catch (error) {
-      throw error.originalThrownValue ?? error;
+    } on InternalInterpreterException catch (error, stack) {
+      Error.throwWithStackTrace(
+        error.originalThrownValue ?? error,
+        error.stackTrace ?? stack,
+      );
     }
   }
 

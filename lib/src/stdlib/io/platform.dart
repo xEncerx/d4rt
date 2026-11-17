@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/exceptions.dart' show InterpreterPolicyError;
 
 /// Bridged implementation of dart:io Platform functionality
 class PlatformIo {
@@ -94,7 +95,7 @@ class PlatformIo {
 
     // Check for DangerousPermission
     if (!d4rt.checkPermission({'type': 'dangerous'})) {
-      throw RuntimeError(
+      throw InterpreterPolicyError(
         'Access to Platform requires DangerousPermission. '
         'Use d4rt.grant(DangerousPermission.any) to allow Platform access.',
       );

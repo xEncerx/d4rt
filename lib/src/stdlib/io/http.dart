@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/exceptions.dart' show InterpreterPolicyError;
 import 'package:d4rt/src/stdlib/async/stream.dart';
 import 'network_permission_helper.dart';
 
@@ -678,7 +679,7 @@ class HttpClientRequestIo {
       },
       'followRedirects': (visitor, target, value) {
         if (value == true && !hasUnrestrictedNetworkConnect(visitor)) {
-          throw RuntimeError(
+          throw InterpreterPolicyError(
             'NetworkPermission.connect is required '
             'for automatic redirects.',
           );
@@ -737,7 +738,7 @@ class HttpClientResponseIo {
           return response.redirect(method, url, followLoops);
         }
         if (origin == null) {
-          throw RuntimeError(
+          throw InterpreterPolicyError(
             'Cannot authorize redirect without request context.',
           );
         }

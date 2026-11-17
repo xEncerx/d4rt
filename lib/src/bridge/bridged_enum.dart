@@ -1,4 +1,6 @@
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/callable.dart'
+    show invokeBridgedAdapter, invokeBridgedGetter;
 import 'package:d4rt/src/module_loader.dart';
 import 'package:d4rt/src/native_collection_types.dart';
 
@@ -198,7 +200,9 @@ class BridgedEnumValue implements RuntimeValue {
   @override
   Object? get(String identifier, [InterpreterVisitor? visitor]) {
     final getter = _getters[identifier] ?? enumType.getters[identifier];
-    if (getter != null) return getter(visitor, nativeValue);
+    if (getter != null) {
+      return invokeBridgedGetter(visitor, nativeValue, getter);
+    }
     final method = _methods[identifier] ?? enumType.methods[identifier];
     if (method != null || identifier == 'toString') {
       return NativeFunction(
@@ -253,19 +257,13 @@ class BridgedEnumValue implements RuntimeValue {
       );
     }
 
-    try {
-      // Call the bridged method adapter
-      return methodAdapter(
-        visitor, // Pass the visitor
-        nativeValue, // The native enum object is the target
-        args, // Interpreted positional arguments
-        namedArgs, // Interpreted named arguments (if supported by the adapter)
-      );
-    } catch (e) {
-      throw RuntimeError(
-        'Error executing bridged method "$method" on ${enumType.name}.$name: $e',
-      );
-    }
+    return invokeBridgedAdapter(
+      visitor,
+      nativeValue,
+      methodAdapter,
+      args,
+      namedArgs,
+    );
   }
 
   @override

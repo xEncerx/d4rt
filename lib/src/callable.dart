@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:d4rt/d4rt.dart';
+import 'package:d4rt/src/exceptions.dart'
+    show ExceptionOrigin, InterpreterUnsupportedError, isProtectedRuntimeError;
 import 'package:d4rt/src/catch_clause_matcher.dart';
 import 'package:d4rt/src/native_collection_types.dart';
 import 'package:d4rt/src/stdlib/native_permissions.dart';
@@ -1264,13 +1266,14 @@ class InterpretedFunction implements Callable {
                       "Cannot call super() constructor on non-instance 'this'.",
                     );
                   }
+                } on ExecutionLimitException {
+                  rethrow;
+                } on ExecutionTimeoutException {
+                  rethrow;
                 } on RuntimeError catch (e) {
+                  if (isProtectedRuntimeError(e)) rethrow;
                   throw RuntimeError(
                     "Error during bridged super constructor '$superConstructorName': ${e.message}",
-                  );
-                } catch (e) {
-                  throw RuntimeError(
-                    "Native error during bridged super constructor '$superConstructorName': $e",
                   );
                 }
               } else {
@@ -1475,13 +1478,14 @@ class InterpretedFunction implements Callable {
                 "[Implicit super()] Stored native object from bridged superclass '${describeDebugValue(bridgedSuperClass)}' (${describeDebugValue(nativeSuperObject)})",
               );
             }
+          } on ExecutionLimitException {
+            rethrow;
+          } on ExecutionTimeoutException {
+            rethrow;
           } on RuntimeError catch (e) {
+            if (isProtectedRuntimeError(e)) rethrow;
             throw RuntimeError(
               "Error during bridged super constructor '': ${e.message}",
-            );
-          } catch (e) {
-            throw RuntimeError(
-              "Native error during bridged super constructor '': $e",
             );
           }
         }
@@ -1622,6 +1626,9 @@ class InterpretedFunction implements Callable {
     try {
       return typeArg.isSubtypeOf(bound);
     } catch (e) {
+      if (e is! RuntimeError || isProtectedRuntimeError(e)) {
+        rethrow;
+      }
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
         Logger.debug(
           "[InterpretedFunction._checkTypeSatisfiesBound] Error checking subtype relationship: ${describeDebugValue(e)}",
@@ -1904,6 +1911,7 @@ class InterpretedFunction implements Callable {
 
     // Main loop of state machine execution
     while (currentNode != null) {
+      currentState.retainCatchFrames(currentNode);
       // State-machine loops bypass visitBlock/visitWhileStatement, so charge
       // each executed state to the invocation just as synchronous AST execution.
       visitor.checkExecutionLimits();
@@ -2336,6 +2344,11 @@ class InterpretedFunction implements Callable {
               try {
                 hasNext = iterator.moveNext();
               } catch (e, s) {
+                if (e is! RuntimeError ||
+                    isProtectedRuntimeError(e) ||
+                    e is InterpreterUnsupportedError) {
+                  rethrow;
+                }
                 Logger.warn(
                   "[StateMachine] Error during iterator.moveNext(): $e\n$s",
                 );
@@ -2957,8 +2970,6 @@ class InterpretedFunction implements Callable {
                     " [StateMachine] Future completed successfully with: ${describeDebugValue(futureResult)}",
                   );
                 }
-                currentState.lastAwaitError = null;
-                currentState.lastAwaitStackTrace = null;
 
                 final awaitExpression = suspension.awaitExpression;
                 if (awaitExpression != null) {
@@ -3061,9 +3072,6 @@ class InterpretedFunction implements Callable {
                   );
                 } // Do not display stackTrace here, too long
                 // Store the error and stack trace in the state
-                currentState.lastAwaitError =
-                    error; // For info if someone uses it
-                currentState.lastAwaitStackTrace = stackTrace;
                 currentState.currentError = error; // Active error to handle
                 currentState.currentStackTrace = stackTrace;
                 currentState.lastAwaitResult = null; // No valid result
@@ -3103,13 +3111,15 @@ class InterpretedFunction implements Callable {
         _clearExpressionContinuations(currentState);
         currentState.currentError = null;
         currentState.currentStackTrace = null;
-        var currentTry = _findEnclosingTryStatement(currentNode);
-        if (_isInsideFinallyBlockOf(currentNode, currentTry)) {
-          currentTry = _findEnclosingTryStatement(currentTry?.parent);
+        final currentTry = _findReturnFinally(currentNode);
+        if (_resumeEscapedProtectedFailure(
+          visitor,
+          currentState,
+          currentTry?.finallyBlock,
+        )) {
+          return;
         }
-        while (currentTry != null && currentTry.finallyBlock == null) {
-          currentTry = _findEnclosingTryStatement(currentTry.parent);
-        }
+        currentState.discardEscapedFinallyCompletions(currentTry?.finallyBlock);
         if (currentTry != null && currentTry.finallyBlock != null) {
           // Check currentTry != null
           if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
@@ -3118,21 +3128,21 @@ class InterpretedFunction implements Callable {
             );
           }
           _unwindLoopScopes(currentState, currentTry);
-          currentState.returnAfterFinally = e.value; // Use currentState
-          currentState.hasReturnAfterFinally = true;
-          currentState.resumeReturnAfterFinallyFrom = currentTry.parent;
-          // Reset rethrow state if jumping to finally
-          currentState.isHandlingErrorForRethrow = false;
-          currentState.originalErrorForRethrow = null;
-          currentState.activeCatchEnvironment = null;
+          currentState.addPendingFinallyCompletion((
+            owner: currentTry,
+            error: null,
+            stack: null,
+            isReturn: true,
+            value: e.value,
+            resumeFrom: currentTry.parent,
+          ));
           currentNode =
               currentTry.finallyBlock!.statements.firstOrNull; // Now sure
           currentState.nextStateIdentifier = currentNode; // Use currentState
           continue; // Execute the finally
         }
-        currentState.activeCatchEnvironment = null;
-        currentState.isHandlingErrorForRethrow = false;
-        currentState.originalErrorForRethrow = null;
+        currentState.clearCatchFrames();
+        currentState.clearPendingFinallyCompletions();
         currentState.returnAfterFinally = null;
         currentState.hasReturnAfterFinally = false;
         currentState.resumeReturnAfterFinallyFrom = null;
@@ -3148,8 +3158,12 @@ class InterpretedFunction implements Callable {
         }
         if (currentState.loopNodeStack.isNotEmpty) {
           final loopNode = currentState.loopNodeStack.last;
+          if (_resumeEscapedProtectedFailure(visitor, currentState, loopNode)) {
+            return;
+          }
           _removeLoopScope(currentState, loopNode);
           currentNode = _findNextSequentialNode(visitor, loopNode);
+          currentState.discardEscapedFinallyCompletions(currentNode);
           currentState.nextStateIdentifier = currentNode;
           continue; // Continue execution after the loop
         } else {
@@ -3173,6 +3187,14 @@ class InterpretedFunction implements Callable {
           // For all loop types, going back to the loop statement itself
           // will trigger the correct next action (condition check or updaters).
           currentNode = loopNode;
+          if (_resumeEscapedProtectedFailure(
+            visitor,
+            currentState,
+            currentNode,
+          )) {
+            return;
+          }
+          currentState.discardEscapedFinallyCompletions(currentNode);
           currentState.nextStateIdentifier = currentNode;
           continue;
         } else {
@@ -3233,21 +3255,31 @@ class InterpretedFunction implements Callable {
 
     if (currentState.hasReturnAfterFinally &&
         !currentState.completer.isCompleted) {
-      var enclosingTry = _findEnclosingTryStatement(
+      final enclosingTry = _findReturnFinally(
         currentState.resumeReturnAfterFinallyFrom,
       );
-      while (enclosingTry != null) {
-        if (enclosingTry.finallyBlock != null) {
-          _unwindLoopScopes(currentState, enclosingTry);
-          currentState.resumeReturnAfterFinallyFrom = enclosingTry.parent;
-          currentState.nextStateIdentifier =
-              enclosingTry.finallyBlock!.statements.firstOrNull;
-          if (currentState.nextStateIdentifier != null) {
-            _scheduleStateMachineRun(visitor, currentState);
-            return;
-          }
-        }
-        enclosingTry = _findEnclosingTryStatement(enclosingTry.parent);
+      if (_resumeEscapedProtectedFailure(
+        visitor,
+        currentState,
+        enclosingTry?.finallyBlock,
+      )) {
+        return;
+      }
+      if (enclosingTry != null) {
+        _unwindLoopScopes(currentState, enclosingTry);
+        currentState.addPendingFinallyCompletion((
+          owner: enclosingTry,
+          error: null,
+          stack: null,
+          isReturn: true,
+          value: currentState.returnAfterFinally,
+          resumeFrom: enclosingTry.parent,
+        ));
+        currentState.hasReturnAfterFinally = false;
+        currentState.nextStateIdentifier =
+            enclosingTry.finallyBlock!.statements.first;
+        _scheduleStateMachineRun(visitor, currentState);
+        return;
       }
 
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
@@ -3255,8 +3287,7 @@ class InterpretedFunction implements Callable {
           " [StateMachine] Completing with stored return value after finally: ${describeDebugValue(currentState.returnAfterFinally)}",
         );
       }
-      currentState.isHandlingErrorForRethrow = false;
-      currentState.originalErrorForRethrow = null;
+      currentState.clearCatchFrames();
       _clearExpressionContinuations(currentState);
       currentState.completer.complete(currentState.returnAfterFinally);
       return;
@@ -3277,9 +3308,7 @@ class InterpretedFunction implements Callable {
           " [StateMachine] Loop finished, propagating unhandled error after finally: ${describeDebugValue(currentState.currentError)}",
         );
       }
-      // Reset rethrow state before completing with error
-      currentState.isHandlingErrorForRethrow = false;
-      currentState.originalErrorForRethrow = null;
+      currentState.clearCatchFrames();
       _clearExpressionContinuations(currentState);
       currentState.completer.completeError(
         currentState.currentError ?? Exception("Unknown error after finally"),
@@ -3293,14 +3322,12 @@ class InterpretedFunction implements Callable {
           " [StateMachine] Loop finished normally. Completing with last result: ${describeDebugValue(lastResult)} (State has await result: ${describeDebugValue(currentState.lastAwaitResult)})",
         );
       }
-      // Reset rethrow state before completing normally
-      currentState.isHandlingErrorForRethrow = false;
-      currentState.originalErrorForRethrow = null;
 
       final finalCompletionValue =
           currentState.function._body is ExpressionFunctionBody
           ? lastResult
           : null;
+      currentState.clearCatchFrames();
       _clearExpressionContinuations(currentState);
       currentState.completer.complete(finalCompletionValue);
     }
@@ -3391,7 +3418,7 @@ class InterpretedFunction implements Callable {
     state.currentError = null;
     state.currentStackTrace = null;
     state.resumeErrorAfterFinallyFrom = null;
-    state.activeCatchEnvironment = null;
+    state.clearPendingFinallyCompletions();
 
     var enclosingTry = _findEnclosingTryStatement(suspensionNode);
     if (_isInsideFinallyBlockOf(suspensionNode, enclosingTry)) {
@@ -3429,12 +3456,12 @@ class InterpretedFunction implements Callable {
     state.currentForInIterator = null;
     state.forLoopEnvironment = null;
     state.forInIteratorMap.clear();
-    state.activeCatchEnvironment = null;
+    state.clearCatchFrames();
+    state.clearPendingFinallyCompletions();
     state.activeTryStatement = null;
     state.pendingFinallyBlock = null;
     state.currentError = null;
     state.currentStackTrace = null;
-    state.originalErrorForRethrow = null;
     state.returnAfterFinally = null;
     state.resumeReturnAfterFinallyFrom = null;
     state.currentAwaitForList = null;
@@ -3526,12 +3553,72 @@ class InterpretedFunction implements Callable {
     return capturedEnvironment;
   }
 
+  static bool _isProtectedAsyncFailure(Object? error) =>
+      error is InterpreterUnsupportedError ||
+      (error != null && isProtectedRuntimeError(error));
+
+  static void _completeProtectedAsyncFailure(
+    AsyncExecutionState state,
+    Object error,
+    StackTrace? stack,
+  ) {
+    state.currentError = null;
+    state.currentStackTrace = null;
+    state.clearCatchFrames();
+    state.clearPendingFinallyCompletions();
+    _clearExpressionContinuations(state);
+    if (!state.completer.isCompleted) {
+      state.completer.completeError(error, stack);
+    }
+  }
+
+  static bool _resumeEscapedProtectedFailure(
+    InterpreterVisitor visitor,
+    AsyncExecutionState state,
+    AstNode? destination,
+  ) {
+    final pending = state.pendingFinallyCompletions;
+    for (var i = pending.length - 1; i >= 0; i--) {
+      final completion = pending[i];
+      if (!_isProtectedAsyncFailure(completion.error)) continue;
+      AstNode? ancestor = destination;
+      while (ancestor != null && ancestor != completion.owner.finallyBlock) {
+        ancestor = ancestor.parent;
+      }
+      if (ancestor != null) continue;
+      final resumeFrom = completion.resumeFrom;
+      final error = completion.error!;
+      final stack = completion.stack;
+      state.discardEscapedFinallyCompletions(resumeFrom);
+      state.currentError = error;
+      state.currentStackTrace = stack;
+      if (resumeFrom == null) {
+        _completeProtectedAsyncFailure(state, error, stack);
+      } else {
+        _handleAsyncError(visitor, state, resumeFrom);
+      }
+      return true;
+    }
+    return false;
+  }
+
   static void _handleAsyncError(
     InterpreterVisitor visitor,
     AsyncExecutionState state,
     AstNode nodeWhereErrorOccurred,
   ) {
     if (_stopExpiredAsyncExecution(visitor, state)) return;
+    final protectedError = _isProtectedAsyncFailure(state.currentError);
+    // Generators must run their cleanup before reporting a denied operation.
+    // Ordinary async functions follow synchronous terminal-failure behavior.
+    if (protectedError && !state.isGenerator) {
+      _completeProtectedAsyncFailure(
+        state,
+        state.currentError!,
+        state.currentStackTrace,
+      );
+      return;
+    }
     state.returnAfterFinally = null;
     state.hasReturnAfterFinally = false;
     state.resumeReturnAfterFinallyFrom = null;
@@ -3539,6 +3626,7 @@ class InterpretedFunction implements Callable {
     var errorEnvironment = state.awaitingEnvironment;
     state.awaitingEnvironment = null;
     if (error is InternalInterpreterException) {
+      state.currentStackTrace = error.stackTrace ?? state.currentStackTrace;
       error = error.originalThrownValue;
       state.currentError = error;
     }
@@ -3550,19 +3638,19 @@ class InterpretedFunction implements Callable {
       );
     }
 
-    // 1. Find an enclosing TryStatement
+    // A failure cannot re-enter any catch or finally already executing.
     TryStatement? enclosingTry = _findEnclosingTryStatement(
       nodeWhereErrorOccurred,
     );
-    var skipCatchClauses =
-        state.isCurrentlyRethrowing ||
-        _isInsideCatchClauseOf(nodeWhereErrorOccurred, enclosingTry);
-    if (_isInsideFinallyBlockOf(nodeWhereErrorOccurred, enclosingTry)) {
-      enclosingTry = _findEnclosingTryStatement(enclosingTry?.parent);
-      skipCatchClauses = false;
+    while (enclosingTry != null &&
+        _isInsideFinallyBlockOf(nodeWhereErrorOccurred, enclosingTry)) {
+      enclosingTry = _findEnclosingTryStatement(enclosingTry.parent);
     }
+    if (_resumeEscapedProtectedFailure(visitor, state, enclosingTry)) return;
+    final skipCatchClauses =
+        protectedError ||
+        _isInsideCatchClauseOf(nodeWhereErrorOccurred, enclosingTry);
     errorEnvironment = _unwindLoopScopes(state, enclosingTry, errorEnvironment);
-    state.isCurrentlyRethrowing = false;
     if (enclosingTry != null) {
       _clearContinuationsWithin(state, enclosingTry);
     }
@@ -3598,28 +3686,22 @@ class InterpretedFunction implements Callable {
     }
 
     if (matchingCatchClause != null && enclosingTry != null) {
+      state.discardEscapedFinallyCompletions(matchingCatchClause);
       // 3. Error caught: Prepare the jump to the Catch block
       state.nextStateIdentifier = matchingCatchClause
           .body
           .statements
           .firstOrNull; // Start of the catch block
 
-      // Update the state for rethrow - store the original error
-      final internalError = InternalInterpreterException(
-        error ?? Exception("Unknown error caught"),
-      ); // Pass only the error
-      state.originalErrorForRethrow = internalError;
-      // NOTE: We set isHandlingErrorForRethrow to true here to indicate we're in a catch block
-      // and ready to handle potential rethrow statements
-      state.isHandlingErrorForRethrow = true;
-
+      state.retainCatchFrames(matchingCatchClause);
       final catchParentEnvironment =
-          errorEnvironment ??
-          (state.loopEnvironmentStack.isNotEmpty
-              ? state.loopEnvironmentStack.last
-              : state.environment);
+          errorEnvironment ?? _asyncLexicalEnvironment(state);
       final catchEnvironment = Environment(enclosing: catchParentEnvironment);
-      state.activeCatchEnvironment = catchEnvironment;
+      state.addCatchFrame((
+        clause: matchingCatchClause,
+        environment: catchEnvironment,
+        error: InternalInterpreterException(error, stackTrace),
+      ));
 
       // Define the exception variable in its lexical catch environment.
       final exceptionParameter = matchingCatchClause.exceptionParameter;
@@ -3651,12 +3733,10 @@ class InterpretedFunction implements Callable {
       state.resumeErrorAfterFinallyFrom = null;
 
       if (state.nextStateIdentifier == null) {
-        state.activeCatchEnvironment = null;
-        state.isHandlingErrorForRethrow = false;
-        state.originalErrorForRethrow = null;
+        state.catchFrames.removeLast();
         state.nextStateIdentifier =
             enclosingTry.finallyBlock?.statements.firstOrNull ??
-            _findNextSequentialNode(visitor, enclosingTry);
+            _findNextSequentialNodeInState(visitor, state, enclosingTry);
       }
 
       // Reschedule the execution to start the catch block
@@ -3669,11 +3749,20 @@ class InterpretedFunction implements Callable {
     } else {
       // 4. Error not caught or no try:
       //    a) Check if there is a finally to execute anyway
-      if (enclosingTry != null && enclosingTry.finallyBlock != null) {
-        // Reset rethrow state if jumping to finally
-        state.isHandlingErrorForRethrow = false;
-        state.originalErrorForRethrow = null;
-
+      if (enclosingTry != null &&
+          (enclosingTry.finallyBlock?.statements.isNotEmpty ?? false)) {
+        state.discardEscapedFinallyCompletions(enclosingTry.finallyBlock);
+        state.addPendingFinallyCompletion((
+          owner: enclosingTry,
+          error: error,
+          stack: stackTrace,
+          isReturn: false,
+          value: null,
+          resumeFrom: enclosingTry.parent,
+        ));
+        state.currentError = null;
+        state.currentStackTrace = null;
+        state.resumeErrorAfterFinallyFrom = null;
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
             " [_handleAsyncError] Error not caught, but finally block exists. Jumping to finally.",
@@ -3682,12 +3771,6 @@ class InterpretedFunction implements Callable {
         // The next state is the start of the finally block
         state.nextStateIdentifier =
             enclosingTry.finallyBlock!.statements.firstOrNull;
-        state.resumeErrorAfterFinallyFrom = enclosingTry.parent;
-        state.activeCatchEnvironment = null;
-
-        // IMPORTANT: The error remains in state.currentError to be rethrown AFTER the finally.
-        // _findNextSequentialNode will handle the transition *after* the finally.
-        // The main loop of the state machine will check state.currentError at the end.
         _scheduleStateMachineRun(visitor, state);
       } else {
         final outerTry = _findEnclosingTryStatement(enclosingTry?.parent);
@@ -3697,9 +3780,6 @@ class InterpretedFunction implements Callable {
         }
 
         //    b) Propagate the error by completing the main Future
-        // Reset rethrow state before propagating
-        state.isHandlingErrorForRethrow = false;
-        state.originalErrorForRethrow = null;
 
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
@@ -3711,6 +3791,8 @@ class InterpretedFunction implements Callable {
           final errorToComplete = _unwrapExceptionForPropagation(
             error ?? Exception("Unknown error"),
           );
+          state.clearPendingFinallyCompletions();
+          state.clearCatchFrames();
           _clearExpressionContinuations(state);
           state.completer.completeError(errorToComplete, stackTrace);
         }
@@ -3729,6 +3811,20 @@ class InterpretedFunction implements Callable {
         return null;
       }
       current = current.parent;
+    }
+    return null;
+  }
+
+  static TryStatement? _findReturnFinally(AstNode? from) {
+    var cursor = from;
+    var current = _findEnclosingTryStatement(cursor);
+    while (current != null) {
+      if (!_isInsideFinallyBlockOf(cursor, current) &&
+          (current.finallyBlock?.statements.isNotEmpty ?? false)) {
+        return current;
+      }
+      cursor = current.parent;
+      current = _findEnclosingTryStatement(cursor);
     }
     return null;
   }
@@ -4101,8 +4197,6 @@ class InterpretedFunction implements Callable {
               assignmentNode.accept(
                 visitor,
               ); // Might re-trigger await if LHS is complex?
-            } catch (e) {
-              Logger.warn("Re-visiting simple assignment failed: $e");
             } finally {
               visitor.environment = originalVisitorEnv;
             }
@@ -4119,36 +4213,22 @@ class InterpretedFunction implements Callable {
                 " [_determineNextNodeAfterAwait] Re-evaluated LHS for compound assign to: ${describeDebugValue(lhsValue)} (${describeDebugValue(lhsValue)})",
               );
             }
-          } catch (e, s) {
-            Logger.error("Re-evaluating LHS for compound assign: $e\n$s");
-            if (!state.completer.isCompleted) {
-              state.completer.completeError(e, s);
-            }
-            return null; // Stop
           } finally {
             visitor.environment = originalVisitorEnv;
           }
 
           // Calculate the result
           Object? resultValue;
-          try {
-            // Call computeCompoundValue from the visitor instance
-            resultValue = visitor.computeCompoundValue(
-              lhsValue,
-              resolvedRhs,
-              operatorType,
+          // Call computeCompoundValue from the visitor instance
+          resultValue = visitor.computeCompoundValue(
+            lhsValue,
+            resolvedRhs,
+            operatorType,
+          );
+          if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
+            Logger.debug(
+              " [_determineNextNodeAfterAwait] Computed compound value (${describeDebugValue(resultValue)})",
             );
-            if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-              Logger.debug(
-                " [_determineNextNodeAfterAwait] Computed compound value (${describeDebugValue(resultValue)})",
-              );
-            }
-          } catch (e, s) {
-            Logger.error("Computing compound value after await: $e\n$s");
-            if (!state.completer.isCompleted) {
-              state.completer.completeError(e, s);
-            }
-            return null; // Stop
           }
 
           // Assign the computed result back
@@ -4240,8 +4320,6 @@ class InterpretedFunction implements Callable {
             assignmentNode.accept(
               visitor,
             ); // Might re-trigger await if LHS is complex?
-          } catch (e) {
-            Logger.error("Re-visiting simple assignment failed: $e");
           } finally {
             visitor.environment = originalVisitorEnv;
           }
@@ -4257,29 +4335,18 @@ class InterpretedFunction implements Callable {
               "[_determineNextNodeAfterAwait] Re-evaluated LHS for compound assignment to: ${describeDebugValue(lhsValue)} (${describeDebugValue(lhsValue)})",
             );
           }
-        } catch (e, s) {
-          Logger.error("Re-evaluating LHS for compound assign: $e\n$s");
-          // Cannot proceed without LHS value
-          if (!state.completer.isCompleted) state.completer.completeError(e, s);
-          return null; // Stop
         } finally {
           visitor.environment = originalVisitorEnv;
         }
 
         // Calculate the result using computeCompoundValue
         Object? resultValue;
-        try {
-          // computeCompoundValue needs the visitor for potential extension methods
-          resultValue = visitor.computeCompoundValue(
-            lhsValue,
-            resolvedRhs,
-            operatorType,
-          );
-        } catch (e, s) {
-          Logger.error("Computing compound value after await: $e\n$s");
-          if (!state.completer.isCompleted) state.completer.completeError(e, s);
-          return null; // Stop
-        }
+        // computeCompoundValue needs the visitor for potential extension methods
+        resultValue = visitor.computeCompoundValue(
+          lhsValue,
+          resolvedRhs,
+          operatorType,
+        );
 
         // Assign the computed result back to the LHS target
         if (lhs is SimpleIdentifier) {
@@ -4507,7 +4574,7 @@ class InterpretedFunction implements Callable {
               );
             }
           } else {
-            throw UnimplementedError(
+            throw InterpreterUnsupportedError(
               "Async initialization for multiple variables in a single 'for' declaration not yet supported.",
             );
           }
@@ -4701,6 +4768,20 @@ class InterpretedFunction implements Callable {
     return null; // Default stop state machine
   }
 
+  static AstNode? _findNextSequentialNodeInState(
+    InterpreterVisitor visitor,
+    AsyncExecutionState state,
+    AstNode node,
+  ) {
+    final previous = visitor.currentAsyncState;
+    visitor.currentAsyncState = state;
+    try {
+      return _findNextSequentialNode(visitor, node);
+    } finally {
+      visitor.currentAsyncState = previous;
+    }
+  }
+
   // Implementation of the logic to find the next sequential node
   static AstNode? _findNextSequentialNode(
     InterpreterVisitor visitor,
@@ -4798,11 +4879,7 @@ class InterpretedFunction implements Callable {
             Logger.debug("[_findNextSequentialNode] End of Catch block.");
           }
           TryStatement? tryStatement = _findEnclosingTryStatement(blockParent);
-          if (state != null) {
-            state.activeCatchEnvironment = null;
-            state.isHandlingErrorForRethrow = false;
-            state.originalErrorForRethrow = null;
-          }
+          state?.retainCatchFrames(blockParent.parent);
           // After a catch, we must ALWAYS execute the finally if it exists
           if (tryStatement != null && tryStatement.finallyBlock != null) {
             if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
@@ -4852,8 +4929,23 @@ class InterpretedFunction implements Callable {
           // After a finally, we look for the next node after the TryStatement
           // If an error was in progress, it will be rethrown by the main loop.
           if (state != null) {
+            if (state.pendingFinallyCompletions.isNotEmpty &&
+                identical(
+                  state.pendingFinallyCompletions.last.owner,
+                  blockParent,
+                )) {
+              final pending = state.pendingFinallyCompletions.removeLast();
+              if (pending.isReturn) {
+                state.returnAfterFinally = pending.value;
+                state.hasReturnAfterFinally = true;
+                state.resumeReturnAfterFinallyFrom = pending.resumeFrom;
+              } else {
+                state.currentError = pending.error;
+                state.currentStackTrace = pending.stack;
+                state.resumeErrorAfterFinallyFrom = pending.resumeFrom;
+              }
+            }
             state.activeTryStatement = null; // End of try handling
-            state.activeCatchEnvironment = null;
             if (state.currentError != null || state.hasReturnAfterFinally) {
               return null;
             }
@@ -5081,7 +5173,7 @@ class InterpretedFunction implements Callable {
       final expression = arg is NamedArgument ? arg.argumentExpression : arg;
       final argValue = expression.accept<Object?>(visitor);
       if (argValue is AsyncSuspensionRequest) {
-        throw UnimplementedError(
+        throw InterpreterUnsupportedError(
           "'await' is not yet supported within $invocationType call arguments.",
         );
       }
@@ -5524,6 +5616,94 @@ class NativeFunction implements Callable, RuntimeType {
   String get name => _name;
 }
 
+Never _throwBridgedFailure(Object error, StackTrace stack) {
+  if (error is RuntimeError ||
+      error is InterpreterUnsupportedError ||
+      error is InternalInterpreterException ||
+      error is ReturnException ||
+      error is BreakException ||
+      error is ContinueException ||
+      error is SyncGeneratorYieldLimitReached) {
+    Error.throwWithStackTrace(error, stack);
+  }
+  throw InternalInterpreterException(error, stack, ExceptionOrigin.bridged);
+}
+
+Object? invokeBridgedAdapter(
+  InterpreterVisitor visitor,
+  Object target,
+  BridgedMethodAdapter adapter,
+  List<Object?> positional,
+  Map<String, Object?> named,
+) {
+  try {
+    return adapter(visitor, target, positional, named);
+  } catch (error, stack) {
+    _throwBridgedFailure(error, stack);
+  }
+}
+
+Object? invokeBridgedGetter(
+  InterpreterVisitor? visitor,
+  Object target,
+  BridgedInstanceGetterAdapter adapter,
+) {
+  try {
+    return adapter(visitor, target);
+  } catch (error, stack) {
+    _throwBridgedFailure(error, stack);
+  }
+}
+
+void invokeBridgedSetter(
+  InterpreterVisitor? visitor,
+  Object target,
+  BridgedInstanceSetterAdapter adapter,
+  Object? value,
+) {
+  try {
+    adapter(visitor, target, value);
+  } catch (error, stack) {
+    _throwBridgedFailure(error, stack);
+  }
+}
+
+Object? invokeBridgedFunction(
+  InterpreterVisitor visitor,
+  BridgedStaticMethodAdapter adapter,
+  List<Object?> positional,
+  Map<String, Object?> named,
+) {
+  try {
+    return adapter(visitor, positional, named);
+  } catch (error, stack) {
+    _throwBridgedFailure(error, stack);
+  }
+}
+
+Object? invokeBridgedMethod(
+  InterpreterVisitor visitor,
+  BridgedInstance instance,
+  BridgedMethodAdapter adapter,
+  String methodName,
+  List<Object?> positionalArguments,
+  Map<String, Object?> namedArguments,
+) {
+  return retainCollectionOperationResult(
+    invokeBridgedAdapter(
+      visitor,
+      instance.nativeObject,
+      adapter,
+      positionalArguments,
+      namedArguments,
+    ),
+    instance.nativeObject,
+    methodName,
+    visitor.environment,
+    positionalArguments,
+  );
+}
+
 // Represents a bridged instance method that has been bound to a specific instance.
 class BridgedMethodCallable implements Callable {
   final BridgedInstance _instance; // The native target instance
@@ -5555,38 +5735,14 @@ class BridgedMethodCallable implements Callable {
         () => call(visitor, positionalArguments, namedArguments, typeArguments),
       );
     }
-    try {
-      // Call the adapter with the native object of the instance and the arguments
-      return retainCollectionOperationResult(
-        _adapter(
-          visitor,
-          _instance.nativeObject,
-          positionalArguments,
-          namedArguments,
-        ),
-        _instance.nativeObject,
-        _methodName,
-        visitor.environment,
-        positionalArguments,
-      );
-    } on ExecutionLimitException {
-      rethrow;
-    } on ExecutionTimeoutException {
-      rethrow;
-    } on ArgumentError catch (e) {
-      // Convert native ArgumentError to RuntimeError
-      throw RuntimeError(
-        "Invalid arguments for bridged method '${_instance.bridgedClass.name}.$_methodName': ${e.message}",
-      );
-    } catch (e, s) {
-      // Handle other native errors
-      Logger.error(
-        "[BridgedMethodCallable] Native exception during call to '${_instance.bridgedClass.name}.$_methodName': $e\n$s",
-      );
-      throw RuntimeError(
-        "Native error in bridged method '${_instance.bridgedClass.name}.$_methodName': $e",
-      );
-    }
+    return invokeBridgedMethod(
+      visitor,
+      _instance,
+      _adapter,
+      _methodName,
+      positionalArguments,
+      namedArguments,
+    );
   }
 
   @override
@@ -5623,27 +5779,12 @@ class BridgedStaticMethodCallable implements Callable {
     Map<String, Object?> namedArguments = const {},
     List<RuntimeType>? typeArguments,
   ]) {
-    try {
-      // Call the adapter with the visitor and arguments
-      return _adapter(visitor, positionalArguments, namedArguments);
-    } on ExecutionLimitException {
-      rethrow;
-    } on ExecutionTimeoutException {
-      rethrow;
-    } on ArgumentError catch (e) {
-      // Convert native ArgumentError to RuntimeError
-      throw RuntimeError(
-        "Invalid arguments for bridged static method '${_bridgedClass.name}.$_methodName': ${e.message}",
-      );
-    } catch (e, s) {
-      // Handle other native errors
-      Logger.error(
-        "[BridgedStaticMethodCallable] Native exception during call to '${_bridgedClass.name}.$_methodName': $e\n$s",
-      );
-      throw RuntimeError(
-        "Native error in bridged static method '${_bridgedClass.name}.$_methodName': $e",
-      );
-    }
+    return invokeBridgedFunction(
+      visitor,
+      _adapter,
+      positionalArguments,
+      namedArguments,
+    );
   }
 
   @override
@@ -5675,24 +5816,12 @@ class BridgedEnumStaticMethodCallable implements Callable {
     Map<String, Object?> namedArguments = const {},
     List<RuntimeType>? typeArguments,
   ]) {
-    try {
-      return _adapter(visitor, positionalArguments, namedArguments);
-    } on ExecutionLimitException {
-      rethrow;
-    } on ExecutionTimeoutException {
-      rethrow;
-    } on ArgumentError catch (e) {
-      throw RuntimeError(
-        "Invalid arguments for bridged enum static method '${_bridgedEnum.name}.$_methodName': ${e.message}",
-      );
-    } catch (e, s) {
-      Logger.error(
-        "Native exception during bridged enum static method '${_bridgedEnum.name}.$_methodName': $e\n$s",
-      );
-      throw RuntimeError(
-        "Native error during bridged enum static method '${_bridgedEnum.name}.$_methodName': $e",
-      );
-    }
+    return invokeBridgedFunction(
+      visitor,
+      _adapter,
+      positionalArguments,
+      namedArguments,
+    );
   }
 
   @override
@@ -5871,7 +6000,7 @@ class InterpretedExtensionMethod implements Callable {
           "Cannot execute empty body for extension method '${declaration.name.lexeme}'.",
         );
       } else {
-        throw UnimplementedError(
+        throw InterpreterUnsupportedError(
           'Function body type not handled in extension method: ${body.runtimeType}',
         );
       }

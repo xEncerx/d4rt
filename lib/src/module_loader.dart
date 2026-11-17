@@ -4,6 +4,7 @@ import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:d4rt/d4rt.dart';
 import 'package:d4rt/src/analysis_metadata.dart';
+import 'package:d4rt/src/exceptions.dart' show InterpreterPolicyError;
 import 'package:d4rt/src/invocation_deadline.dart';
 import 'package:d4rt/src/invocation_steps.dart';
 import 'package:d4rt/src/stdlib/collection.dart';
@@ -107,14 +108,14 @@ class ModuleLoader {
             'pathAgnostic': true,
           }) ??
           false)) {
-        throw RuntimeError(
+        throw InterpreterPolicyError(
           'Access to dart:io requires FilesystemPermission. '
           'Use d4rt.grant(FilesystemPermission.any) to allow filesystem access.',
         );
       }
     } else if (uri.path == 'isolate') {
       if (!(d4rt?.checkPermission({'type': 'isolate'}) ?? false)) {
-        throw RuntimeError(
+        throw InterpreterPolicyError(
           'Access to dart:isolate requires IsolatePermission. '
           'Use d4rt.grant(IsolatePermission.any) to allow isolate operations.',
         );
@@ -125,7 +126,7 @@ class ModuleLoader {
             'operation': 'developer tools',
           }) ??
           false)) {
-        throw RuntimeError(
+        throw InterpreterPolicyError(
           'Access to dart:developer requires '
           'DangerousPermission.developerTools.',
         );
@@ -294,7 +295,7 @@ class ModuleLoader {
       'path': filePath,
       'read': true,
     })) {
-      throw RuntimeError(
+      throw InterpreterPolicyError(
         'Reading module source from "$filePath" requires FilesystemPermission.',
       );
     }
