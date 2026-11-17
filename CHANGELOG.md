@@ -3,6 +3,7 @@
 ### Fixed
 - Preserve native exception types, values, and stack traces through interpreted catches and rethrows.
 - Generate sealed class bridges without invalid generative constructor calls while retaining factory constructors.
+- Generate native class predicates so typed catches recognize bridged exceptions and their subclasses.
 
 ## 0.5.0
 

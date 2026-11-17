@@ -46,6 +46,9 @@ class CodeEmitter {
     buffer.writeln('final ${_bridgeVarName(cls.name)} = BridgedClass(');
     buffer.writeln("$indent name: '${cls.name}',");
     buffer.writeln('$indent nativeType: ${cls.nativeType},');
+    buffer.writeln(
+      '$indent isSubtypeOfFunc: (value) => value is ${cls.nativeType},',
+    );
     final constantConstructors = cls.constructors
         .where((constructor) => constructor.isConst)
         .map((constructor) => constructor.name);
@@ -899,6 +902,7 @@ class BridgeTemplates {
 final {{varName}} = BridgedClass(
   name: '{{className}}',
   nativeType: {{nativeType}},
+  isSubtypeOfFunc: (value) => value is {{nativeType}},
   constructors: {
 {{#each constructors}}
     '{{name}}': (visitor, positionalArgs, namedArgs) {
