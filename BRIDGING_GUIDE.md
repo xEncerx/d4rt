@@ -501,6 +501,29 @@ methods: {
 }
 // Script: myCounter.increment(); myCounter.increment(5);
 ```
+For generic native instance methods, use `genericMethods` instead of `methods`.
+The fifth adapter argument is the resolved `List<RuntimeType>?`; it is null
+when no type arguments were supplied. The adapter must explicitly select a
+supported compiled Dart specialization. Applied and nullable types retain
+their structure in `AppliedRuntimeType` and `NullableEnumArgument`.
+
+```dart
+genericMethods: {
+  'kind': (visitor, target, positional, named, types) {
+    if (types?.single case BridgedClass(nativeType: String)) {
+      return (target as Example).kind<String>();
+    }
+    throw ArgumentError('Unsupported type arguments');
+  },
+}
+```
+
+For a native top-level function exported only by a library, use
+`interpreter.registerLibraryFunction('package:example/api.dart', 'answer',
+(visitor, positional, named, types) => 42)`. Scripts must import that URI.
+`registertopLevelFunction` remains global; its `sourceUri` records provenance
+and does not determine visibility.
+
 
 **Special Method Names for Operators:**
 Index operators `[]` and `[]=` are bridged as instance methods with special names:

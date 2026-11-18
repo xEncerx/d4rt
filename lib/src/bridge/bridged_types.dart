@@ -78,6 +78,9 @@ class BridgedClass implements RuntimeType {
   Map<String, BridgedConstructorCallable> constructors = {};
   // Adapters for instance methods
   Map<String, BridgedMethodAdapter> methods = {};
+
+  /// Instance methods that opt in to resolved method type arguments.
+  final Map<String, BridgedGenericMethodAdapter> genericMethods;
   // Adapters for static members and getters/setters
   Map<String, BridgedStaticMethodAdapter> staticMethods = {};
   Map<String, BridgedStaticGetterAdapter> staticGetters = {};
@@ -98,10 +101,17 @@ class BridgedClass implements RuntimeType {
     this.staticGetters = const {},
     this.staticSetters = const {},
     this.methods = const {},
+    this.genericMethods = const {},
     this.getters = const {},
     this.setters = const {},
     this.isSubtypeOfFunc,
-  });
+  }) {
+    for (final name in genericMethods.keys) {
+      if (methods.containsKey(name)) {
+        throw ArgumentError('Duplicate instance method adapter: $name');
+      }
+    }
+  }
 
   @override
   bool isSubtypeOf(RuntimeType? other, {Object? value}) {
@@ -161,6 +171,14 @@ class BridgedClass implements RuntimeType {
     return methods[name];
   }
 
+  /// Binds an opt-in generic method after ordinary method lookup has failed.
+  BridgedGenericMethodCallable? bindGenericMethod(Object target, String name) {
+    final adapter = genericMethods[name];
+    return adapter == null
+        ? null
+        : BridgedGenericMethodCallable(target, adapter, name);
+  }
+
   // Finders for other adapters
   BridgedStaticMethodAdapter? findStaticMethodAdapter(String name) {
     return staticMethods[name];
@@ -210,6 +228,8 @@ class BridgedInstance<T extends Object> implements RuntimeValue {
       // Return a Callable bound to this instance and the adapter
       return BridgedMethodCallable(this, methodAdapter, name);
     }
+    final genericMethod = bridgedClass.bindGenericMethod(nativeObject, name);
+    if (genericMethod != null) return genericMethod;
 
     // This should be handled by visitors (PrefixedIdentifier, PropertyAccess)
     // for them to have access to the visitor if necessary.

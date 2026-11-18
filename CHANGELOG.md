@@ -1,6 +1,11 @@
 ## 0.5.1
 
+### Added
+- Expose resolved type arguments to opt-in native instance method adapters.
+- Export native top-level functions from an exact library URI.
+
 ### Fixed
+- Apply successive import and export show/hide combinators correctly.
 - Preserve native exception types, values, and stack traces through interpreted catches and rethrows.
 - Generate sealed class bridges without invalid generative constructor calls while retaining factory constructors.
 - Generate native class predicates so typed catches recognize bridged exceptions and their subclasses.

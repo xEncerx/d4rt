@@ -194,6 +194,7 @@ class AnalysisMetadata {
         name: name,
         methods: {
           ...value.methods.keys,
+          ...value.genericMethods.keys,
           ...value.getters.keys,
           ...value.setters.keys,
           ...value.staticMethods.keys,

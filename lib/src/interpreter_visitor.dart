@@ -1078,6 +1078,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           }
           return boundCallable;
         }
+        final genericMethod = bridgedInstance.bridgedClass.bindGenericMethod(
+          bridgedInstance.nativeObject,
+          name,
+        );
+        if (genericMethod != null) return genericMethod;
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
             "[visitSimpleIdentifier]   Bridged method '$name' not found either.",
@@ -1629,6 +1634,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           memberName,
         );
       }
+      final genericMethod = bridgedInstance.bridgedClass.bindGenericMethod(
+        bridgedInstance.nativeObject,
+        memberName,
+      );
+      if (genericMethod != null) return genericMethod;
 
       // No adapter found, try extension methods/getters
       try {
@@ -3997,22 +4007,41 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         final bridgedClass = bridgedInstance.bridgedClass;
         // Use directly methods because we need the BridgedMethodCallable
         final adapter = bridgedClass.methods[methodName];
-        if (adapter == null && methodName == 'toString') {
+        final genericMethod = adapter == null
+            ? bridgedClass.bindGenericMethod(
+                bridgedInstance.nativeObject,
+                methodName,
+              )
+            : null;
+        if (adapter == null &&
+            genericMethod == null &&
+            methodName == 'toString') {
           return bridgedInstance.nativeObject.toString();
         }
 
-        if (adapter != null) {
+        if (adapter != null || genericMethod != null) {
           final evaluationResult = _evaluateArgumentsAsync(node.argumentList);
           if (evaluationResult is AsyncSuspensionRequest) {
             return evaluationResult; // Propagate suspension
           }
           final (positionalArgs, namedArgs) =
               evaluationResult as (List<Object?>, Map<String, Object?>);
+          if (genericMethod != null) {
+            return genericMethod.call(
+              this,
+              positionalArgs,
+              namedArgs,
+              _resolveInvocationTypeArguments(
+                node.typeArguments,
+                genericMethod,
+              ),
+            );
+          }
 
           return invokeBridgedMethod(
             this,
             bridgedInstance,
-            adapter,
+            adapter!,
             methodName,
             positionalArgs,
             namedArgs,
@@ -4268,6 +4297,23 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         final methodAdapter = bridgedSuper.findInstanceMethodAdapter(
           methodName,
         );
+        final genericMethod = methodAdapter == null
+            ? bridgedSuper.bindGenericMethod(nativeSuperObject, methodName)
+            : null;
+        if (genericMethod != null) {
+          final evaluationResult = _evaluateArgumentsAsync(node.argumentList);
+          if (evaluationResult is AsyncSuspensionRequest) {
+            return evaluationResult;
+          }
+          final (positionalArgs, namedArgs) =
+              evaluationResult as (List<Object?>, Map<String, Object?>);
+          return genericMethod.call(
+            this,
+            positionalArgs,
+            namedArgs,
+            _resolveInvocationTypeArguments(node.typeArguments, genericMethod),
+          );
+        }
 
         if (methodAdapter != null) {
           // Evaluate the arguments
@@ -4310,9 +4356,10 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         List<RuntimeType>? evaluatedTypeArguments;
         final typeArgsNode = node.typeArguments;
         if (typeArgsNode != null) {
-          evaluatedTypeArguments = typeArgsNode.arguments
-              .map((typeNode) => _resolveTypeAnnotation(typeNode))
-              .toList();
+          evaluatedTypeArguments = _resolveInvocationTypeArguments(
+            typeArgsNode,
+            targetValue,
+          );
         }
 
         final extensionCallable = environment.findExtensionMember(
@@ -4403,13 +4450,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       List<RuntimeType>? evaluatedTypeArguments;
       final typeArgsNode = node.typeArguments;
       if (typeArgsNode != null) {
-        evaluatedTypeArguments = typeArgsNode.arguments
-            .map(
-              (typeNode) => callee is InterpretedClass
-                  ? resolveNativeCollectionType(typeNode, environment)
-                  : _resolveTypeAnnotation(typeNode),
-            )
-            .toList();
+        evaluatedTypeArguments = _resolveInvocationTypeArguments(
+          typeArgsNode,
+          callee,
+          collectionConstructor: true,
+        );
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
             "[MethodInvocation] Evaluated type arguments: ${describeDebugValue(evaluatedTypeArguments)}",
@@ -4549,6 +4594,24 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             methodName,
             positionalArgs,
             namedArgs,
+          );
+        }
+        final genericMethod = bridgedClass.bindGenericMethod(
+          calleeValue.nativeObject,
+          methodName,
+        );
+        if (genericMethod != null) {
+          final evaluationResult = _evaluateArgumentsAsync(node.argumentList);
+          if (evaluationResult is AsyncSuspensionRequest) {
+            return evaluationResult;
+          }
+          final (positionalArgs, namedArgs) =
+              evaluationResult as (List<Object?>, Map<String, Object?>);
+          return genericMethod.call(
+            this,
+            positionalArgs,
+            namedArgs,
+            _resolveInvocationTypeArguments(node.typeArguments, genericMethod),
           );
         }
       }
@@ -5059,6 +5122,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           propertyName,
         );
       }
+      final genericMethod = bridgedInstance.bridgedClass.bindGenericMethod(
+        bridgedInstance.nativeObject,
+        propertyName,
+      );
+      if (genericMethod != null) return genericMethod;
 
       throw RuntimeError(
         "Undefined property or method '$propertyName' on bridged instance of '${bridgedInstance.bridgedClass.name}'.",
@@ -5167,6 +5235,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           bridgedSuper.name,
         );
       }
+      final genericMethod = bridgedSuper.bindGenericMethod(
+        nativeSuperObject,
+        propertyName,
+      );
+      if (genericMethod != null) return genericMethod;
 
       // Not found
       throw RuntimeError(
@@ -10829,6 +10902,23 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   }
 
   // Add FunctionExpressionInvocation handler
+  List<RuntimeType>? _resolveInvocationTypeArguments(
+    TypeArgumentList? arguments,
+    Object? callee, {
+    bool collectionConstructor = false,
+  }) {
+    if (arguments == null) return null;
+    return arguments.arguments.map((type) {
+      if (collectionConstructor && callee is InterpretedClass) {
+        return resolveNativeCollectionType(type, environment);
+      }
+      if (callee is BridgedGenericMethodCallable) {
+        return resolveRuntimeTypeArgument(type, environment);
+      }
+      return _resolveTypeAnnotation(type);
+    }).toList();
+  }
+
   @override
   Object? visitFunctionExpressionInvocation(FunctionExpressionInvocation node) {
     return _runWithExpressionContinuation(
@@ -10858,10 +10948,11 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     // 3. Evaluate type arguments (shared logic).
     List<RuntimeType>? evaluatedTypeArguments;
     final typeArgsNode = node.typeArguments;
-    if (typeArgsNode != null) {
-      evaluatedTypeArguments = typeArgsNode.arguments
-          .map((typeNode) => _resolveTypeAnnotation(typeNode))
-          .toList();
+    if (calleeValue is! BridgedInstance) {
+      evaluatedTypeArguments = _resolveInvocationTypeArguments(
+        typeArgsNode,
+        calleeValue,
+      );
     }
 
     // 4. Check if it's actually callable (standard callable).
@@ -10887,6 +10978,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       final bridgedClass = calleeValue.bridgedClass;
       final methodAdapter = bridgedClass.methods[methodName];
       if (methodAdapter != null) {
+        _resolveInvocationTypeArguments(typeArgsNode, null);
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
             "[FuncExprInvoke] Found 'call' method on BridgedInstance ${describeDebugValue(bridgedClass)}. Invoking...",
@@ -10901,6 +10993,22 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
           namedArgs,
         );
       }
+      final genericMethod = bridgedClass.bindGenericMethod(
+        calleeValue.nativeObject,
+        methodName,
+      );
+      if (genericMethod != null) {
+        return genericMethod.call(
+          this,
+          positionalArgs,
+          namedArgs,
+          _resolveInvocationTypeArguments(typeArgsNode, genericMethod),
+        );
+      }
+      evaluatedTypeArguments = _resolveInvocationTypeArguments(
+        typeArgsNode,
+        null,
+      );
     }
 
     // Check if it's an InterpretedInstance with a 'call' method
@@ -11123,6 +11231,12 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
         node.typeArguments!.arguments
             .map((type) => resolveRuntimeTypeArgument(type, environment))
             .toList(),
+      );
+    }
+    if (function is BridgedGenericMethodCallable &&
+        node.typeArguments != null) {
+      return function.bindTypeArguments(
+        _resolveInvocationTypeArguments(node.typeArguments, function)!,
       );
     }
     return function;
@@ -12971,37 +13085,19 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       );
     }
 
-    // Extract the show/hide combinators from the import directive
-    Set<String>? showNames;
-    Set<String>? hideNames;
-
-    for (final combinator in node.combinators) {
-      if (combinator is ShowCombinator) {
-        showNames ??= {};
-        showNames.addAll(combinator.shownNames.map((id) => id.name));
-        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-          Logger.debug(
-            "[visitImportDirective] Combinator: show ${combinator.shownNames.map((id) => id.name).join(', ')}",
-          );
-        }
-      } else if (combinator is HideCombinator) {
-        hideNames ??= {};
-        hideNames.addAll(combinator.hiddenNames.map((id) => id.name));
-        if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
-          Logger.debug(
-            "[visitImportDirective] Combinator: hide ${combinator.hiddenNames.map((id) => id.name).join(', ')}",
-          );
-        }
-      }
-    }
+    final combinators = moduleLoader.extractCombinators(
+      node,
+      directiveType: 'Import',
+      ownerUri: currentLibrary ?? resolvedUri,
+    );
 
     moduleLoader.applyImportedEnvironment(
       environment,
       loadedModule,
       ownerUri: currentLibrary ?? resolvedUri,
       resolvedImportUri: resolvedUri,
-      showNames: showNames,
-      hideNames: hideNames,
+      showNames: combinators.showNames,
+      hideNames: combinators.hideNames,
       prefix: prefixName,
       localNames: _localDeclarationNames,
     );

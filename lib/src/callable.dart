@@ -3997,6 +3997,14 @@ class InterpretedFunction implements Callable {
 
               futureResult = boundCallable;
             }
+            if (methodAdapter == null) {
+              final genericMethod = bridgedInstance.bridgedClass
+                  .bindGenericMethod(
+                    bridgedInstance.nativeObject,
+                    propertyName,
+                  );
+              if (genericMethod != null) futureResult = genericMethod;
+            }
           }
         }
       }
@@ -4168,6 +4176,14 @@ class InterpretedFunction implements Callable {
                 );
 
                 resolvedRhs = boundCallable;
+              }
+              if (methodAdapter == null) {
+                final genericMethod = bridgedInstance.bridgedClass
+                    .bindGenericMethod(
+                      bridgedInstance.nativeObject,
+                      propertyName,
+                    );
+                if (genericMethod != null) resolvedRhs = genericMethod;
               }
             }
           }
@@ -5702,6 +5718,65 @@ Object? invokeBridgedMethod(
     visitor.environment,
     positionalArguments,
   );
+}
+
+/// A bound native instance method that receives resolved method type arguments.
+class BridgedGenericMethodCallable implements Callable {
+  final Object target;
+  final BridgedGenericMethodAdapter adapter;
+  final String methodName;
+  final List<RuntimeType>? boundTypeArguments;
+
+  BridgedGenericMethodCallable(
+    this.target,
+    this.adapter,
+    this.methodName, [
+    List<RuntimeType>? boundTypeArguments,
+  ]) : boundTypeArguments = boundTypeArguments == null
+           ? null
+           : List.unmodifiable(boundTypeArguments);
+
+  BridgedGenericMethodCallable bindTypeArguments(List<RuntimeType> types) =>
+      BridgedGenericMethodCallable(target, adapter, methodName, types);
+
+  @override
+  RuntimeType get callableRuntimeType => FunctionRuntimeType.untyped();
+
+  @override
+  int get arity => 0;
+
+  @override
+  Object? call(
+    InterpreterVisitor visitor,
+    List<Object?> positionalArguments, [
+    Map<String, Object?> namedArguments = const {},
+    List<RuntimeType>? typeArguments,
+  ]) {
+    if (InterpreterVisitor.currentCollectionVisitor == null) {
+      return visitor.runCollectionInvocation(
+        () => call(visitor, positionalArguments, namedArguments, typeArguments),
+      );
+    }
+    Object? result;
+    try {
+      result = adapter(
+        visitor,
+        target,
+        positionalArguments,
+        namedArguments,
+        boundTypeArguments ?? typeArguments,
+      );
+    } catch (error, stack) {
+      _throwBridgedFailure(error, stack);
+    }
+    return retainCollectionOperationResult(
+      result,
+      target,
+      methodName,
+      visitor.environment,
+      positionalArguments,
+    );
+  }
 }
 
 // Represents a bridged instance method that has been bound to a specific instance.

@@ -68,6 +68,15 @@ class D4rt {
   /// Returns null if no execution is currently in progress.
   InterpreterVisitor? get visitor => _visitor;
   final List<NativeFunction> _nativeFunctions = [];
+  final Map<String, Map<String, NativeFunction>> _libraryFunctions = {};
+
+  void _checkScopedName(String library, String name) {
+    if ((_libraryFunctions[library]?.containsKey(name) ?? false) ||
+        _bridgedClases.any((entry) => entry[library]?.name == name) ||
+        _bridgedEnumDefinitions.any((entry) => entry[library]?.name == name)) {
+      throw ArgumentError('Duplicate library declaration: $library#$name');
+    }
+  }
 
   late ModuleLoader _moduleLoader;
   bool _hasExecutedOnce = false;
@@ -106,6 +115,11 @@ class D4rt {
     String library, {
     String? sourceUri,
   }) {
+    if (_libraryFunctions[library]?.containsKey(definition.name) ?? false) {
+      throw ArgumentError(
+        'Duplicate library declaration: $library#${definition.name}',
+      );
+    }
     _bridgedEnumDefinitions.add({library: definition});
     bridgeManager.registerEnum(definition, library, sourceUri: sourceUri);
   }
@@ -127,6 +141,16 @@ class D4rt {
     String library, {
     String? sourceUri,
   }) {
+    if (_libraryFunctions[library]?.containsKey(definition.name) ?? false) {
+      throw ArgumentError(
+        'Duplicate library declaration: $library#${definition.name}',
+      );
+    }
+    for (final name in definition.genericMethods.keys) {
+      if (definition.methods.containsKey(name)) {
+        throw ArgumentError('Duplicate instance method adapter: $name');
+      }
+    }
     _bridgedClases.add({library: definition});
     _bridgedDefLookupByType[definition.nativeType] = definition;
     bridgeManager.registerClass(definition, library, sourceUri: sourceUri);
@@ -159,6 +183,28 @@ class D4rt {
     }
   }
 
+  /// Exports a native function from the exact [libraryUri], not the globals.
+  /// [sourceUri] is optional registration provenance, not an import scope.
+  void registerLibraryFunction(
+    String libraryUri,
+    String name,
+    NativeFunctionImpl function, {
+    String? sourceUri,
+    String? signature,
+  }) {
+    final origin = SourceOrigin.fromUri(sourceUri ?? libraryUri, name);
+    _checkScopedName(libraryUri, name);
+    final callable = NativeFunction(function, name: name, arity: 0);
+    bridgeManager.registry.addLibraryFunction(
+      name,
+      function,
+      libraryUri,
+      origin: origin,
+      signature: signature,
+    );
+    (_libraryFunctions[libraryUri] ??= {})[name] = callable;
+  }
+
   /// Gets the current registry statistics.
   ///
   /// Returns statistics about registered bridges, duplicates found, and deduplication efficiency.
@@ -179,6 +225,7 @@ class D4rt {
     _bridgedClases.clear();
     _bridgedDefLookupByType.clear();
     _nativeFunctions.clear();
+    _libraryFunctions.clear();
     bridgeManager.clear();
   }
 
@@ -197,6 +244,7 @@ class D4rt {
       sources ?? {},
       _bridgedEnumDefinitions,
       _bridgedClases,
+      libraryFunctions: _libraryFunctions,
       d4rt: this,
       basePath: basePath,
       allowFileSystemImports: allowFileSystemImports,

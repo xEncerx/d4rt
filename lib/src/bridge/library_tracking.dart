@@ -315,6 +315,29 @@ class LibraryRegistry {
     return true;
   }
 
+  /// Tracks a library-scoped function independently of global registrations.
+  void addLibraryFunction(
+    String name,
+    dynamic function,
+    String library, {
+    required SourceOrigin origin,
+    String? signature,
+  }) {
+    final key = '\u0000library:$library#$name';
+    if (_functions.containsKey(key)) {
+      throw ArgumentError('Duplicate library function: $library#$name');
+    }
+    final tracked = TrackedFunction(
+      name,
+      function,
+      origin: origin,
+      signature: signature,
+    );
+    tracked.addImportPath(library);
+    _functions[key] = tracked;
+    _stats._functionsRegistered++;
+  }
+
   /// Registers a variable, returning whether it was newly added.
   bool addVariable(
     String name,

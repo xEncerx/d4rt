@@ -68,6 +68,7 @@ class ModuleLoader {
   final List<Uri> _moduleLoadStack = [];
   final List<Map<String, BridgedEnumDefinition>> bridgedEnumDefinitions;
   final List<Map<String, BridgedClass>> bridgedClases;
+  final Map<String, Map<String, NativeFunction>> libraryFunctions;
   final D4rt? d4rt; // Reference to D4rt instance for permission checking
   final InvocationDeadline? deadline;
   final InvocationSteps steps;
@@ -79,6 +80,7 @@ class ModuleLoader {
     this.sources,
     this.bridgedEnumDefinitions,
     this.bridgedClases, {
+    this.libraryFunctions = const {},
     this.d4rt,
     this.basePath,
     this.allowFileSystemImports = false,
@@ -220,7 +222,7 @@ class ModuleLoader {
     );
   }
 
-  ({Set<String>? showNames, Set<String>? hideNames}) _extractCombinators(
+  ({Set<String>? showNames, Set<String>? hideNames}) extractCombinators(
     NamespaceDirective directive, {
     required String directiveType,
     required Uri ownerUri,
@@ -230,8 +232,8 @@ class ModuleLoader {
 
     for (final combinator in directive.combinators) {
       if (combinator is ShowCombinator) {
-        showNames ??= {};
-        showNames.addAll(combinator.shownNames.map((id) => id.name));
+        final names = combinator.shownNames.map((id) => id.name).toSet();
+        showNames = showNames == null ? names : showNames.intersection(names);
         if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
           Logger.debug(
             "[ModuleLoader loadModule for ${describeDebugValue(ownerUri)}]   $directiveType combinator: show ${combinator.shownNames.map((id) => id.name).join(', ')}",
@@ -246,6 +248,10 @@ class ModuleLoader {
           );
         }
       }
+    }
+    if (showNames != null && hideNames != null) {
+      showNames.removeAll(hideNames);
+      hideNames = null;
     }
 
     return (showNames: showNames, hideNames: hideNames);
@@ -429,7 +435,7 @@ class ModuleLoader {
           final importedModule = loadModule(resolvedImportUri);
           final prefix = directive.prefix?.name;
 
-          final combinators = _extractCombinators(
+          final combinators = extractCombinators(
             directive,
             directiveType: 'Import',
             ownerUri: uri,
@@ -614,7 +620,7 @@ class ModuleLoader {
             }
             LoadedModule subModule = loadModule(resolvedExportUri);
 
-            final combinators = _extractCombinators(
+            final combinators = extractCombinators(
               directive,
               directiveType: 'Export',
               ownerUri: uri,
@@ -801,6 +807,20 @@ class ModuleLoader {
         final bridgedEnum = definition.buildBridgedEnum(environment: namespace);
         namespace.defineBridgedEnum(bridgedEnum);
         globalEnvironment.registerBridgedEnumDiscovery(bridgedEnum);
+      }
+    }
+    final functions = libraryFunctions[uriString];
+    if (functions != null) {
+      registered = true;
+      for (final entry in functions.entries) {
+        if (_metadataOnly) {
+          namespace.define(
+            entry.key,
+            AnalysisMetadata.describeBinding(entry.key, entry.value),
+          );
+        } else {
+          namespace.defineFunction(entry.key, entry.value);
+        }
       }
     }
     if (registered) return '';

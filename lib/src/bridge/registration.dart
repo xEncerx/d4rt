@@ -30,6 +30,17 @@ typedef BridgedMethodAdapter =
       Map<String, Object?> namedArguments, // Interpretted arguments
     );
 
+/// A native instance method adapter receiving explicitly supplied type arguments.
+/// [typeArguments] is null when the call omits them.
+typedef BridgedGenericMethodAdapter =
+    Object? Function(
+      InterpreterVisitor visitor,
+      Object target,
+      List<Object?> positionalArguments,
+      Map<String, Object?> namedArguments,
+      List<RuntimeType>? typeArguments,
+    );
+
 /// Adapter for bridged static methods.
 /// Takes interpreter context, positional args, named args.
 /// Returns the result of the native static method call.

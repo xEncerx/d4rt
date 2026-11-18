@@ -584,6 +584,29 @@ void main() {
   print(result); // 42
 }
 ```
+For native generic instance methods, `BridgedClass.genericMethods` adapters
+receive a fifth `List<RuntimeType>?` argument. It is null when type arguments
+are omitted; the adapter selects the supported compiled specialization.
+Ordinary `methods` adapters retain their four arguments.
+
+To export a native function from a library rather than globally:
+
+```dart
+final interpreter = D4rt();
+interpreter.registerLibraryFunction(
+  'package:example/api.dart', 'answer',
+  (visitor, positional, named, types) => 42,
+);
+final result = interpreter.execute(source: '''
+  import 'package:example/api.dart';
+  main() => answer();
+''');
+print(result); // 42
+```
+
+`registertopLevelFunction` remains global; its `sourceUri` describes origin,
+not library visibility.
+
 
 #### Bridge a Dart Enum (Manual)
 

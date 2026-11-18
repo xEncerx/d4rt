@@ -1395,6 +1395,11 @@ class InterpretedInstance implements RuntimeValue {
             bridgedSuper.name,
           );
         }
+        final genericMethod = bridgedSuper.bindGenericMethod(
+          nativeTarget,
+          name,
+        );
+        if (genericMethod != null) return genericMethod;
       }
 
       // Move up to the superclass
