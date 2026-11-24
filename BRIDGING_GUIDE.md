@@ -556,6 +556,12 @@ Index operators `[]` and `[]=` are bridged as instance methods with special name
 
 If your native methods return a `Future`, d4rt can handle them correctly, allowing you to use `await` in your scripts. The bridge adapter simply returns the `Future` instance.
 
+Pass a native `Future` unchanged when it is an argument: interpreted code can
+choose when to await it. Native callback failures and uncaught native errors
+retain their error object and stack contents at the host boundary. A timeout
+configured on execution also applies to subsequent invocations using that
+execution context; it does not cancel native work already started.
+
 ```dart
 // Native Class
 class AsyncService {
@@ -679,7 +685,9 @@ If a native bridged method (synchronous or asynchronous) returns an instance of 
 ```
 
 #### State Management and Native Errors
-If your native class methods can throw exceptions (e.g., `StateError` if an object is used after being disposed), these exceptions will typically be caught by the d4rt bridge layer and re-thrown as a `RuntimeError` within the script, often containing the original error's message.
+Native exceptions remain catchable by their native type. Uncaught native
+exceptions reach the host as the original error; interpreter runtime and
+execution-limit failures remain distinct.
 
 ```dart
 // Native:
@@ -692,7 +700,7 @@ If your native class methods can throw exceptions (e.g., `StateError` if an obje
 // try {
 //   print(c.value); 
 // } catch (e) {
-//   print('Error: \$e'); // Error: RuntimeError: Unexpected error: Bad state: Instance disposed
+//   print('Error: \$e'); // Error: Bad state: Instance disposed
 // }
 ```
 
@@ -934,7 +942,7 @@ This feature is essential for creating robust bridges that work with the full ec
     -   Thoroughly validate argument counts and types in your adapter functions. Throw `ArgumentError` for mismatches.
     -   Handle potential `null` values for arguments carefully.
     -   Ensure your adapters correctly map script types to native types and vice-versa.
--   **Error Handling:** Native methods called by adapters might throw exceptions. While d4rt often wraps these in `RuntimeError`, consider if specific error handling or type conversion is needed within the adapter itself for clarity in the script.
+-   **Error Handling:** Preserve native errors when forwarding failures from adapters; use `RuntimeError` for interpreter failures rather than replacing native exceptions.
 -   **Keep Adapters Lean:** Adapters should primarily focus on the "bridging" aspect (type conversion, argument forwarding). Avoid putting complex business logic directly into adapter functions; keep that in your native classes.
 -   **Documentation:** Document your bridged APIs (available methods, properties, constructor arguments) for script writers.
 -   **Testing:** Thoroughly test your bridges with various valid and invalid inputs from the script side to ensure they behave as expected.

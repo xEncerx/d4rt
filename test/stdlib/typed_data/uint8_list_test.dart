@@ -106,11 +106,20 @@ void main() {
     test('Index out of bounds for Uint8List[] and []=', () {
       expect(
         () => executeTestScript("var list = Uint8List(2); list[2] = 0;"),
-        throwsA(isA<RuntimeError>()),
+        throwsA(
+          isA<IndexError>()
+              .having((error) => error.invalidValue, 'index', 2)
+              .having((error) => error.length, 'length', 2),
+        ),
       );
       expect(
         () => executeTestScript("var list = Uint8List(2); return list[-1];"),
-        throwsA(isA<RuntimeError>()),
+        throwsA(
+          isA<RangeError>()
+              .having((error) => error.invalidValue, 'index', -1)
+              .having((error) => error.start, 'start', 0)
+              .having((error) => error.end, 'end', 1),
+        ),
       );
     });
   });

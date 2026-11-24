@@ -1,6 +1,21 @@
 import 'dart:async';
 import 'package:d4rt/d4rt.dart';
 
+Object? _invokeErrorCallback(
+  InterpretedFunction callback,
+  Object error,
+  StackTrace stack,
+) {
+  final signature = callback.callableRuntimeType;
+  final takesStack =
+      signature is FunctionRuntimeType &&
+      signature.positionalParameterTypes.length > 1;
+  return InterpreterVisitor.invokeCallback(
+    callback,
+    takesStack ? [error, stack] : [error],
+  );
+}
+
 class FutureAsync {
   static BridgedClass get definition => BridgedClass(
     nativeType: Future,
@@ -12,7 +27,9 @@ class FutureAsync {
         if (positionalArgs.length == 1 &&
             positionalArgs[0] is InterpretedFunction) {
           final computation = positionalArgs[0] as InterpretedFunction;
-          return Future(() => computation.call(visitor, []));
+          return Future(
+            () => InterpreterVisitor.invokeCallback(computation, []),
+          );
         }
         throw RuntimeError('Invalid arguments for Future constructor.');
       },
@@ -23,7 +40,9 @@ class FutureAsync {
         final computation = positionalArgs.get<InterpretedFunction?>(1);
         return Future.delayed(
           duration,
-          computation == null ? null : () => computation.call(visitor, []),
+          computation == null
+              ? null
+              : () => InterpreterVisitor.invokeCallback(computation, []),
         );
       },
       'value': (visitor, positionalArgs, namedArgs) {
@@ -42,14 +61,18 @@ class FutureAsync {
         if (computation is! InterpretedFunction) {
           throw RuntimeError('Future.microtask requires an Function.');
         }
-        return Future.microtask(() => computation.call(visitor, []));
+        return Future.microtask(
+          () => InterpreterVisitor.invokeCallback(computation, []),
+        );
       },
       'sync': (visitor, positionalArgs, namedArgs) {
         final computation = positionalArgs[0];
         if (computation is! InterpretedFunction) {
           throw RuntimeError('Future.sync requires an Function.');
         }
-        return Future.sync(() => computation.call(visitor, []));
+        return Future.sync(
+          () => InterpreterVisitor.invokeCallback(computation, []),
+        );
       },
       'wait': (visitor, positionalArgs, namedArgs) {
         final futures = positionalArgs[0];
@@ -66,7 +89,8 @@ class FutureAsync {
           eagerError: eagerError,
           cleanUp: cleanUp == null
               ? null
-              : (successValue) => cleanUp.call(visitor, [successValue]),
+              : (successValue) =>
+                    InterpreterVisitor.invokeCallback(cleanUp, [successValue]),
         );
       },
       'any': (visitor, positionalArgs, namedArgs) {
@@ -87,7 +111,9 @@ class FutureAsync {
         }
         return Future.forEach(
           elements,
-          (element) => action.call(visitor, [element]) as FutureOr<void>,
+          (element) =>
+              InterpreterVisitor.invokeCallback(action, [element])
+                  as FutureOr<void>,
         );
       },
       'doWhile': (visitor, positionalArgs, namedArgs) {
@@ -97,7 +123,7 @@ class FutureAsync {
         }
         // Handle both sync and async functions properly
         return Future.doWhile(() {
-          final result = action.call(visitor, []);
+          final result = InterpreterVisitor.invokeCallback(action, []);
           if (result is Future) {
             // Async function returns Future - ensure it resolves to bool
             return result.then((value) => value as bool);
@@ -116,11 +142,11 @@ class FutureAsync {
           throw RuntimeError('Future.then requires an Function for onValue.');
         }
         return (target as Future).then(
-          (value) => onValue.call(visitor, [value]),
+          (value) => InterpreterVisitor.invokeCallback(onValue, [value]),
           onError: onError == null
               ? null
               : (error, stackTrace) =>
-                    onError.call(visitor, [error, stackTrace]),
+                    _invokeErrorCallback(onError, error, stackTrace),
         );
       },
       'catchError': (visitor, target, positionalArgs, namedArgs) {
@@ -132,10 +158,12 @@ class FutureAsync {
           );
         }
         return (target as Future).catchError(
-          (error, stackTrace) => onError.call(visitor, [error, stackTrace]),
+          (error, stackTrace) =>
+              _invokeErrorCallback(onError, error, stackTrace),
           test: test == null
               ? null
-              : (error) => test.call(visitor, [error]) as bool,
+              : (error) =>
+                    InterpreterVisitor.invokeCallback(test, [error]) as bool,
         );
       },
       'whenComplete': (visitor, target, positionalArgs, namedArgs) {
@@ -145,7 +173,9 @@ class FutureAsync {
             'Future.whenComplete requires an Function for action.',
           );
         }
-        return (target as Future).whenComplete(() => action.call(visitor, []));
+        return (target as Future).whenComplete(
+          () => InterpreterVisitor.invokeCallback(action, []),
+        );
       },
       'timeout': (visitor, target, positionalArgs, namedArgs) {
         final timeLimit = positionalArgs[0] as Duration;
@@ -154,7 +184,7 @@ class FutureAsync {
           timeLimit,
           onTimeout: onTimeout == null
               ? null
-              : () => onTimeout.call(visitor, []),
+              : () => InterpreterVisitor.invokeCallback(onTimeout, []),
         );
       },
       'asStream': (visitor, target, positionalArgs, namedArgs) {
@@ -170,10 +200,12 @@ class FutureAsync {
           );
         }
         return (target as Future).catchError(
-          (error, stackTrace) => handleError.call(visitor, [error, stackTrace]),
+          (error, stackTrace) =>
+              _invokeErrorCallback(handleError, error, stackTrace),
           test: test == null
               ? null
-              : (error) => test.call(visitor, [error]) as bool,
+              : (error) =>
+                    InterpreterVisitor.invokeCallback(test, [error]) as bool,
         );
       },
       'ignore': (visitor, target, positionalArgs, namedArgs) {

@@ -4,8 +4,8 @@ import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:d4rt/src/analysis_metadata.dart';
 import 'package:d4rt/src/bridge/bridge_registry_manager.dart';
-import 'package:d4rt/src/bridge/bridged_enum.dart';
 import 'package:d4rt/src/bridge/bridged_types.dart';
+import 'package:d4rt/src/bridge/native_value.dart';
 import 'package:d4rt/src/bridge/library_tracking.dart';
 import 'package:d4rt/src/bridge/registration.dart';
 import 'package:d4rt/src/callable.dart';
@@ -171,7 +171,9 @@ class D4rt {
     String? sourceUri,
     String? signature,
   }) {
-    _nativeFunctions.add(NativeFunction(function, name: name, arity: 0));
+    _nativeFunctions.add(
+      NativeFunction(adaptRegisteredNative(function), name: name, arity: 0),
+    );
     if (name != null) {
       bridgeManager.registerFunction(
         name,
@@ -194,7 +196,11 @@ class D4rt {
   }) {
     final origin = SourceOrigin.fromUri(sourceUri ?? libraryUri, name);
     _checkScopedName(libraryUri, name);
-    final callable = NativeFunction(function, name: name, arity: 0);
+    final callable = NativeFunction(
+      adaptRegisteredNative(function),
+      name: name,
+      arity: 0,
+    );
     bridgeManager.registry.addLibraryFunction(
       name,
       function,
@@ -819,16 +825,15 @@ class D4rt {
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
         Logger.debug(" [execute] Finished processing declarations");
       }
-    } on InternalInterpreterException catch (e) {
+    } on InternalInterpreterException catch (e, stack) {
       if (deadline?.expired ?? false) throw deadline!.exception;
-      if (e.origin != ExceptionOrigin.interpreted) {
-        throw RuntimeError('Unexpected error: ${e.originalThrownValue}');
+      if (e.originalThrownValue != null) {
+        Error.throwWithStackTrace(
+          _bridgeInterpreterValueToNative(e.originalThrownValue)!,
+          e.stackTrace ?? stack,
+        );
       }
-      if (e.originalThrownValue is RuntimeError) {
-        throw e.originalThrownValue as RuntimeError;
-      } else {
-        throw e.originalThrownValue!;
-      }
+      rethrow;
     } catch (e) {
       if (deadline?.expired ?? false) throw deadline!.exception;
       if (e is RuntimeError || e is SourceCodeException) {
@@ -904,16 +909,15 @@ class D4rt {
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
         Logger.debug(" [execute] Finished Pass 2: Interpretation");
       }
-    } on InternalInterpreterException catch (e) {
+    } on InternalInterpreterException catch (e, stack) {
       if (deadline?.expired ?? false) throw deadline!.exception;
-      if (e.origin != ExceptionOrigin.interpreted) {
-        throw RuntimeError('Unexpected error: ${e.originalThrownValue}');
+      if (e.originalThrownValue != null) {
+        Error.throwWithStackTrace(
+          _bridgeInterpreterValueToNative(e.originalThrownValue)!,
+          e.stackTrace ?? stack,
+        );
       }
-      if (e.originalThrownValue is RuntimeError) {
-        throw e.originalThrownValue as RuntimeError;
-      } else {
-        throw e.originalThrownValue!;
-      }
+      rethrow;
     } catch (e) {
       if (deadline?.expired ?? false) throw deadline!.exception;
       if (e is RuntimeError || e is SourceCodeException) {
@@ -927,33 +931,10 @@ class D4rt {
     if (functionResult is InterpretedInstance) {
       _interpretedInstance = functionResult;
     }
-    final resultValue = _bridgeInterpreterValueToNative(functionResult);
+    final resultValue = _publishHostResult(functionResult, deadline);
     if (resultValue is Future) {
       _hasExecutedOnce = true;
-      if (deadline == null) {
-        return resultValue.then(
-          (value) => _bridgeInterpreterValueToNative(value),
-        );
-      }
-      // Check the monotonic clock on completion, not just in the timer callback:
-      // a native Future can finish before an overdue timer is delivered.
-      final bridgedResult = resultValue.then(
-        (value) {
-          if (deadline.expired) throw deadline.exception;
-          return _bridgeInterpreterValueToNative(value);
-        },
-        onError: (Object error, StackTrace stackTrace) {
-          if (deadline.expired) throw deadline.exception;
-          Error.throwWithStackTrace(error, stackTrace);
-        },
-      );
-      return bridgedResult.timeout(
-        deadline.remaining,
-        onTimeout: () {
-          deadline.expire();
-          throw deadline.exception;
-        },
-      );
+      return resultValue;
     }
     if (deadline?.expired ?? false) throw deadline!.exception;
     _hasExecutedOnce = true;
@@ -1167,14 +1148,10 @@ class D4rt {
       if (evalFunc is Callable) {
         try {
           result = evalFunc.call(_visitor!, [], {});
-        } on InternalInterpreterException catch (e) {
-          if (e.origin == ExceptionOrigin.bridged) {
-            throw RuntimeError('Unexpected error: ${e.originalThrownValue}');
-          }
-          if (e.originalThrownValue is RuntimeError) {
-            throw e.originalThrownValue as RuntimeError;
-          }
-          throw e.originalThrownValue ?? e;
+        } on InternalInterpreterException catch (e, stack) {
+          final error = nativeBridgeValue(e.originalThrownValue);
+          if (error == null) rethrow;
+          Error.throwWithStackTrace(error, e.stackTrace ?? stack);
         }
       }
 
@@ -1225,14 +1202,10 @@ class D4rt {
       if (evalFunc is Callable) {
         try {
           evalFunc.call(_visitor!, [], {});
-        } on InternalInterpreterException catch (e) {
-          if (e.origin == ExceptionOrigin.bridged) {
-            throw RuntimeError('Unexpected error: ${e.originalThrownValue}');
-          }
-          if (e.originalThrownValue is RuntimeError) {
-            throw e.originalThrownValue as RuntimeError;
-          }
-          throw e.originalThrownValue ?? e;
+        } on InternalInterpreterException catch (e, stack) {
+          final error = nativeBridgeValue(e.originalThrownValue);
+          if (error == null) rethrow;
+          Error.throwWithStackTrace(error, e.stackTrace ?? stack);
         }
       }
 
@@ -1277,6 +1250,7 @@ class D4rt {
     if (_visitor == null) {
       throw RuntimeError("No visitor found. Call setVisitor first.");
     }
+    final visitor = InterpreterVisitor.currentCollectionVisitor ?? _visitor!;
     final globalEnv = _visitor!.globalEnvironment;
     final instance = _interpretedInstance!;
     final klass = instance.klass;
@@ -1298,18 +1272,11 @@ class D4rt {
           (key, value) =>
               MapEntry(key, _bridgeNativeValueToInterpreter(value, globalEnv)),
         );
-        return _tryFunction(
-          () {
-            return interpretedFunction!
-                .bind(instance)
-                .call(
-                  _visitor!,
-                  interpreterPositionalArgs,
-                  interpreterNamedArgs,
-                );
-          },
-          "Error invoking interpreted Method or getter '$name' on '${klass.name}'",
-        );
+        return _tryFunction(() {
+          return interpretedFunction!
+              .bind(instance)
+              .call(visitor, interpreterPositionalArgs, interpreterNamedArgs);
+        });
       }
 
       final bridgedSuperclass = instance is List
@@ -1339,45 +1306,36 @@ class D4rt {
           );
 
           if (methodAdapter != null) {
-            return _tryFunction(
-              () {
-                return methodAdapter.call(
-                  _visitor!,
-                  nativeSuperObject,
-                  interpreterPositionalArgs,
-                  interpreterNamedArgs,
-                );
-              },
-              "Error invoking bridged method '$name' on superclass '${bridgedSuperclass.name}'",
-            );
+            return _tryFunction(() {
+              return methodAdapter.call(
+                visitor,
+                nativeSuperObject,
+                interpreterPositionalArgs,
+                interpreterNamedArgs,
+              );
+            });
           }
 
           final getterAdapter = bridgedSuperclass.findInstanceGetterAdapter(
             name,
           );
           if (getterAdapter != null) {
-            return _tryFunction(
-              () {
-                return getterAdapter.call(_visitor!, nativeSuperObject);
-              },
-              "Error invoking bridged getter '$name' on superclass '${bridgedSuperclass.name}'",
-            );
+            return _tryFunction(() {
+              return getterAdapter.call(visitor, nativeSuperObject);
+            });
           }
           final setterAdapter = bridgedSuperclass.findInstanceSetterAdapter(
             name,
           );
           if (setterAdapter != null) {
-            return _tryFunction(
-              () {
-                setterAdapter.call(
-                  _visitor!,
-                  nativeSuperObject,
-                  interpreterPositionalArgs[0],
-                );
-                return null;
-              },
-              "Error invoking bridged setter '$name' on superclass '${bridgedSuperclass.name}'",
-            );
+            return _tryFunction(() {
+              setterAdapter.call(
+                visitor,
+                nativeSuperObject,
+                interpreterPositionalArgs[0],
+              );
+              return null;
+            });
           }
         }
 
@@ -1385,41 +1343,32 @@ class D4rt {
           name,
         );
         if (staticMethodAdapter != null) {
-          return _tryFunction(
-            () {
-              return staticMethodAdapter.call(
-                _visitor!,
-                interpreterPositionalArgs,
-                interpreterNamedArgs,
-              );
-            },
-            "Error invoking bridged static method '$name' on superclass '${bridgedSuperclass.name}'",
-          );
+          return _tryFunction(() {
+            return staticMethodAdapter.call(
+              visitor,
+              interpreterPositionalArgs,
+              interpreterNamedArgs,
+            );
+          });
         }
 
         final getterStaticAdapter = bridgedSuperclass.findStaticGetterAdapter(
           name,
         );
         if (getterStaticAdapter != null) {
-          return _tryFunction(
-            () {
-              return getterStaticAdapter.call(_visitor!);
-            },
-            "Error invoking bridged static getter '$name' on superclass '${bridgedSuperclass.name}'",
-          );
+          return _tryFunction(() {
+            return getterStaticAdapter.call(visitor);
+          });
         }
 
         final staticSetterAdapter = bridgedSuperclass.findStaticSetterAdapter(
           name,
         );
         if (staticSetterAdapter != null) {
-          return _tryFunction(
-            () {
-              staticSetterAdapter.call(_visitor!, interpreterPositionalArgs[0]);
-              return null;
-            },
-            "Error invoking bridged staticsetter '$name' on superclass '${bridgedSuperclass.name}'",
-          );
+          return _tryFunction(() {
+            staticSetterAdapter.call(visitor, interpreterPositionalArgs[0]);
+            return null;
+          });
         }
       }
 
@@ -1428,7 +1377,9 @@ class D4rt {
       );
     }
 
-    return result();
+    return InterpreterVisitor.currentCollectionVisitor == null
+        ? visitor.runCollectionInvocation(result)
+        : result();
   }
 
   Object? _bridgeNativeValueToInterpreter(
@@ -1500,41 +1451,64 @@ class D4rt {
         interpreterNamedArgs,
         typeArguments,
       ),
-      "Error invoking interpreted function '$f'",
     );
   }
 
-  Object? _bridgeInterpreterValueToNative(Object? interpreterValue) {
-    if (interpreterValue is BridgedInstance) {
-      return interpreterValue.nativeObject;
+  Object? _bridgeInterpreterValueToNative(Object? value) =>
+      nativeBridgeValue(value);
+
+  Object? _publishHostResult(Object? value, InvocationDeadline? deadline) {
+    final result = _bridgeInterpreterValueToNative(value);
+    if (result is! Future) {
+      if (deadline?.expired ?? false) throw deadline!.exception;
+      return result;
     }
-    if (interpreterValue is BridgedEnumValue) {
-      return interpreterValue.nativeValue;
-    }
-    // Collections cross this boundary intact. A serializer or other native
-    // consumer must enforce its own limits before traversing their contents.
-    return interpreterValue;
+    final published = result.then(
+      (value) {
+        if (deadline?.expired ?? false) throw deadline!.exception;
+        return _bridgeInterpreterValueToNative(value);
+      },
+      onError: (Object error, StackTrace stack) {
+        if (deadline?.expired ?? false) throw deadline!.exception;
+        if (error is InternalInterpreterException &&
+            error.originalThrownValue != null) {
+          Error.throwWithStackTrace(
+            _bridgeInterpreterValueToNative(error.originalThrownValue)!,
+            error.stackTrace ?? stack,
+          );
+        }
+        Error.throwWithStackTrace(nativeBridgeValue(error)!, stack);
+      },
+    );
+    if (deadline == null) return published;
+    return published.timeout(
+      deadline.remaining,
+      onTimeout: () {
+        deadline.expire();
+        throw deadline.exception;
+      },
+    );
   }
 
-  dynamic _tryFunction(dynamic Function() fn, String error) {
+  dynamic _tryFunction(dynamic Function() fn) {
+    final visitor = InterpreterVisitor.currentCollectionVisitor ?? _visitor!;
     try {
-      final result = fn.call();
-      if (result is Future) {
-        return result.then((value) => _bridgeInterpreterValueToNative(value));
+      visitor.checkDeadline();
+      return _publishHostResult(fn(), visitor.deadline);
+    } on ReturnException catch (e) {
+      return _publishHostResult(e.value, visitor.deadline);
+    } on InternalInterpreterException catch (e, stack) {
+      if (visitor.deadline?.expired ?? false) throw visitor.deadline!.exception;
+      if (e.originalThrownValue != null) {
+        Error.throwWithStackTrace(
+          _bridgeInterpreterValueToNative(e.originalThrownValue)!,
+          e.stackTrace ?? stack,
+        );
       }
-      return _bridgeInterpreterValueToNative(result);
-    } catch (e) {
-      if (e is ReturnException) {
-        return _bridgeInterpreterValueToNative(e.value);
-      }
-      if (e is InternalInterpreterException &&
-          e.origin != ExceptionOrigin.interpreted) {
-        throw "$error : ${e.originalThrownValue}";
-      }
-      if (e is InternalInterpreterException && e.originalThrownValue != null) {
-        throw e.originalThrownValue!;
-      }
-      throw "$error : $e";
+      rethrow;
+    } catch (_) {
+      if (visitor.deadline?.expired ?? false) throw visitor.deadline!.exception;
+      rethrow;
     }
   }
 }

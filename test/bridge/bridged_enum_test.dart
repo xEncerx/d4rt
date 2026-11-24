@@ -332,7 +332,7 @@ void main() {
        ''';
       expect(
         () => interpreter.execute(source: code),
-        throwsA(isA<RuntimeError>()),
+        throwsA(isA<ArgumentError>()),
       );
     });
   });

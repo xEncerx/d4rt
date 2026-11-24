@@ -606,6 +606,9 @@ class TransformPipeline {
     ConstructorMetadata meta,
     ClassMetadata classMeta,
   ) {
+    if (meta.name.startsWith('_') && !config.includePrivateMembers) {
+      return null;
+    }
     if (classMeta.isAbstract && !meta.isFactory) {
       return null;
     }
@@ -1051,7 +1054,10 @@ class TransformPipeline {
     final returnType = normalizedType.substring(0, functionIndex).trim();
     final isAsync = returnType.startsWith('Future');
     final asyncKw = isAsync ? 'async ' : '';
-    final awaitKw = isAsync ? 'await ' : '';
+    final castType =
+        isAsync && returnType.startsWith('Future<') && returnType.endsWith('>')
+        ? returnType.substring(7, returnType.length - 1)
+        : returnType;
 
     // For Function with parameters (e.g., "bool Function(int)", "T Function(int, String)")
     final openParen = normalizedType.indexOf('(');
@@ -1064,13 +1070,13 @@ class TransformPipeline {
           .where((p) => p.isNotEmpty)
           .toList();
 
-      // Add cast to return type if not void or dynamic
+      final invocation =
+          'InterpreterVisitor.invokeCallback($callableExpr, [%args%])';
+      final value = isAsync ? 'await ($invocation as dynamic)' : invocation;
       final callExpr =
-          (returnType != 'void' &&
-              returnType != 'dynamic' &&
-              returnType.isNotEmpty)
-          ? '($awaitKw InterpreterVisitor.invokeCallback($callableExpr, [%args%]) as $returnType)'
-          : '$awaitKw InterpreterVisitor.invokeCallback($callableExpr, [%args%])';
+          (castType != 'void' && castType != 'dynamic' && castType.isNotEmpty)
+          ? '($value as $castType)'
+          : value;
 
       if (paramList.isEmpty) {
         return "() $asyncKw=> ${callExpr.replaceAll('%args%', '')}";
@@ -1087,7 +1093,9 @@ class TransformPipeline {
     }
 
     // Default fallback
-    return '(arg) $asyncKw=> $awaitKw InterpreterVisitor.invokeCallback($callableExpr, [arg])';
+    final invocation =
+        'InterpreterVisitor.invokeCallback($callableExpr, [arg])';
+    return '(arg) $asyncKw=> ${isAsync ? 'await ($invocation as dynamic)' : invocation}';
   }
 
   String _wrapFunctionSignature(
@@ -1145,9 +1153,10 @@ class TransformPipeline {
     if (async) {
       returnType = returnType.typeArguments.single;
     }
-    final call =
-        '${async ? 'await ' : ''}InterpreterVisitor.invokeCallback($callable, '
+    final invocation =
+        'InterpreterVisitor.invokeCallback($callable, '
         '[${positional.join(', ')}], {${named.join(', ')}})';
+    final call = async ? 'await ($invocation as dynamic)' : invocation;
     final result =
         isEnumCoreType(returnType, 'void') ||
             isEnumCoreType(returnType, 'dynamic')

@@ -2478,7 +2478,11 @@ void main() {
             return int.parse('abc');
           }
         '''),
-        throwsA(isA<RuntimeError>()),
+        throwsA(
+          isA<FormatException>()
+              .having((error) => error.source, 'source', 'abc')
+              .having((error) => error.offset, 'offset', 0),
+        ),
       );
     });
 

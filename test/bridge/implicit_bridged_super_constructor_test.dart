@@ -504,7 +504,7 @@ class Child extends DurationBase {
 main() => Child('wrong type');
 ''',
         ),
-        throwsA(isA<RuntimeError>()),
+        throwsA(isA<TypeError>()),
       );
       expect(harness.events, ['constructor:DurationBase.']);
     });
@@ -737,6 +737,7 @@ main() => Child.redirect().values;
       Object? Function()? constructorOutcome,
       required String expectedMessage,
       required int expectedConstructorCalls,
+      Matcher? expectedError,
     }) {
       test(description, () {
         final harness = _BridgeHarness(constructorOutcome: constructorOutcome)
@@ -764,11 +765,12 @@ main() => Child.redirect().values;
           ''',
           ),
           throwsA(
-            isA<RuntimeError>().having(
-              (error) => error.message,
-              'message',
-              contains(expectedMessage),
-            ),
+            expectedError ??
+                isA<RuntimeError>().having(
+                  (error) => error.message,
+                  'message',
+                  contains(expectedMessage),
+                ),
           ),
         );
         expect(harness.constructorCalls, expectedConstructorCalls);
@@ -800,9 +802,14 @@ main() => Child.redirect().values;
     );
 
     testImplicitFailure(
-      'native adapter exception becomes a descriptive RuntimeError boundary',
+      'native adapter exception remains the original native failure',
       constructorOutcome: () => throw StateError('adapter native failure'),
       expectedMessage: 'adapter native failure',
+      expectedError: isA<StateError>().having(
+        (error) => error.message,
+        'message',
+        'adapter native failure',
+      ),
       expectedConstructorCalls: 1,
     );
 

@@ -19,6 +19,12 @@ class AsyncExecutionState {
   /// (Needs further definition based on the state machine implementation).
   AstNode? nextStateIdentifier;
 
+  /// True while the frame is advancing without a suspension.
+  bool advancing = false;
+
+  /// A control-flow transition requested during the current advance.
+  bool advancePending = false;
+
   /// The result value from the most recently completed Future (from await).
   Object? lastAwaitResult;
 

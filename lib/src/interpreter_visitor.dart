@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:d4rt/src/bridge/native_value.dart';
 import 'dart:collection';
 
 import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
@@ -253,6 +254,13 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
     final visitor = requireCurrentInvocation();
     try {
       return callback.call(visitor, positional, named);
+    } on InternalInterpreterException catch (error, stack) {
+      final value = error.originalThrownValue;
+      if (value == null) rethrow;
+      Error.throwWithStackTrace(
+        nativeBridgeValue(value)!,
+        error.stackTrace ?? stack,
+      );
     } finally {
       visitor.checkDeadline();
     }

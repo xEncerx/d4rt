@@ -669,11 +669,11 @@ void main() {
     );
   });
 
-  test('unhandled native failures retain host RuntimeError boundary', () {
-    expect(() => run('Native().fail();'), throwsA(isA<RuntimeError>()));
+  test('unhandled native failures retain their identity at the host', () {
+    expect(() => run('Native().fail();'), throwsA(same(error)));
     expect(
       () => run('try { Native().fail(); } on FormatException {}'),
-      throwsA(isA<RuntimeError>()),
+      throwsA(same(error)),
     );
   });
 
@@ -737,11 +737,11 @@ void main() {
     interpreter.execute(source: "import 'package:test/native.dart'; main() {}");
     expect(
       () => interpreter.eval('Native().fail()'),
-      throwsA(isA<RuntimeError>()),
+      throwsA(same(error)),
     );
     expect(
       () => interpreter.eval('try { Native().fail(); } on FormatException {}'),
-      throwsA(isA<RuntimeError>()),
+      throwsA(same(error)),
     );
     for (final expression in [
       'Native.fail()',
@@ -754,7 +754,7 @@ void main() {
     ]) {
       expect(
         () => interpreter.eval(expression),
-        throwsA(isA<RuntimeError>()),
+        throwsA(same(error)),
         reason: expression,
       );
     }
@@ -800,7 +800,7 @@ void main() {
         expect(result[1], same(trace), reason: expression);
         expect(
           () => interpreter.eval(expression),
-          throwsA(isA<RuntimeError>()),
+          throwsA(same(error)),
           reason: expression,
         );
       }

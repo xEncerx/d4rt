@@ -40,6 +40,7 @@ export 'package:d4rt/src/bridge/library_tracking.dart';
 export 'package:d4rt/src/bridge/registration.dart' hide BridgedMethodCallable;
 export 'package:d4rt/src/callable.dart'
     hide
+        adaptRegisteredNative,
         invokeFunctionFromHost,
         invokeBridgedMethod,
         invokeBridgedAdapter,

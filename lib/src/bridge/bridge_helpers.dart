@@ -2,7 +2,10 @@
 /// ```
 library;
 
+import 'native_value.dart';
 import 'bridged_types.dart';
+
+Object? _nativeValue(Object? value) => nativeBridgeValue(value);
 
 // =============================================================================
 // ARGUMENT EXTRACTION EXTENSIONS
@@ -27,7 +30,7 @@ extension BridgePositionalArgs on List<Object?> {
     }
 
     final raw = this[index];
-    final value = raw is BridgedInstance ? raw.nativeObject : raw;
+    final value = _nativeValue(raw);
 
     if (value == null && null is! T) {
       throw ArgumentError(
@@ -54,8 +57,8 @@ extension BridgePositionalArgs on List<Object?> {
     final raw = this[index];
     if (raw == null) return defaultValue;
 
-    final value = raw is BridgedInstance ? raw.nativeObject : raw;
-    if (value is T) return value as T;
+    final value = _nativeValue(raw);
+    if (value is T) return value;
     return defaultValue;
   }
 
@@ -66,8 +69,8 @@ extension BridgePositionalArgs on List<Object?> {
     final raw = this[index];
     if (raw == null) return null;
 
-    final value = raw is BridgedInstance ? raw.nativeObject : raw;
-    if (value is T) return value as T;
+    final value = _nativeValue(raw);
+    if (value is T) return value;
     return null;
   }
 
@@ -79,7 +82,7 @@ extension BridgePositionalArgs on List<Object?> {
     final ctx = context != null ? ' in $context' : '';
     final raw = required<Object>(index, paramName, context);
 
-    final value = raw is BridgedInstance ? raw.nativeObject : raw;
+    final value = _nativeValue(raw);
 
     if (value is! List) {
       throw ArgumentError(
@@ -90,10 +93,7 @@ extension BridgePositionalArgs on List<Object?> {
     if (value is List<T>) return value;
 
     try {
-      return value.map<T>((e) {
-        if (e is BridgedInstance) return e.nativeObject as T;
-        return e as T;
-      }).toList();
+      return value.map<T>((e) => _nativeValue(e) as T).toList();
     } catch (e) {
       throw ArgumentError(
         'Cannot coerce List elements to $T for "$paramName"$ctx: $e',
@@ -109,8 +109,18 @@ extension BridgePositionalArgs on List<Object?> {
 
   /// Extracts a Set argument with element type coercion.
   Set<T> asSet<T>(int index, String paramName, [String? context]) {
-    final list = asList<T>(index, paramName, context);
-    return list.toSet();
+    final raw = required<Object>(index, paramName, context);
+    if (raw is Set<T>) return raw;
+    if (raw is Set) {
+      try {
+        return raw.map<T>((e) => _nativeValue(e) as T).toSet();
+      } catch (e) {
+        throw ArgumentError(
+          'Cannot coerce Set elements to $T for "$paramName": $e',
+        );
+      }
+    }
+    return asList<T>(index, paramName, context).toSet();
   }
 
   /// Extracts an optional Set argument with element type coercion.
@@ -134,7 +144,7 @@ extension BridgePositionalArgs on List<Object?> {
     final ctx = context != null ? ' in $context' : '';
     final raw = required<Object>(index, paramName, context);
 
-    final value = raw is BridgedInstance ? raw.nativeObject : raw;
+    final value = _nativeValue(raw);
 
     if (value is! Map) {
       throw ArgumentError(
@@ -146,8 +156,8 @@ extension BridgePositionalArgs on List<Object?> {
 
     try {
       return value.map<K, V>((k, v) {
-        final key = k is BridgedInstance ? k.nativeObject as K : k as K;
-        final val = v is BridgedInstance ? v.nativeObject as V : v as V;
+        final key = _nativeValue(k) as K;
+        final val = _nativeValue(v) as V;
         return MapEntry(key, val);
       });
     } catch (e) {
@@ -197,7 +207,7 @@ extension BridgeNamedArgs on Map<String, Object?> {
     }
 
     final raw = this[name];
-    final value = raw is BridgedInstance ? raw.nativeObject : raw;
+    final value = _nativeValue(raw);
 
     if (value == null && null is! T) {
       throw ArgumentError(
@@ -224,8 +234,8 @@ extension BridgeNamedArgs on Map<String, Object?> {
     final raw = this[name];
     if (raw == null) return defaultValue;
 
-    final value = raw is BridgedInstance ? raw.nativeObject : raw;
-    if (value is T) return value as T;
+    final value = _nativeValue(raw);
+    if (value is T) return value;
     return defaultValue;
   }
 
@@ -236,8 +246,8 @@ extension BridgeNamedArgs on Map<String, Object?> {
     final raw = this[name];
     if (raw == null) return null;
 
-    final value = raw is BridgedInstance ? raw.nativeObject : raw;
-    if (value is T) return value as T;
+    final value = _nativeValue(raw);
+    if (value is T) return value;
     return null;
   }
 
@@ -246,7 +256,7 @@ extension BridgeNamedArgs on Map<String, Object?> {
     final ctx = context != null ? ' in $context' : '';
     final raw = required<Object>(name, context);
 
-    final value = raw is BridgedInstance ? raw.nativeObject : raw;
+    final value = _nativeValue(raw);
 
     if (value is! List) {
       throw ArgumentError(
@@ -257,10 +267,7 @@ extension BridgeNamedArgs on Map<String, Object?> {
     if (value is List<T>) return value;
 
     try {
-      return value.map<T>((e) {
-        if (e is BridgedInstance) return e.nativeObject as T;
-        return e as T;
-      }).toList();
+      return value.map<T>((e) => _nativeValue(e) as T).toList();
     } catch (e) {
       throw ArgumentError(
         'Cannot coerce List elements to $T for named argument "$name"$ctx: $e',
@@ -279,7 +286,7 @@ extension BridgeNamedArgs on Map<String, Object?> {
     final ctx = context != null ? ' in $context' : '';
     final raw = required<Object>(name, context);
 
-    final value = raw is BridgedInstance ? raw.nativeObject : raw;
+    final value = _nativeValue(raw);
 
     if (value is! Map) {
       throw ArgumentError(
@@ -291,8 +298,8 @@ extension BridgeNamedArgs on Map<String, Object?> {
 
     try {
       return value.map<K, V>((k, v) {
-        final key = k is BridgedInstance ? k.nativeObject as K : k as K;
-        final val = v is BridgedInstance ? v.nativeObject as V : v as V;
+        final key = _nativeValue(k) as K;
+        final val = _nativeValue(v) as V;
         return MapEntry(key, val);
       });
     } catch (e) {
@@ -319,8 +326,18 @@ extension BridgeNamedArgs on Map<String, Object?> {
 
   /// Extracts a Set named argument with element type coercion.
   Set<T> asSet<T>(String name, [String? context]) {
-    final list = asList<T>(name, context);
-    return list.toSet();
+    final raw = required<Object>(name, context);
+    if (raw is Set<T>) return raw;
+    if (raw is Set) {
+      try {
+        return raw.map<T>((e) => _nativeValue(e) as T).toSet();
+      } catch (e) {
+        throw ArgumentError(
+          'Cannot coerce Set elements to $T for named argument "$name": $e',
+        );
+      }
+    }
+    return asList<T>(name, context).toSet();
   }
 
   /// Extracts an optional Set named argument with element type coercion.
@@ -376,11 +393,9 @@ extension BridgeInstanceValidation on Object? {
     );
   }
 
-  /// Coerces this value to type T, unwrapping BridgedInstance if necessary.
+  /// Coerces this value to type T, unwrapping native bridge values.
   T coerce<T>(String paramName, [String? context]) {
-    final value = this is BridgedInstance
-        ? (this as BridgedInstance).nativeObject
-        : this;
+    final value = nativeBridgeValue(this);
 
     if (value == null && null is! T) {
       final ctx = context != null ? ' in $context' : '';

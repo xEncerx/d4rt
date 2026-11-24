@@ -628,7 +628,7 @@ void main() {
       '''; // Expects int
       expect(
         () => interpreter.execute(source: code),
-        throwsA(isA<RuntimeError>()),
+        throwsA(isA<ArgumentError>()),
       );
     });
 
@@ -639,7 +639,7 @@ void main() {
       '''; // Expects String
       expect(
         () => interpreter.execute(source: code),
-        throwsA(isA<RuntimeError>()),
+        throwsA(isA<ArgumentError>()),
       );
     });
 
@@ -703,7 +703,7 @@ void main() {
        ''';
       expect(
         () => interpreter.execute(source: code),
-        throwsA(isA<RuntimeError>()),
+        throwsA(isA<ArgumentError>()),
       );
     });
 

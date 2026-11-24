@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:d4rt/src/bridge/native_value.dart';
 
 import 'package:analyzer/dart/ast/ast.dart' hide TypeParameter;
 import 'package:analyzer/dart/ast/token.dart';
@@ -91,15 +92,8 @@ class YieldValue {
   YieldValue(this.value, {this.isYieldStar = false});
 }
 
-/// Unwraps a BridgedInstance to get the native object if it's an exception
-Object _unwrapExceptionForPropagation(Object? thrownValue) {
-  if (thrownValue is BridgedInstance) {
-    // If it's a bridged instance, return the native object
-    return thrownValue.nativeObject;
-  }
-  // Otherwise, return the value as-is or a default exception
-  return thrownValue ?? Exception('Unknown error');
-}
+Object _unwrapExceptionForPropagation(Object? thrownValue) =>
+    nativeBridgeValue(thrownValue) ?? Exception('Unknown error');
 
 /// Encapsulates a getter and/or setter for a top-level property or method
 /// This allows getters and setters with the same name to coexist in the environment
@@ -1900,12 +1894,34 @@ class InterpretedFunction implements Callable {
     return catchEnvironment;
   }
 
-  // Main engine of the async state machine
-  // Scheduled via Future.microtask to start execution
-  static Future<void> _runStateMachine(
+  static void _runStateMachine(
+    InterpreterVisitor visitor,
+    AsyncExecutionState state,
+  ) {
+    if (state.advancing) {
+      state.advancePending = true;
+      return;
+    }
+    state.advancing = true;
+    try {
+      do {
+        state.advancePending = false;
+        _advanceStateMachine(visitor, state);
+      } while (state.advancePending && !state.completer.isCompleted);
+    } catch (error, stackTrace) {
+      if (!state.completer.isCompleted) {
+        _clearExpressionContinuations(state);
+        state.completer.completeError(error, stackTrace);
+      }
+    } finally {
+      state.advancing = false;
+    }
+  }
+
+  static void _advanceStateMachine(
     InterpreterVisitor visitor,
     AsyncExecutionState currentState,
-  ) async {
+  ) {
     Object? lastResult;
     AstNode? currentNode = currentState.nextStateIdentifier;
 
@@ -3339,6 +3355,10 @@ class InterpretedFunction implements Callable {
     AsyncExecutionState state,
   ) {
     if (_stopExpiredAsyncExecution(visitor, state)) return;
+    if (state.advancing) {
+      state.advancePending = true;
+      return;
+    }
     // Check if the completer is already completed to avoid unnecessary executions
     if (state.completer.isCompleted) {
       if (Logger.debugEnabled && Logger.minLevel == LogLevel.debug) {
@@ -3354,7 +3374,7 @@ class InterpretedFunction implements Callable {
       final executionVisitor = state.generatorStreamController == null
           ? visitor
           : InterpreterVisitor.requireCurrentInvocation();
-      return _runStateMachine(executionVisitor, state);
+      _runStateMachine(executionVisitor, state);
     }).catchError((error, stackTrace) {
       // Catch errors not caught by the internal logic of _runStateMachine
       if (!state.completer.isCompleted) {
@@ -5168,7 +5188,7 @@ class InterpretedFunction implements Callable {
         "[_startAsyncStateMachine] Scheduling state machine run for initial state: ${describeDebugNode(initialState.nextStateIdentifier)}",
       );
     }
-    _scheduleStateMachineRun(visitor, initialState);
+    _runStateMachine(visitor, initialState);
   }
 
   @override
@@ -5572,6 +5592,16 @@ typedef NativeFunctionImpl =
       Map<String, Object?> namedArguments,
       List<RuntimeType>? typeArguments,
     );
+
+/// Adapts registered host functions to the same failure policy as bridges.
+NativeFunctionImpl adaptRegisteredNative(NativeFunctionImpl function) =>
+    (visitor, positional, named, types) {
+      try {
+        return function(visitor, positional, named, types);
+      } catch (error, stack) {
+        _throwBridgedFailure(error, stack);
+      }
+    };
 
 class NativeFunction implements Callable, RuntimeType {
   final NativeFunctionImpl _function;
