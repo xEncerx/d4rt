@@ -9604,7 +9604,7 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
             continue;
           }
 
-          if (!actualArgument.isSubtypeOf(expectedArgument, value: value)) {
+          if (!actualArgument.isSubtypeOf(expectedArgument)) {
             return false;
           }
         }

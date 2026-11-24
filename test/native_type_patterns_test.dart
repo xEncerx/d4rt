@@ -452,4 +452,86 @@ List<bool> main() {
       ]);
     },
   );
+  group('native collection return types', () {
+    late D4rt interpreter;
+
+    setUp(() {
+      interpreter = D4rt()
+        ..registerBridgedClass(
+          BridgedClass(
+            nativeType: _NativeReading,
+            name: 'Reading',
+            isSubtypeOfFunc: (value) => value is _NativeReading,
+            constructors: {
+              '': (visitor, positional, named) =>
+                  _ReadingImplementation(positional.single as int),
+            },
+            getters: {
+              'value': (visitor, target) => (target as _NativeReading).value,
+            },
+          ),
+          'package:native/reading.dart',
+        )
+        ..registerBridgedClass(
+          BridgedClass(
+            nativeType: _PretendReading,
+            name: 'PretendReading',
+            isSubtypeOfFunc: (value) => value is _PretendReading,
+          ),
+          'package:native/reading.dart',
+        );
+    });
+
+    test('matching native generic arguments preserve collection contents', () {
+      expect(
+        interpreter.execute(
+          source: '''
+          import 'package:native/reading.dart';
+          List<Reading> readings() {
+            return <Reading>[Reading(7)];
+          }
+          Set<Reading> uniqueReadings() {
+            return <Reading>{Reading(8)};
+          }
+          Map<String, Reading> indexedReadings() {
+            return <String, Reading>{'sample': Reading(9)};
+          }
+          List<List<Reading>> nestedReadings() {
+            return <List<Reading>>[<Reading>[Reading(10)]];
+          }
+          main() => [
+            readings().single.value,
+            uniqueReadings().single.value,
+            indexedReadings()['sample']!.value,
+            nestedReadings().single.single.value,
+          ];
+        ''',
+        ),
+        [7, 8, 9, 10],
+      );
+    });
+
+    for (final (returnType, expression) in [
+      ('List<Reading>', '<PretendReading>[]'),
+      ('Set<Reading>', '<PretendReading>{}'),
+      ('Map<String, Reading>', '<String, PretendReading>{}'),
+      ('List<List<Reading>>', '<List<PretendReading>>[]'),
+    ]) {
+      test('$returnType rejects unrelated native generic arguments', () {
+        expect(
+          () => interpreter.execute(
+            source:
+                '''
+            import 'package:native/reading.dart';
+            $returnType incompatible() {
+              return $expression;
+            }
+            main() => incompatible();
+          ''',
+          ),
+          throwsA(isA<RuntimeError>()),
+        );
+      });
+    }
+  });
 }

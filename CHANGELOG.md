@@ -9,6 +9,7 @@
 - Enforce the original execution deadline for asynchronous host invocations.
 - Unwrap native enum arguments in bridge helpers while retaining typed collection identity.
 - Compare native and bridged enum values consistently with both equality operators.
+- Accept matching native generic collection return types without passing collections to element predicates.
 - Generate typed Future callback adapters with the correct result type.
 - Exclude private native constructors from generated bridges unless private members are enabled.
 - Preserve caller execution limits across nested host invocations.
