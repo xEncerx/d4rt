@@ -18,6 +18,14 @@ enum ComplexEnum {
   bool isItemA() => this == ComplexEnum.itemA;
 }
 
+class _UnequalNativeValue {
+  @override
+  bool operator ==(Object other) => false;
+
+  @override
+  int get hashCode => 0;
+}
+
 void main() {
   group('Bridged Enum Tests - Simple', () {
     late D4rt interpreter;
@@ -96,6 +104,67 @@ void main() {
       final result = interpreter.execute(source: code);
       expect(result, equals([false, true, true]));
     });
+
+    test('Native equality overrides are not replaced by identity', () {
+      final value = _UnequalNativeValue();
+      interpreter.registertopLevelFunction(
+        'nativeValue',
+        (visitor, positional, named, types) => value,
+      );
+      expect(
+        interpreter.execute(
+          source: '''
+          main() {
+            final value = nativeValue();
+            return [value == value, value != value];
+          }
+        ''',
+        ),
+        [false, true],
+      );
+    });
+
+    test(
+      'Native enum comparisons agree with bridged constants in both orders',
+      () {
+        interpreter.registertopLevelFunction(
+          'nativeColor',
+          (visitor, positional, named, types) => NativeColor.green,
+        );
+        final result = interpreter.execute(
+          source: '''
+        import 'package:test/color.dart';
+        main() {
+          final native = nativeColor();
+          final same = BridgedColor.green;
+          final other = BridgedColor.blue;
+          return [
+            native == same, native != same,
+            same == native, same != native,
+            native == other, native != other,
+            other == native, other != native,
+            native == null, native != null,
+            null == native, null != native,
+          ];
+        }
+      ''',
+        );
+        expect(result, [
+          true,
+          false,
+          true,
+          false,
+          false,
+          true,
+          false,
+          true,
+          false,
+          true,
+          false,
+          true,
+        ]);
+      },
+    );
   });
 
   group('Bridged Enum Tests - Complex', () {

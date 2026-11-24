@@ -2130,33 +2130,9 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
       case '%':
         if (left is BigInt && right is BigInt) return left % right;
       case '==':
-        // Special handling for BridgedEnumValue comparison
-        if (leftOperandValue is BridgedEnumValue &&
-            rightOperandValue is BridgedEnumValue) {
-          final result = leftOperandValue == rightOperandValue;
-          return result;
-        }
-
-        // Special handling for mixed native enum and BridgedEnumValue comparison
-        if ((leftOperandValue is BridgedEnumValue &&
-                rightOperandValue is Enum) ||
-            (leftOperandValue is Enum &&
-                rightOperandValue is BridgedEnumValue)) {
-          // Convert both to their native enum values for comparison
-          final leftNative = leftOperandValue is BridgedEnumValue
-              ? leftOperandValue.nativeValue
-              : leftOperandValue;
-          final rightNative = rightOperandValue is BridgedEnumValue
-              ? rightOperandValue.nativeValue
-              : rightOperandValue;
-
-          final result = leftNative == rightNative;
-          return result;
-        }
-
-        return left == right;
+        return _areValuesEqual(left, right);
       case '!=':
-        return left != right;
+        return !_areValuesEqual(left, right);
       case '<':
         return left as dynamic < right;
       case '<=':
@@ -11574,8 +11550,6 @@ class InterpreterVisitor extends GeneralizingAstVisitor<Object?> {
   // =======================================================================
 
   bool _areValuesEqual(Object? a, Object? b) {
-    if (identical(a, b)) return true;
-    if (a == null || b == null) return false;
     if (a is BridgedEnumValue && b is BridgedEnumValue) {
       return a == b;
     }
