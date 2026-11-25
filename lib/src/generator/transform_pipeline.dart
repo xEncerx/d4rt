@@ -154,6 +154,9 @@ class BridgeableMethod {
   /// Type arguments for generic methods.
   final String? typeArguments;
 
+  /// Whether argument types and defaults are supplied by an inherited member.
+  final bool isInherited;
+
   const BridgeableMethod({
     required this.name,
     required this.returnType,
@@ -162,6 +165,7 @@ class BridgeableMethod {
     required this.callTemplate,
     this.isAsync = false,
     this.typeArguments,
+    this.isInherited = false,
   });
 }
 
@@ -194,10 +198,14 @@ class BridgeableSetter {
   /// Assignment expression template.
   final String assignTemplate;
 
+  /// Whether the setter type is inferred from an inherited declaration.
+  final bool isInherited;
+
   const BridgeableSetter({
     required this.name,
     required this.parameterType,
     required this.assignTemplate,
+    this.isInherited = false,
   });
 }
 
@@ -658,7 +666,11 @@ class TransformPipeline {
 
     _positionalIndex = 0; // Reset for each method
 
-    final params = meta.parameters.map(_transformParameter).toList();
+    final params = meta.parameters
+        .map(
+          meta.isInherited ? _transformInheritedParameter : _transformParameter,
+        )
+        .toList();
 
     final positionalArgs = params
         .where((p) => !p.isNamed)
@@ -680,7 +692,9 @@ class TransformPipeline {
     final typeArgs = meta.typeParameters
         .map((tp) => tp.bound?.fullName ?? 'dynamic')
         .join(', ');
-    final typeArgsSuffix = typeArgs.isNotEmpty ? '<$typeArgs>' : '';
+    final typeArgsSuffix = !meta.isInherited && typeArgs.isNotEmpty
+        ? '<$typeArgs>'
+        : '';
 
     final targetExpr = className ?? 'target';
     final callTemplate = '$targetExpr.${meta.name}$typeArgsSuffix($allArgs)';
@@ -692,7 +706,8 @@ class TransformPipeline {
       parameters: params,
       callTemplate: callTemplate,
       isAsync: meta.isAsync,
-      typeArguments: typeArgs.isNotEmpty ? typeArgs : null,
+      typeArguments: !meta.isInherited && typeArgs.isNotEmpty ? typeArgs : null,
+      isInherited: meta.isInherited,
     );
 
     _currentBounds.clear();
@@ -715,6 +730,7 @@ class TransformPipeline {
       name: meta.name,
       parameterType: _mapType(meta.parameterType.fullName),
       assignTemplate: '$targetExpr.${meta.name} = value',
+      isInherited: meta.isInherited,
     );
   }
 
@@ -736,7 +752,11 @@ class TransformPipeline {
       methodName = 'unary~';
     }
 
-    final params = meta.parameters.map(_transformParameter).toList();
+    final params = meta.parameters
+        .map(
+          meta.isInherited ? _transformInheritedParameter : _transformParameter,
+        )
+        .toList();
 
     String callTemplate;
     if (params.isEmpty) {
@@ -809,6 +829,48 @@ class TransformPipeline {
     return type.substring(start + 1, end);
   }
 
+  BridgeableParameter _transformInheritedParameter(ParameterMetadata meta) {
+    final type = _mapType(meta.type.fullName);
+    final index = meta.isNamed ? null : _positionalIndex++;
+    final receiver = meta.isNamed ? 'namedArgs' : 'positionalArgs';
+    final argument = meta.isNamed ? "'${meta.name}'" : "$index, '${meta.name}'";
+    final nullable = meta.type.isNullable;
+    String extraction;
+    if (_isFunctionType(type)) {
+      final callback = _wrapFunctionType(
+        "$receiver.required<Callable>($argument)",
+        type,
+        contextualReturn: true,
+      );
+      extraction = nullable
+          ? "$receiver.required<Object?>($argument) == null ? null : $callback"
+          : callback;
+    } else if (type.startsWith('List<')) {
+      extraction =
+          "$receiver.${nullable ? 'asListOrNull' : 'asList'}($argument)";
+    } else if (type.startsWith('Set<')) {
+      extraction = "$receiver.${nullable ? 'asSetOrNull' : 'asSet'}($argument)";
+    } else if (type.startsWith('Map<')) {
+      final method = meta.isNamed
+          ? (nullable ? 'asMapOrNull' : 'asMap')
+          : (nullable ? 'extractMapOrNull' : 'extractMap');
+      extraction = '$receiver.$method($argument)';
+    } else if (type.startsWith('Iterable<')) {
+      extraction =
+          "$receiver.${nullable ? 'asIterableOrNull' : 'asIterable'}($argument)";
+    } else {
+      extraction = '$receiver.required($argument)';
+    }
+    return BridgeableParameter(
+      name: meta.name,
+      type: type,
+      isRequired: meta.isRequired,
+      isNamed: meta.isNamed,
+      defaultValue: meta.defaultValue,
+      extractionExpr: extraction,
+    );
+  }
+
   BridgeableParameter _transformParameter(ParameterMetadata meta) {
     final rawType = _mapType(meta.type.fullName);
     // Replace generic parameters inside the type with dynamic (e.g., List<E> -> List<dynamic>)
@@ -852,7 +914,8 @@ class TransformPipeline {
           extractionExpr = "namedArgs.asSet<$inner>('$paramName')";
         } else if (type.startsWith('Iterable<')) {
           final inner = _getInnerType(type, 9);
-          extractionExpr = "namedArgs.asList<$inner>('$paramName')";
+          final helper = type.endsWith('?') ? 'asIterableOrNull' : 'asIterable';
+          extractionExpr = "namedArgs.$helper<$inner>('$paramName')";
         } else {
           extractionExpr = "namedArgs.required<$type>('$paramName')";
         }
@@ -890,7 +953,7 @@ class TransformPipeline {
           }
         } else if (type.startsWith('Iterable<')) {
           final inner = _getInnerType(type, 9);
-          extractionExpr = "namedArgs.asListOrNull<$inner>('$paramName')";
+          extractionExpr = "namedArgs.asIterableOrNull<$inner>('$paramName')";
           if (defaultVal != 'null') {
             extractionExpr += " ?? $defaultVal";
           }
@@ -926,8 +989,9 @@ class TransformPipeline {
           extractionExpr = "positionalArgs.asSet<$inner>($index, '$paramName')";
         } else if (type.startsWith('Iterable<')) {
           final inner = _getInnerType(type, 9);
+          final helper = type.endsWith('?') ? 'asIterableOrNull' : 'asIterable';
           extractionExpr =
-              "positionalArgs.asList<$inner>($index, '$paramName')";
+              "positionalArgs.$helper<$inner>($index, '$paramName')";
         } else {
           extractionExpr =
               "positionalArgs.required<$type>($index, '$paramName')";
@@ -972,7 +1036,7 @@ class TransformPipeline {
         } else if (type.startsWith('Iterable<')) {
           final inner = _getInnerType(type, 9);
           extractionExpr =
-              "positionalArgs.asListOrNull<$inner>($index, '$paramName')";
+              "positionalArgs.asIterableOrNull<$inner>($index, '$paramName')";
           if (defaultVal != 'null') {
             extractionExpr += " ?? $defaultVal";
           }
@@ -1006,6 +1070,7 @@ class TransformPipeline {
     String callableExpr,
     String functionType, {
     FunctionRuntimeType? signature,
+    bool contextualReturn = false,
   }) {
     if (signature != null) {
       return _wrapFunctionSignature(callableExpr, signature);
@@ -1073,9 +1138,12 @@ class TransformPipeline {
       final invocation =
           'InterpreterVisitor.invokeCallback($callableExpr, [%args%])';
       final value = isAsync ? 'await ($invocation as dynamic)' : invocation;
-      final callExpr =
-          (castType != 'void' && castType != 'dynamic' && castType.isNotEmpty)
-          ? '($value as $castType)'
+      final callExpr = (castType != 'void' && castType.isNotEmpty)
+          ? contextualReturn
+                ? '($value as dynamic)'
+                : castType == 'dynamic'
+                ? value
+                : '($value as $castType)'
           : value;
 
       if (paramList.isEmpty) {

@@ -320,6 +320,9 @@ class MethodMetadata {
   /// Whether static (relevant for enums).
   final bool isStatic;
 
+  /// Whether the member was resolved from a superclass or interface.
+  final bool isInherited;
+
   /// Annotations.
   final List<AnnotationMetadata> annotations;
 
@@ -335,6 +338,7 @@ class MethodMetadata {
     this.isOperator = false,
     this.operatorSymbol,
     this.isAsync = false,
+    this.isInherited = false,
     this.isStatic = false,
     this.annotations = const [],
     this.location,
@@ -392,6 +396,9 @@ class SetterMetadata {
   /// Annotations.
   final List<AnnotationMetadata> annotations;
 
+  /// Whether the member was resolved from a superclass or interface.
+  final bool isInherited;
+
   /// Source location.
   final SourceLocation? location;
 
@@ -400,6 +407,7 @@ class SetterMetadata {
     this.documentation,
     required this.parameterType,
     this.isStatic = false,
+    this.isInherited = false,
     this.annotations = const [],
     this.location,
   });

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/type.dart';
 import 'package:build/build.dart';
 import 'package:source_gen/source_gen.dart';
 import 'metadata_collector.dart';
@@ -40,9 +42,16 @@ class BridgeGeneratorHandler {
     final metadata = collector.collectFromSource(sourceCode);
 
     // Filter metadata to only include annotated classes/enums
-    final filteredClasses = metadata.classes.where((c) {
-      return annotatedElements.any((a) => a.element.name == c.name);
-    }).toList();
+    final filteredClasses = <ClassMetadata>[];
+    for (final cls in metadata.classes) {
+      for (final annotated in annotatedElements) {
+        final element = annotated.element;
+        if (element is ClassElement && element.name == cls.name) {
+          filteredClasses.add(_withInheritedMembers(cls, element));
+          break;
+        }
+      }
+    }
 
     final filteredEnums = metadata.enums.where((e) {
       return annotatedElements.any((a) => a.element.name == e.name);
@@ -124,6 +133,111 @@ class BridgeGeneratorHandler {
 
     if (buffer.isEmpty) return null;
     return buffer.toString();
+  }
+
+  ClassMetadata _withInheritedMembers(ClassMetadata cls, ClassElement element) {
+    final getters = [...cls.getters];
+    final setters = [...cls.setters];
+    final methods = [...cls.methods];
+    final readNames = {
+      ...cls.getters.map((member) => member.name),
+      ...cls.fields.map((member) => member.name),
+      ...cls.methods.map((member) => member.name),
+    };
+    final writeNames = {
+      ...cls.setters.map((member) => member.name),
+      ...cls.fields.where((field) => !field.isFinal).map((field) => field.name),
+    };
+    for (final member in element.interfaceMembers.values) {
+      final rawName = member.name;
+      if (rawName == null || !member.isPublic || member.isStatic) continue;
+      final owner = member.enclosingElement;
+      if (owner is ClassElement && owner.isDartCoreObject) continue;
+      final name = member is SetterElement && rawName.endsWith('=')
+          ? rawName.substring(0, rawName.length - 1)
+          : rawName;
+      if (member is GetterElement) {
+        if (readNames.add(name)) {
+          getters.add(
+            GetterMetadata(
+              name: name,
+              returnType: _elementType(member.returnType),
+            ),
+          );
+        }
+      } else if (member is SetterElement) {
+        if (writeNames.add(name)) {
+          setters.add(
+            SetterMetadata(
+              name: name,
+              isInherited: true,
+              parameterType: _elementType(member.formalParameters.single.type),
+            ),
+          );
+        }
+      } else if (member is MethodElement) {
+        if (readNames.add(name)) {
+          methods.add(
+            MethodMetadata(
+              name: name,
+              isInherited: true,
+              returnType: _elementType(member.returnType),
+              isOperator: member.isOperator,
+              operatorSymbol: member.isOperator ? name : null,
+              typeParameters: [
+                for (final parameter in member.typeParameters)
+                  TypeParameterMetadata(
+                    name: parameter.name!,
+                    bound: parameter.bound == null
+                        ? null
+                        : _elementType(parameter.bound!),
+                  ),
+              ],
+              parameters: [
+                for (final parameter in member.formalParameters)
+                  ParameterMetadata(
+                    name: parameter.name!,
+                    type: _elementType(parameter.type),
+                    isRequired: parameter.isRequired,
+                    isNamed: parameter.isNamed,
+                    defaultValue: parameter.defaultValueCode,
+                  ),
+              ],
+            ),
+          );
+        }
+      }
+    }
+    return ClassMetadata(
+      name: cls.name,
+      documentation: cls.documentation,
+      isAbstract: cls.isAbstract,
+      typeParameters: cls.typeParameters,
+      superclass: cls.superclass,
+      interfaces: cls.interfaces,
+      mixins: cls.mixins,
+      constructors: cls.constructors,
+      methods: methods,
+      getters: getters,
+      setters: setters,
+      staticMethods: cls.staticMethods,
+      staticGetters: cls.staticGetters,
+      staticSetters: cls.staticSetters,
+      fields: cls.fields,
+      staticFields: cls.staticFields,
+      annotations: cls.annotations,
+      location: cls.location,
+    );
+  }
+
+  TypeMetadata _elementType(DartType type) {
+    final text = type.getDisplayString();
+    final name = text.split(RegExp(r'[<? ]')).first;
+    return TypeMetadata(
+      name: name,
+      fullName: text,
+      isNullable: text.endsWith('?'),
+    );
   }
 
   String _stripBoilerplate(String code) {

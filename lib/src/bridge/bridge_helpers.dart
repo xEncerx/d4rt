@@ -7,6 +7,23 @@ import 'bridged_types.dart';
 
 Object? _nativeValue(Object? value) => nativeBridgeValue(value);
 
+Iterable<T> _asIterable<T>(
+  Object value,
+  String paramName,
+  String? context, {
+  required bool named,
+}) {
+  if (value is Iterable<T>) return value;
+  if (value is! Iterable) {
+    final ctx = context != null ? ' in $context' : '';
+    final kind = named ? 'Named argument' : 'Argument';
+    throw ArgumentError(
+      '$kind "$paramName"$ctx must be an Iterable: got ${value.runtimeType}',
+    );
+  }
+  return value.map<T>((element) => _nativeValue(element) as T);
+}
+
 // =============================================================================
 // ARGUMENT EXTRACTION EXTENSIONS
 // =============================================================================
@@ -105,6 +122,22 @@ extension BridgePositionalArgs on List<Object?> {
   List<T>? asListOrNull<T>(int index, String paramName) {
     if (index >= length || this[index] == null) return null;
     return asList<T>(index, paramName);
+  }
+
+  /// Extracts an Iterable without traversing an already compatible value.
+  Iterable<T> asIterable<T>(int index, String paramName, [String? context]) {
+    return _asIterable<T>(
+      required<Object>(index, paramName, context),
+      paramName,
+      context,
+      named: false,
+    );
+  }
+
+  /// Extracts an optional Iterable without eagerly traversing it.
+  Iterable<T>? asIterableOrNull<T>(int index, String paramName) {
+    if (index >= length || this[index] == null) return null;
+    return asIterable<T>(index, paramName);
   }
 
   /// Extracts a Set argument with element type coercion.
@@ -279,6 +312,22 @@ extension BridgeNamedArgs on Map<String, Object?> {
   List<T>? asListOrNull<T>(String name) {
     if (!containsKey(name) || this[name] == null) return null;
     return asList<T>(name);
+  }
+
+  /// Extracts an Iterable without traversing an already compatible value.
+  Iterable<T> asIterable<T>(String name, [String? context]) {
+    return _asIterable<T>(
+      required<Object>(name, context),
+      name,
+      context,
+      named: true,
+    );
+  }
+
+  /// Extracts an optional Iterable without eagerly traversing it.
+  Iterable<T>? asIterableOrNull<T>(String name) {
+    if (!containsKey(name) || this[name] == null) return null;
+    return asIterable<T>(name);
   }
 
   /// Extracts a Map named argument with key/value type coercion.

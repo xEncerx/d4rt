@@ -345,6 +345,17 @@ class CodeEmitter {
     final typedClassName = '${cls.name}$typeArgs';
     final typedTarget = "target.asTarget<$typedClassName>('${cls.name}')";
 
+    if (method.isInherited) {
+      _emitInheritedMethodCall(
+        buffer,
+        method,
+        typedTarget,
+        '$indent$indent$indent',
+      );
+      buffer.writeln('$indent$indent },');
+      return;
+    }
+
     if (method.hasReturn) {
       if (method.isAsync) {
         final typeArgs = method.typeArguments != null
@@ -400,6 +411,74 @@ class CodeEmitter {
     buffer.writeln('$indent$indent },');
   }
 
+  void _emitInheritedMethodCall(
+    StringBuffer buffer,
+    BridgeableMethod method,
+    String target,
+    String indent,
+  ) {
+    final positional = method.parameters.where((p) => !p.isNamed).toList();
+    final named = method.parameters.where((p) => p.isNamed).toList();
+
+    void emitCall(List<BridgeableParameter> args, String depth) {
+      final callArgs = args
+          .map(
+            (p) =>
+                p.isNamed ? '${p.name}: ${p.extractionExpr}' : p.extractionExpr,
+          )
+          .join(', ');
+      final call = '$target.${method.name}($callArgs)';
+      if (method.hasReturn) {
+        buffer.writeln('$depth return $call;');
+      } else {
+        buffer.writeln('$depth $call;');
+        buffer.writeln('$depth return null;');
+      }
+    }
+
+    void emitNamed(int index, List<BridgeableParameter> args, String depth) {
+      if (index == named.length) {
+        emitCall(args, depth);
+        return;
+      }
+      final parameter = named[index];
+      if (parameter.isRequired) {
+        emitNamed(index + 1, [...args, parameter], depth);
+      } else {
+        buffer.writeln(
+          "$depth if (namedArgs.containsKey('${parameter.name}')) {",
+        );
+        emitNamed(index + 1, [...args, parameter], '$depth  ');
+        buffer.writeln('$depth } else {');
+        emitNamed(index + 1, args, '$depth  ');
+        buffer.writeln('$depth }');
+      }
+    }
+
+    void emitPositional(
+      int index,
+      List<BridgeableParameter> args,
+      String depth,
+    ) {
+      if (index == positional.length) {
+        emitNamed(0, args, depth);
+        return;
+      }
+      final parameter = positional[index];
+      if (parameter.isRequired) {
+        emitPositional(index + 1, [...args, parameter], depth);
+      } else {
+        buffer.writeln('$depth if (positionalArgs.length > $index) {');
+        emitPositional(index + 1, [...args, parameter], '$depth  ');
+        buffer.writeln('$depth } else {');
+        emitNamed(0, args, '$depth  ');
+        buffer.writeln('$depth }');
+      }
+    }
+
+    emitPositional(0, [], indent);
+  }
+
   void _emitGetter(
     StringBuffer buffer,
     BridgeableGetter getter,
@@ -425,8 +504,9 @@ class CodeEmitter {
     final typeArgs = typeArguments != null ? '<$typeArguments>' : '';
     final typedClassName = '$className$typeArgs';
     final typedTarget = "target.asTarget<$typedClassName>('$className')";
-    final coercedValue =
-        "value.coerce<${setter.parameterType}>('${setter.name}')";
+    final coercedValue = setter.isInherited
+        ? "value.coerce('${setter.name}')"
+        : "value.coerce<${setter.parameterType}>('${setter.name}')";
     buffer.writeln(
       "$indent$indent '${setter.name}': "
       '(visitor, target, value) => $typedTarget.${setter.name} = $coercedValue,',

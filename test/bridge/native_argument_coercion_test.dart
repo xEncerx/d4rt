@@ -1,8 +1,11 @@
 import 'package:d4rt/src/bridge/bridge_helpers.dart';
 import 'package:d4rt/src/bridge/bridged_enum.dart';
+import 'package:d4rt/src/bridge/bridged_types.dart';
 import 'package:test/test.dart';
 
 enum Shade { light, dark }
+
+class Token {}
 
 void main() {
   final type = BridgedEnum('Shade', {});
@@ -66,5 +69,70 @@ void main() {
     expect(identical(named.asList<Shade>('list'), list), isTrue);
     expect(identical(named.asMap<Shade, Shade>('map'), map), isTrue);
     expect(identical(named.asSet<Shade>('set'), set), isTrue);
+  });
+
+  test('iterable extraction preserves typed values and defers conversion', () {
+    final typed = <Shade>{Shade.light, Shade.dark};
+    expect(
+      identical(<Object?>[typed].asIterable<Shade>(0, 'values'), typed),
+      isTrue,
+    );
+    expect(
+      identical(
+        <String, Object?>{'values': typed}.asIterable<Shade>('values'),
+        typed,
+      ),
+      isTrue,
+    );
+    final entries = <Object?, Object?>{'a': 1, null: 'b'}.entries;
+    final extracted = <Object?>[
+      entries,
+    ].asIterable<MapEntry<Object?, Object?>>(0, 'entries');
+    expect(identical(extracted, entries), isTrue);
+    expect(extracted.map((entry) => entry.key), ['a', null]);
+
+    var visits = 0;
+    final source = Iterable<Object?>.generate(2, (index) {
+      visits++;
+      return index == 0 ? light : dark;
+    });
+    final converted = <Object?>[source].asIterable<Shade>(0, 'values');
+    expect(visits, 0);
+    expect(converted.toList(), [Shade.light, Shade.dark]);
+    expect(visits, 2);
+    final token = Token();
+    final wrapped = BridgedInstance(
+      BridgedClass(nativeType: Token, name: 'Token'),
+      token,
+    );
+    expect(
+      <Object?>[
+        [wrapped],
+      ].asIterable<Token>(0, 'tokens').single,
+      same(token),
+    );
+  });
+
+  test('iterable extraction preserves null and deferred failures', () {
+    final absent = <Object?>[];
+    final named = <String, Object?>{'values': null};
+    expect(absent.asIterableOrNull<int>(0, 'values'), isNull);
+    expect(named.asIterableOrNull<int>('values'), isNull);
+    expect(
+      () => <Object?>[1].asIterable<int>(0, 'values'),
+      throwsArgumentError,
+    );
+    expect(
+      () => <String, Object?>{'values': 1}.asIterableOrNull<int>('values'),
+      throwsArgumentError,
+    );
+    final error = StateError('iteration');
+    final source = Iterable<Object?>.generate(1, (_) => throw error);
+    final converted = <Object?>[source].asIterable<int>(0, 'values');
+    expect(() => converted.toList(), throwsA(same(error)));
+    final wrong = <Object?>[
+      ['not an integer'],
+    ].asIterable<int>(0, 'values');
+    expect(() => wrong.toList(), throwsA(isA<TypeError>()));
   });
 }
